@@ -1,17 +1,24 @@
 {
-	"pages": [ //pages数组中第一项表示应用启动页，参考：https://uniapp.dcloud.io/collocation/pages
+	"pages": [
 		{
 			"path": "pages/index/index",
 			"style": {
-				"navigationBarTitleText": "uni-app"
+				"navigationBarTitleText": "DATA ANALYSIS",
+				"navigationStyle": "custom"
+			}
+		},
+		{
+			"path": "pages/report/report",
+			"style": {
+				"navigationBarTitleText": "REPORT",
+				"navigationStyle": "custom"
 			}
 		}
 	],
 	"globalStyle": {
-		"navigationBarTextStyle": "black",
-		"navigationBarTitleText": "uni-app",
-		"navigationBarBackgroundColor": "#F8F8F8",
-		"backgroundColor": "#F8F8F8"
-	},
-	"uniIdRouter": {}
+		"navigationBarTextStyle": "white",
+		"navigationBarTitleText": "DATA ANALYSIS",
+		"navigationBarBackgroundColor": "#1E88E5",
+		"backgroundColor": "#F5F7FA"
+	}
 }
