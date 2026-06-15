@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "REPORT",
+  "navigationStyle": "custom",
+  "usingComponents": {
+    "login-modal": "../../components/LoginModal",
+    "payment-modal": "../../components/PaymentModal"
+  }
+}
