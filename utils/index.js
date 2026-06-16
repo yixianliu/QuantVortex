@@ -23,10 +23,19 @@ export function formatDateTime(date) {
   return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`
 }
 
-export function getHotNumbers(historyData, count = 5) {
+export function getMainNumbers(item, lotteryType) {
+  if (lotteryType === 'pailiewu') {
+    return [item.num1, item.num2, item.num3, item.num4, item.num5].filter(n => n !== undefined)
+  }
+  return [item.num1, item.num2, item.num3, item.num4, item.num5, item.num6].filter(n => n !== undefined)
+}
+
+export function getHotNumbers(historyData, count = 5, lotteryType = 'qixingcai') {
   const frequency = {}
+  const numCount = lotteryType === 'pailiewu' ? 5 : 6
+
   historyData.forEach(item => {
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= numCount; i++) {
       const num = item[`num${i}`]
       if (num !== undefined) {
         frequency[num] = (frequency[num] || 0) + 1
@@ -46,15 +55,17 @@ export function getHotNumbers(historyData, count = 5) {
   }))
 }
 
-export function getColdNumbers(historyData, count = 5) {
+export function getColdNumbers(historyData, count = 5, lotteryType = 'qixingcai') {
   const allNumbers = []
   for (let i = 0; i <= 9; i++) {
     allNumbers.push(i)
   }
-  
+
   const frequency = {}
+  const numCount = lotteryType === 'pailiewu' ? 5 : 6
+
   historyData.forEach(item => {
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= numCount; i++) {
       const num = item[`num${i}`]
       if (num !== undefined) {
         frequency[num] = (frequency[num] || 0) + 1
@@ -64,7 +75,7 @@ export function getColdNumbers(historyData, count = 5) {
       frequency[item.special_num] = (frequency[item.special_num] || 0) + 1
     }
   })
-  
+
   const cold = allNumbers
     .filter(num => !frequency[num] || frequency[num] < 3)
     .slice(0, count)
@@ -75,17 +86,19 @@ export function getColdNumbers(historyData, count = 5) {
   }))
 }
 
-export function analyzeNumberDistribution(historyData) {
+export function analyzeNumberDistribution(historyData, lotteryType = 'qixingcai') {
   const distribution = {
     odd: 0,
     even: 0,
     small: 0,
     large: 0
   }
-  
+
+  const numCount = lotteryType === 'pailiewu' ? 5 : 6
+
   historyData.forEach(item => {
     const numbers = []
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= numCount; i++) {
       if (item[`num${i}`] !== undefined) {
         numbers.push(item[`num${i}`])
       }
@@ -95,7 +108,7 @@ export function analyzeNumberDistribution(historyData) {
       distribution[num <= 4 ? 'small' : 'large']++
     })
   })
-  
+
   const total = distribution.odd + distribution.even
   return {
     ...distribution,
@@ -106,28 +119,32 @@ export function analyzeNumberDistribution(historyData) {
   }
 }
 
-export function analyzeFrequency(historyData) {
-  const positionNames = ['第一位', '第二位', '第三位', '第四位', '第五位', '第六位', '特别号']
+export function analyzeFrequency(historyData, lotteryType = 'qixingcai') {
+  const numCount = lotteryType === 'pailiewu' ? 5 : 6
+  const positionNames = lotteryType === 'pailiewu'
+    ? ['万位', '千位', '百位', '十位', '个位']
+    : ['第一位', '第二位', '第三位', '第四位', '第五位', '第六位', '特别号']
+  const totalPos = lotteryType === 'pailiewu' ? 5 : 7
   const frequencyAnalysis = {}
-  
-  for (let pos = 0; pos < 7; pos++) {
-    const fieldName = pos < 6 ? `num${pos + 1}` : 'special_num'
+
+  for (let pos = 0; pos < totalPos; pos++) {
+    const fieldName = pos < numCount ? `num${pos + 1}` : 'special_num'
     const frequency = {}
-    
+
     for (let num = 0; num <= 9; num++) {
       frequency[num] = 0
     }
-    
+
     historyData.forEach(item => {
       const num = item[fieldName]
       if (num !== undefined) {
         frequency[num]++
       }
     })
-    
+
     const sortedByFreq = Object.entries(frequency)
       .sort((a, b) => b[1] - a[1])
-    
+
     frequencyAnalysis[pos] = {
       position_name: positionNames[pos],
       number_stats: Object.fromEntries(
@@ -146,7 +163,7 @@ export function analyzeFrequency(historyData) {
       least_frequent: sortedByFreq.slice(-3).reverse().map(([num, count]) => [parseInt(num), count])
     }
   }
-  
+
   return {
     total_samples: historyData.length,
     frequency_analysis: frequencyAnalysis,
@@ -154,20 +171,24 @@ export function analyzeFrequency(historyData) {
   }
 }
 
-export function analyzeOmission(historyData) {
-  const positionNames = ['第一位', '第二位', '第三位', '第四位', '第五位', '第六位', '特别号']
+export function analyzeOmission(historyData, lotteryType = 'qixingcai') {
+  const numCount = lotteryType === 'pailiewu' ? 5 : 6
+  const positionNames = lotteryType === 'pailiewu'
+    ? ['万位', '千位', '百位', '十位', '个位']
+    : ['第一位', '第二位', '第三位', '第四位', '第五位', '第六位', '特别号']
+  const totalPos = lotteryType === 'pailiewu' ? 5 : 7
   const omissionAnalysis = {}
-  
-  for (let pos = 0; pos < 7; pos++) {
-    const fieldName = pos < 6 ? `num${pos + 1}` : 'special_num'
+
+  for (let pos = 0; pos < totalPos; pos++) {
+    const fieldName = pos < numCount ? `num${pos + 1}` : 'special_num'
     const lastOccurrence = {}
     const omissionRecords = {}
-    
+
     for (let num = 0; num <= 9; num++) {
       lastOccurrence[num] = -1
       omissionRecords[num] = []
     }
-    
+
     historyData.forEach((item, index) => {
       const num = item[fieldName]
       if (num !== undefined) {
@@ -177,91 +198,95 @@ export function analyzeOmission(historyData) {
         lastOccurrence[num] = index
       }
     })
-    
+
     const numberStats = {}
     for (let num = 0; num <= 9; num++) {
       const omissions = omissionRecords[num]
-      const currentOmission = lastOccurrence[num] >= 0 
+      const currentOmission = lastOccurrence[num] >= 0
         ? historyData.length - 1 - lastOccurrence[num]
         : historyData.length
-      
+
       numberStats[num] = {
         current_omission: currentOmission,
         max_omission: omissions.length > 0 ? Math.max(...omissions) : historyData.length,
-        avg_omission: omissions.length > 0 
+        avg_omission: omissions.length > 0
           ? (omissions.reduce((a, b) => a + b, 0) / omissions.length).toFixed(1)
           : historyData.length.toFixed(1),
-        omission_ratio: omissions.length > 0 
+        omission_ratio: omissions.length > 0
           ? (currentOmission / (omissions.reduce((a, b) => a + b, 0) / omissions.length)).toFixed(2)
           : 'N/A',
         total_occurrences: omissions.length + (lastOccurrence[num] >= 0 ? 1 : 0),
         occurrence_rate: ((omissions.length + (lastOccurrence[num] >= 0 ? 1 : 0)) / historyData.length).toFixed(4)
       }
     }
-    
+
     omissionAnalysis[pos] = {
       position_name: positionNames[pos],
       total_periods: historyData.length,
       number_stats: numberStats
     }
   }
-  
+
   return {
     total_samples: historyData.length,
     omission_analysis: omissionAnalysis
   }
 }
 
-export function analyzeHotCold(historyData, recentN = 30) {
+export function analyzeHotCold(historyData, recentN = 30, lotteryType = 'qixingcai') {
   const recentData = historyData.slice(0, recentN)
-  const positionNames = ['第一位', '第二位', '第三位', '第四位', '第五位', '第六位', '特别号']
+  const numCount = lotteryType === 'pailiewu' ? 5 : 6
+  const positionNames = lotteryType === 'pailiewu'
+    ? ['万位', '千位', '百位', '十位', '个位']
+    : ['第一位', '第二位', '第三位', '第四位', '第五位', '第六位', '特别号']
+  const totalPos = lotteryType === 'pailiewu' ? 5 : 7
   const hotColdAnalysis = {}
-  
-  const omissionResult = analyzeOmission(historyData)
-  
-  for (let pos = 0; pos < 7; pos++) {
-    const fieldName = pos < 6 ? `num${pos + 1}` : 'special_num'
+
+  const omissionResult = analyzeOmission(historyData, lotteryType)
+
+  for (let pos = 0; pos < totalPos; pos++) {
+    const fieldName = pos < numCount ? `num${pos + 1}` : 'special_num'
     const recentFrequency = {}
-    
+
     for (let num = 0; num <= 9; num++) {
       recentFrequency[num] = 0
     }
-    
+
     recentData.forEach(item => {
       const num = item[fieldName]
       if (num !== undefined) {
         recentFrequency[num]++
       }
     })
-    
+
     const hotNumbers = []
     const warmNumbers = []
     const coldNumbers = []
-    
+
     for (let num = 0; num <= 9; num++) {
       const omissionRatio = parseFloat(omissionResult.omission_analysis[pos].number_stats[num].omission_ratio) || 0
       const recentCount = recentFrequency[num]
       const heatScore = (recentCount / recentN * 100).toFixed(2)
-      
+
       let category = 'warm'
       if (omissionRatio <= 0.5 || parseFloat(heatScore) >= 12) {
         category = 'hot'
       } else if (omissionRatio >= 1.5 || parseFloat(heatScore) <= 6) {
         category = 'cold'
       }
-      
+
       const obj = {
         number: num,
         heat_score: parseFloat(heatScore),
         current_omission: omissionResult.omission_analysis[pos].number_stats[num].current_omission,
         recent_count: recentCount
       }
-      
+
       if (category === 'hot') hotNumbers.push(obj)
       else if (category === 'cold') coldNumbers.push(obj)
       else warmNumbers.push(obj)
     }
-    
+
     hotColdAnalysis[pos] = {
       position_name: positionNames[pos],
       hot_numbers: hotNumbers.sort((a, b) => b.heat_score - a.heat_score),
@@ -270,7 +295,7 @@ export function analyzeHotCold(historyData, recentN = 30) {
       theory_recent_count: (recentN * 0.1).toFixed(1)
     }
   }
-  
+
   return {
     total_samples: historyData.length,
     recent_periods: recentN,
@@ -280,17 +305,17 @@ export function analyzeHotCold(historyData, recentN = 30) {
 
 export function analyzeHezhi(historyData) {
   const hezhis = []
-  
+
   historyData.forEach(item => {
     const hezhi = parseInt(item.hezhi) || 0
     hezhis.push(hezhi)
   })
-  
+
   const total = hezhis.length
   const avgHezhi = total > 0 ? (hezhis.reduce((a, b) => a + b, 0) / total).toFixed(2) : '0'
   const maxHezhi = total > 0 ? Math.max(...hezhis) : 0
   const minHezhi = total > 0 ? Math.min(...hezhis) : 0
-  
+
   const rangeDistribution = {
     '0-9': { count: 0, probability: '0' },
     '10-19': { count: 0, probability: '0' },
@@ -299,7 +324,7 @@ export function analyzeHezhi(historyData) {
     '40-49': { count: 0, probability: '0' },
     '50-54': { count: 0, probability: '0' }
   }
-  
+
   hezhis.forEach(h => {
     if (h >= 0 && h <= 9) rangeDistribution['0-9'].count++
     else if (h >= 10 && h <= 19) rangeDistribution['10-19'].count++
@@ -308,13 +333,13 @@ export function analyzeHezhi(historyData) {
     else if (h >= 40 && h <= 49) rangeDistribution['40-49'].count++
     else if (h >= 50 && h <= 54) rangeDistribution['50-54'].count++
   })
-  
+
   Object.keys(rangeDistribution).forEach(key => {
-    rangeDistribution[key].probability = total > 0 
+    rangeDistribution[key].probability = total > 0
       ? ((rangeDistribution[key].count / total) * 100).toFixed(2)
       : '0'
   })
-  
+
   return {
     total_samples: total,
     hezhi_analysis: {
@@ -331,34 +356,34 @@ export function analyzeHezhi(historyData) {
 
 export function analyzeSpan(historyData) {
   const spans = []
-  
+
   historyData.forEach(item => {
     const span = parseInt(item.span) || 0
     spans.push(span)
   })
-  
+
   const total = spans.length
   const avgSpan = total > 0 ? (spans.reduce((a, b) => a + b, 0) / total).toFixed(1) : '0'
   const maxSpan = total > 0 ? Math.max(...spans) : 0
   const minSpan = total > 0 ? Math.min(...spans) : 0
-  
+
   const spanDistribution = {}
   for (let s = 0; s <= 9; s++) {
     spanDistribution[s] = { count: 0, probability: '0' }
   }
-  
+
   spans.forEach(s => {
     if (s >= 0 && s <= 9) {
       spanDistribution[s].count++
     }
   })
-  
+
   Object.keys(spanDistribution).forEach(key => {
-    spanDistribution[key].probability = total > 0 
+    spanDistribution[key].probability = total > 0
       ? ((spanDistribution[key].count / total) * 100).toFixed(2)
       : '0'
   })
-  
+
   return {
     total_samples: total,
     span_analysis: {
@@ -372,14 +397,14 @@ export function analyzeSpan(historyData) {
 }
 
 export function generateDetailedReport(lotteryType, historyData) {
-  const hotNumbers = getHotNumbers(historyData, 10)
-  const coldNumbers = getColdNumbers(historyData, 10)
-  const distribution = analyzeNumberDistribution(historyData)
-  const frequency = analyzeFrequency(historyData)
-  const omission = analyzeOmission(historyData)
+  const hotNumbers = getHotNumbers(historyData, 10, lotteryType)
+  const coldNumbers = getColdNumbers(historyData, 10, lotteryType)
+  const distribution = analyzeNumberDistribution(historyData, lotteryType)
+  const frequency = analyzeFrequency(historyData, lotteryType)
+  const omission = analyzeOmission(historyData, lotteryType)
   const hezhi = analyzeHezhi(historyData)
   const span = analyzeSpan(historyData)
-  
+
   return {
     lotteryType,
     generateTime: formatDateTime(new Date()),
@@ -402,11 +427,11 @@ export function generateDetailedReport(lotteryType, historyData) {
 }
 
 export function generateOptimalReport(lotteryType, historyData) {
-  const hotNumbers = getHotNumbers(historyData, 10)
-  const coldNumbers = getColdNumbers(historyData, 10)
-  const distribution = analyzeNumberDistribution(historyData)
-  const hotCold = analyzeHotCold(historyData, 30)
-  
+  const hotNumbers = getHotNumbers(historyData, 10, lotteryType)
+  const coldNumbers = getColdNumbers(historyData, 10, lotteryType)
+  const distribution = analyzeNumberDistribution(historyData, lotteryType)
+  const hotCold = analyzeHotCold(historyData, 30, lotteryType)
+
   return {
     lotteryType,
     generateTime: formatDateTime(new Date()),
@@ -428,7 +453,7 @@ export function generateOptimalReport(lotteryType, historyData) {
 function generateRecommendedNumbers(lotteryType, hotNumbers, coldNumbers) {
   const hotNums = hotNumbers.map(h => h.num)
   const coldNums = coldNumbers.map(c => c.num)
-  
+
   if (lotteryType === 'qixingcai') {
     const candidates = [...new Set([...hotNums.slice(0, 4), ...coldNums.slice(0, 2)])]
     const mainNums = candidates.slice(0, 6)
@@ -438,12 +463,12 @@ function generateRecommendedNumbers(lotteryType, hotNumbers, coldNumbers) {
         mainNums.push(num)
       }
     }
-    
+
     let specialNum = hotNums.find(n => n >= 0 && n <= 9) || generateRandomNumber(0, 9)
     while (mainNums.includes(specialNum)) {
       specialNum = generateRandomNumber(0, 9)
     }
-    
+
     return {
       num1: mainNums[0],
       num2: mainNums[1],
@@ -454,27 +479,53 @@ function generateRecommendedNumbers(lotteryType, hotNumbers, coldNumbers) {
       special_num: specialNum
     }
   }
-  
+
+  if (lotteryType === 'pailiewu') {
+    const candidates = [...new Set([...hotNums.slice(0, 3), ...coldNums.slice(0, 2)])]
+    const mainNums = candidates.slice(0, 5)
+    while (mainNums.length < 5) {
+      const num = generateRandomNumber(0, 9)
+      if (!mainNums.includes(num)) {
+        mainNums.push(num)
+      }
+    }
+
+    return {
+      num1: mainNums[0],
+      num2: mainNums[1],
+      num3: mainNums[2],
+      num4: mainNums[3],
+      num5: mainNums[4]
+    }
+  }
+
   return null
 }
 
 function generateStrategy(lotteryType, reportType) {
   const strategies = {
     qixingcai: [
-      { icon: '🔥', title: '热号策略', desc: '选择近期出现频率较高的号码，把握热号趋势' },
-      { icon: '❄️', title: '冷号策略', desc: '关注遗漏值较大的号码，等待回补机会' },
-      { icon: '⚖️', title: '均衡策略', desc: '结合冷热号码，平衡风险与收益' },
-      { icon: '📊', title: '和值分析', desc: '根据历史和值分布选择合适的号码组合' },
-      { icon: '📈', title: '跨度策略', desc: '分析号码跨度，选择合理的号码范围' }
+      { icon: '\uD83D\uDD25', title: '热号策略', desc: '选择近期出现频率较高的号码，把握热号趋势' },
+      { icon: '\u2744\uFE0F', title: '冷号策略', desc: '关注遗漏值较大的号码，等待回补机会' },
+      { icon: '\u2696\uFE0F', title: '均衡策略', desc: '结合冷热号码，平衡风险与收益' },
+      { icon: '\uD83D\uDCCA', title: '和值分析', desc: '根据历史和值分布选择合适的号码组合' },
+      { icon: '\uD83D\uDCC8', title: '跨度策略', desc: '分析号码跨度，选择合理的号码范围' }
+    ],
+    pailiewu: [
+      { icon: '\uD83D\uDD25', title: '热号策略', desc: '选择近期出现频率较高的号码，把握热号趋势' },
+      { icon: '\u2744\uFE0F', title: '冷号策略', desc: '关注遗漏值较大的号码，等待回补机会' },
+      { icon: '\u2696\uFE0F', title: '均衡策略', desc: '结合冷热号码，平衡风险与收益' },
+      { icon: '\uD83D\uDCCA', title: '和值分析', desc: '根据历史和值分布选择合适的号码组合' },
+      { icon: '\uD83C\uDFB2', title: '定位策略', desc: '分析各位号码走势，精准定位选号' }
     ]
   }
-  
+
   return strategies[lotteryType] || strategies.qixingcai
 }
 
 export function handleApiError(error) {
   let message = '请求失败，请稍后重试'
-  
+
   if (error.statusCode) {
     switch (error.statusCode) {
       case 400:
@@ -495,7 +546,7 @@ export function handleApiError(error) {
   } else if (error.errMsg) {
     message = error.errMsg
   }
-  
+
   return {
     success: false,
     code: error.statusCode || -1,

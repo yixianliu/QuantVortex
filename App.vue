@@ -18,13 +18,11 @@ onHide(() => {
 </script>
 
 <style lang="scss">
-@import './uni.scss';
-
 page {
-	background-color: $uni-bg-color;
+	background-color: #F5F5F5;
 	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-	font-size: $uni-font-size-base;
-	color: $uni-text-color;
+	font-size: 28rpx;
+	color: #333333;
 	line-height: 1.5;
 	box-sizing: border-box;
 }
@@ -36,30 +34,30 @@ text {
 
 .container {
 	min-height: 100vh;
-	background: $uni-bg-color;
+	background: #F5F5F5;
 }
 
 .page-header {
-	background: linear-gradient(135deg, $uni-color-primary, darken($uni-color-primary, 10%));
+	background: linear-gradient(135deg, #E53935, #c62828);
 	padding: 80rpx 30rpx 30rpx;
 	color: #fff;
 }
 
 .card {
 	background: #fff;
-	border-radius: $uni-border-radius-lg;
-	padding: $uni-spacing-lg;
-	margin-bottom: $uni-spacing-base;
-	box-shadow: $uni-shadow-sm;
+	border-radius: 16rpx;
+	padding: 30rpx;
+	margin-bottom: 20rpx;
+	box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.05);
 }
 
 .btn-primary {
-	background: linear-gradient(135deg, $uni-color-primary, darken($uni-color-primary, 10%));
+	background: linear-gradient(135deg, #E53935, #c62828);
 	color: #fff;
 	border: none;
 	border-radius: 48rpx;
 	padding: 24rpx 48rpx;
-	font-size: $uni-font-size-lg;
+	font-size: 32rpx;
 	font-weight: bold;
 	display: flex;
 	align-items: center;
@@ -67,12 +65,12 @@ text {
 }
 
 .btn-secondary {
-	background: $uni-bg-color-grey;
-	color: $uni-text-color;
+	background: #F8F9FA;
+	color: #333333;
 	border: none;
 	border-radius: 48rpx;
 	padding: 24rpx 48rpx;
-	font-size: $uni-font-size-lg;
+	font-size: 32rpx;
 	font-weight: bold;
 	display: flex;
 	align-items: center;
@@ -86,7 +84,7 @@ text {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: $uni-font-size-lg;
+	font-size: 32rpx;
 	font-weight: bold;
 	color: #fff;
 }
@@ -104,10 +102,10 @@ text {
 }
 
 .section-title {
-	font-size: $uni-font-size-lg;
+	font-size: 32rpx;
 	font-weight: bold;
-	color: $uni-text-color;
-	margin-bottom: $uni-spacing-base;
+	color: #333333;
+	margin-bottom: 20rpx;
 	display: block;
 }
 

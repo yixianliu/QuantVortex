@@ -1,7 +1,0 @@
-{
-  "navigationBarTitleText": "DATA ANALYSIS",
-  "navigationStyle": "custom",
-  "usingComponents": {
-    "login-modal": "../../components/LoginModal"
-  }
-}

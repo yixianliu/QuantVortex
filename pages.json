@@ -20,5 +20,11 @@
 		"navigationBarTitleText": "DATA ANALYSIS",
 		"navigationBarBackgroundColor": "#1E88E5",
 		"backgroundColor": "#F5F7FA"
+	},
+	"easycom": {
+		"autoscan": true,
+		"custom": {
+			"^uni-(.*)": "@dcloudio/uni-ui/lib/uni-$1/uni-$1.vue"
+		}
 	}
 }
