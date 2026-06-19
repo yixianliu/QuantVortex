@@ -1,28 +1,51 @@
 <script setup>
 import { onLaunch, onShow, onHide } from '@dcloudio/uni-app';
 import { useUserStore } from './store/user';
+import { checkApiStatus, setApiStatus, getApiStatus } from './api/index.js';
 
-onLaunch(() => {
+onLaunch(async () => {
   const userStore = useUserStore();
   userStore.initUserStatus();
+  
+  await checkApiAndNavigate();
 });
 
-onShow(() => {
+onShow(async () => {
   const userStore = useUserStore();
   userStore.initUserStatus();
+  
+  await checkApiAndNavigate();
 });
 
 onHide(() => {
   console.log('App Hide');
 });
+
+async function checkApiAndNavigate() {
+  const isApiAvailable = await checkApiStatus();
+  
+  if (!isApiAvailable) {
+    setApiStatus(false);
+    const pages = getCurrentPages();
+    const currentPage = pages[pages.length - 1];
+    
+    if (currentPage && currentPage.route !== 'pages/system-upgrade/system-upgrade') {
+      uni.reLaunch({
+        url: '/pages/system-upgrade/system-upgrade'
+      });
+    }
+  } else {
+    setApiStatus(true);
+  }
+}
 </script>
 
 <style lang="scss">
 page {
-	background-color: #F5F5F5;
+	background-color: #F8FAFC;
 	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 	font-size: 28rpx;
-	color: #333333;
+	color: #1F2937;
 	line-height: 1.5;
 	box-sizing: border-box;
 }
@@ -34,11 +57,11 @@ text {
 
 .container {
 	min-height: 100vh;
-	background: #F5F5F5;
+	background: #F8FAFC;
 }
 
 .page-header {
-	background: linear-gradient(135deg, #E53935, #c62828);
+	background: linear-gradient(135deg, #3B82F6, #1D4ED8);
 	padding: 80rpx 30rpx 30rpx;
 	color: #fff;
 }
@@ -52,7 +75,7 @@ text {
 }
 
 .btn-primary {
-	background: linear-gradient(135deg, #E53935, #c62828);
+	background: linear-gradient(135deg, #3B82F6, #1D4ED8);
 	color: #fff;
 	border: none;
 	border-radius: 48rpx;
@@ -66,7 +89,7 @@ text {
 
 .btn-secondary {
 	background: #F8F9FA;
-	color: #333333;
+	color: #374151;
 	border: none;
 	border-radius: 48rpx;
 	padding: 24rpx 48rpx;
@@ -77,34 +100,10 @@ text {
 	justify-content: center;
 }
 
-.ball {
-	width: 72rpx;
-	height: 72rpx;
-	border-radius: 50%;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 32rpx;
-	font-weight: bold;
-	color: #fff;
-}
-
-.ball-red {
-	background: linear-gradient(145deg, #e53935, #c62828);
-}
-
-.ball-blue {
-	background: linear-gradient(145deg, #1e88e5, #1565c0);
-}
-
-.ball-green {
-	background: linear-gradient(145deg, #43a047, #2e7d32);
-}
-
 .section-title {
 	font-size: 32rpx;
 	font-weight: bold;
-	color: #333333;
+	color: #1F2937;
 	margin-bottom: 20rpx;
 	display: block;
 }

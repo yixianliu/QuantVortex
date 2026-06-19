@@ -1,29 +1,22 @@
 <template>
   <view v-if="visible" class="modal-overlay" @click.self="handleClose">
     <view class="modal-container">
-      <!-- 顶部装饰 -->
-      <view class="modal-decoration">
-        <view class="deco-circle c1"></view>
-        <view class="deco-circle c2"></view>
-        <view class="deco-circle c3"></view>
-      </view>
-
       <view class="modal-header">
-        <view class="header-icon">
-          <view class="icon-ring"></view>
-          <text class="icon-text">&#x1F510;</text>
+        <view class="header-icon" :style="{ background: '#EFF6FF' }">
+          <text class="icon-text" :style="{ color: '#3B82F6' }">D</text>
         </view>
-        <text class="modal-title">欢迎登录</text>
-        <text class="modal-subtitle">登录解锁更多专业分析功能</text>
-        <text class="close-btn" @click="handleClose">&#x2715;</text>
+        <text class="modal-title">欢迎使用</text>
+        <text class="modal-subtitle">登录后解锁更多数据功能</text>
+        <view class="close-btn" @click="handleClose">
+          <text class="close-icon">×</text>
+        </view>
       </view>
 
       <view class="modal-body">
-        <!-- 登录权益 -->
         <view class="benefits-section">
           <view class="benefit-item" v-for="(item, index) in benefits" :key="index">
             <view class="benefit-icon-wrapper" :style="{ background: item.bgColor }">
-              <text class="benefit-icon">{{ item.icon }}</text>
+              <text class="benefit-icon" :style="{ color: item.color }">{{ item.icon }}</text>
             </view>
             <view class="benefit-info">
               <text class="benefit-title">{{ item.title }}</text>
@@ -32,51 +25,40 @@
           </view>
         </view>
 
-        <!-- 登录按钮区域 -->
         <view class="login-actions">
-          <!-- 微信一键登录 -->
-          <button
-            class="login-btn wechat"
-            open-type="getPhoneNumber"
-            @getphonenumber="handleWechatPhoneLogin"
-            @click="handleWechatLogin"
-          >
-            <view class="btn-shine"></view>
+          <button class="login-btn wechat" @click="handleWechatLogin">
             <view class="btn-icon-wrapper">
-              <text class="btn-icon">&#x1F4AC;</text>
+              <text class="btn-icon-text">W</text>
             </view>
             <view class="btn-content">
-              <text class="btn-title">微信一键登录</text>
-              <text class="btn-desc">安全快捷，无需注册</text>
+              <text class="btn-title">微信登录</text>
+              <text class="btn-desc">安全快捷</text>
             </view>
-            <view class="btn-arrow">&#x203A;</view>
+            <text class="btn-arrow">›</text>
           </button>
 
-          <!-- 分割线 -->
           <view class="divider">
             <view class="divider-line"></view>
             <text class="divider-text">其他方式</text>
             <view class="divider-line"></view>
           </view>
 
-          <!-- 游客模式 -->
           <button class="login-btn guest" @click="handleGuestLogin">
             <view class="btn-icon-wrapper guest-icon">
-              <text class="btn-icon">&#x1F464;</text>
+              <text class="btn-icon-text guest-icon-text">G</text>
             </view>
             <view class="btn-content">
-              <text class="btn-title">游客体验</text>
-              <text class="btn-desc">部分功能受限</text>
+              <text class="btn-title guest-title">游客模式</text>
+              <text class="btn-desc guest-desc">有限体验</text>
             </view>
-            <view class="btn-arrow">&#x203A;</view>
+            <text class="btn-arrow guest-arrow">›</text>
           </button>
         </view>
 
-        <!-- 协议提示 -->
         <view class="agreement-section">
           <view class="checkbox-wrapper" @click="agreed = !agreed">
             <view class="checkbox" :class="{ checked: agreed }">
-              <text v-if="agreed" class="check-mark">&#x2713;</text>
+              <text v-if="agreed" class="check-mark">✓</text>
             </view>
           </view>
           <view class="agreement-text">
@@ -106,26 +88,28 @@ const emit = defineEmits(['close', 'login-success'])
 
 const userStore = useUserStore()
 const agreed = ref(false)
-const isLoggingIn = ref(false)
 
 const benefits = [
   {
-    icon: '\uD83D\uDCCA',
-    title: '专业数据分析',
+    icon: '📊',
+    title: '数据分析',
     desc: '解锁详细统计报告',
-    bgColor: '#E3F2FD'
+    bgColor: '#EFF6FF',
+    color: '#3B82F6'
   },
   {
-    icon: '\uD83D\uDD25',
-    title: '热冷号追踪',
+    icon: '📈',
+    title: '趋势追踪',
     desc: '实时掌握号码走势',
-    bgColor: '#FFF3E0'
+    bgColor: '#FEF3C7',
+    color: '#D97706'
   },
   {
-    icon: '\uD83C\uDFAF',
-    title: '智能推荐',
-    desc: 'AI算法精选号码',
-    bgColor: '#E8F5E9'
+    icon: '⭐',
+    title: '精选推荐',
+    desc: '智能算法号码推荐',
+    bgColor: '#F5F3FF',
+    color: '#8B5CF6'
   }
 ]
 
@@ -142,7 +126,6 @@ function handleWechatLogin() {
   wx.login({
     success: (res) => {
       if (res.code) {
-        // 模拟获取用户信息
         setTimeout(() => {
           userStore.login({
             nickname: '微信用户',
@@ -166,7 +149,6 @@ function handleWechatLogin() {
   // #endif
 
   // #ifndef MP-WEIXIN
-  // H5/APP 环境模拟登录
   uni.showLoading({ title: '登录中...', mask: true })
   setTimeout(() => {
     userStore.login({
@@ -178,34 +160,6 @@ function handleWechatLogin() {
     emit('close')
     emit('login-success')
   }, 1200)
-  // #endif
-}
-
-function handleWechatPhoneLogin(e) {
-  if (!checkAgreement()) return
-
-  // #ifdef MP-WEIXIN
-  if (e.detail.errMsg === 'getPhoneNumber:ok') {
-    uni.showLoading({ title: '登录中...', mask: true })
-
-    wx.login({
-      success: (res) => {
-        if (res.code) {
-          setTimeout(() => {
-            userStore.login({
-              nickname: '微信用户',
-              avatar: '',
-              userId: `wx_${Date.now()}`,
-              phone: '138****8888'
-            })
-            uni.hideLoading()
-            emit('close')
-            emit('login-success')
-          }, 1200)
-        }
-      }
-    })
-  }
   // #endif
 }
 
@@ -237,12 +191,6 @@ function checkAgreement() {
       title: '请先同意用户协议',
       icon: 'none'
     })
-    // 抖动效果
-    const checkbox = document?.querySelector?.('.checkbox-wrapper')
-    if (checkbox) {
-      checkbox.classList.add('shake')
-      setTimeout(() => checkbox.classList.remove('shake'), 500)
-    }
     return false
   }
   return true
@@ -251,7 +199,7 @@ function checkAgreement() {
 function openAgreement() {
   uni.showModal({
     title: '用户协议',
-    content: '本应用提供的彩票数据分析服务仅供参考，不构成任何投注建议。用户应理性购彩，量力而行。使用本应用即表示您同意遵守相关法律法规。',
+    content: '本应用提供的数据分析服务仅供参考，不构成任何投注建议。用户应理性使用，量力而行。',
     showCancel: false
   })
 }
@@ -259,7 +207,7 @@ function openAgreement() {
 function openPrivacy() {
   uni.showModal({
     title: '隐私政策',
-    content: '我们重视您的隐私保护。登录时获取的信息仅用于身份验证和提供个性化服务，不会向第三方分享您的个人信息。',
+    content: '我们重视您的隐私保护。登录时获取的信息仅用于身份验证和提供个性化服务。',
     showCancel: false
   })
 }
@@ -272,80 +220,21 @@ function openPrivacy() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: flex-end;
   justify-content: center;
   z-index: 1000;
-  animation: fade-in 0.3s ease;
-}
-
-@keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
 }
 
 .modal-container {
   width: 100%;
-  max-height: 85vh;
+  max-height: 80vh;
   background: #fff;
-  border-radius: 40rpx 40rpx 0 0;
+  border-radius: 32rpx 32rpx 0 0;
   overflow: hidden;
-  position: relative;
-  animation: slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-@keyframes slide-up {
-  from {
-    transform: translateY(100%);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-
-/* 装饰圆圈 */
-.modal-decoration {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 200rpx;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.deco-circle {
-  position: absolute;
-  border-radius: 50%;
-  opacity: 0.08;
-}
-
-.deco-circle.c1 {
-  width: 300rpx;
-  height: 300rpx;
-  background: #43A047;
-  top: -150rpx;
-  right: -80rpx;
-}
-
-.deco-circle.c2 {
-  width: 200rpx;
-  height: 200rpx;
-  background: #1E88E5;
-  top: -80rpx;
-  left: -60rpx;
-}
-
-.deco-circle.c3 {
-  width: 150rpx;
-  height: 150rpx;
-  background: #FF9800;
-  top: 40rpx;
-  right: 120rpx;
-}
-
-/* 头部 */
 .modal-header {
   padding: 48rpx 40rpx 32rpx;
   text-align: center;
@@ -353,51 +242,31 @@ function openPrivacy() {
 }
 
 .header-icon {
-  width: 120rpx;
-  height: 120rpx;
-  margin: 0 auto 24rpx;
-  position: relative;
+  width: 100rpx;
+  height: 100rpx;
+  border-radius: 24rpx;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.icon-ring {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  border: 4rpx solid #E8F5E9;
-  animation: pulse-ring 2s ease-out infinite;
-}
-
-@keyframes pulse-ring {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1.3);
-    opacity: 0;
-  }
+  margin: 0 auto 20rpx;
 }
 
 .icon-text {
-  font-size: 56rpx;
-  z-index: 2;
+  font-size: 48rpx;
+  font-weight: bold;
 }
 
 .modal-title {
-  font-size: 40rpx;
+  font-size: 36rpx;
   font-weight: bold;
-  color: #1a1a2e;
+  color: #1F2937;
   display: block;
-  margin-bottom: 12rpx;
+  margin-bottom: 8rpx;
 }
 
 .modal-subtitle {
   font-size: 26rpx;
-  color: #999;
+  color: #6B7280;
   display: block;
 }
 
@@ -408,16 +277,18 @@ function openPrivacy() {
   width: 56rpx;
   height: 56rpx;
   border-radius: 50%;
-  background: #F5F5F5;
+  background: #F3F4F6;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28rpx;
-  color: #999;
+}
+
+.close-icon {
+  font-size: 36rpx;
+  color: #6B7280;
   line-height: 1;
 }
 
-/* 权益列表 */
 .modal-body {
   padding: 0 40rpx 48rpx;
 }
@@ -425,41 +296,23 @@ function openPrivacy() {
 .benefits-section {
   display: flex;
   flex-direction: column;
-  gap: 20rpx;
-  margin-bottom: 40rpx;
+  gap: 16rpx;
+  margin-bottom: 32rpx;
 }
 
 .benefit-item {
   display: flex;
   align-items: center;
-  gap: 20rpx;
+  gap: 16rpx;
   padding: 20rpx 24rpx;
-  background: #F8FAFC;
+  background: #FAFAFA;
   border-radius: 16rpx;
-  border: 1rpx solid #E8ECEF;
-  animation: slide-in-right 0.4s ease-out forwards;
-  opacity: 0;
-}
-
-.benefit-item:nth-child(1) { animation-delay: 0.1s; }
-.benefit-item:nth-child(2) { animation-delay: 0.2s; }
-.benefit-item:nth-child(3) { animation-delay: 0.3s; }
-
-@keyframes slide-in-right {
-  from {
-    opacity: 0;
-    transform: translateX(-20rpx);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
 }
 
 .benefit-icon-wrapper {
-  width: 64rpx;
-  height: 64rpx;
-  border-radius: 16rpx;
+  width: 56rpx;
+  height: 56rpx;
+  border-radius: 14rpx;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -467,7 +320,7 @@ function openPrivacy() {
 }
 
 .benefit-icon {
-  font-size: 32rpx;
+  font-size: 28rpx;
 }
 
 .benefit-info {
@@ -480,15 +333,14 @@ function openPrivacy() {
 .benefit-title {
   font-size: 28rpx;
   font-weight: 600;
-  color: #333;
+  color: #374151;
 }
 
 .benefit-desc {
   font-size: 24rpx;
-  color: #999;
+  color: #9CA3AF;
 }
 
-/* 登录按钮 */
 .login-actions {
   display: flex;
   flex-direction: column;
@@ -497,15 +349,14 @@ function openPrivacy() {
 }
 
 .login-btn {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 20rpx;
-  padding: 28rpx 32rpx;
-  border-radius: 20rpx;
+  padding: 24rpx 28rpx;
+  border-radius: 16rpx;
   border: none;
-  overflow: hidden;
-  transition: transform 0.2s ease;
+  background: #07C160;
+  transition: all 0.2s ease;
 }
 
 .login-btn::after {
@@ -514,35 +365,22 @@ function openPrivacy() {
 
 .login-btn:active {
   transform: scale(0.98);
-}
-
-.btn-shine {
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-  transition: left 0.5s;
-}
-
-.login-btn:active .btn-shine {
-  left: 100%;
+  opacity: 0.9;
 }
 
 .login-btn.wechat {
-  background: linear-gradient(135deg, #07C160, #05a350);
+  background: linear-gradient(135deg, #07C160, #05A54B);
 }
 
 .login-btn.guest {
-  background: #F5F7FA;
-  border: 2rpx solid #E8ECEF;
+  background: #F9FAFB;
+  border: 2rpx solid #E5E7EB;
 }
 
 .btn-icon-wrapper {
-  width: 64rpx;
-  height: 64rpx;
-  border-radius: 16rpx;
+  width: 56rpx;
+  height: 56rpx;
+  border-radius: 14rpx;
   background: rgba(255, 255, 255, 0.2);
   display: flex;
   align-items: center;
@@ -551,11 +389,17 @@ function openPrivacy() {
 }
 
 .guest-icon {
-  background: #E3F2FD;
+  background: #E5E7EB;
 }
 
-.btn-icon {
-  font-size: 32rpx;
+.btn-icon-text {
+  font-size: 28rpx;
+  font-weight: bold;
+  color: #fff;
+}
+
+.guest-icon-text {
+  color: #6B7280;
 }
 
 .btn-content {
@@ -566,13 +410,13 @@ function openPrivacy() {
 }
 
 .btn-title {
-  font-size: 30rpx;
+  font-size: 28rpx;
   font-weight: bold;
   color: #fff;
 }
 
-.login-btn.guest .btn-title {
-  color: #333;
+.guest-title {
+  color: #374151;
 }
 
 .btn-desc {
@@ -580,74 +424,60 @@ function openPrivacy() {
   color: rgba(255, 255, 255, 0.8);
 }
 
-.login-btn.guest .btn-desc {
-  color: #999;
+.guest-desc {
+  color: #9CA3AF;
 }
 
 .btn-arrow {
-  font-size: 36rpx;
+  font-size: 32rpx;
   color: rgba(255, 255, 255, 0.6);
 }
 
-.login-btn.guest .btn-arrow {
-  color: #999;
+.guest-arrow {
+  color: #9CA3AF;
 }
 
-/* 分割线 */
 .divider {
   display: flex;
   align-items: center;
-  gap: 20rpx;
-  padding: 8rpx 0;
+  gap: 16rpx;
 }
 
 .divider-line {
   flex: 1;
-  height: 1rpx;
-  background: #E8ECEF;
+  height: 2rpx;
+  background: #E5E7EB;
 }
 
 .divider-text {
   font-size: 22rpx;
-  color: #999;
+  color: #9CA3AF;
 }
 
-/* 协议 */
 .agreement-section {
   display: flex;
   align-items: flex-start;
-  gap: 12rpx;
-  padding: 0 8rpx;
+  gap: 16rpx;
 }
 
 .checkbox-wrapper {
-  padding: 4rpx;
-}
-
-.checkbox-wrapper.shake {
-  animation: shake 0.5s ease;
-}
-
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-6rpx); }
-  75% { transform: translateX(6rpx); }
+  padding: 8rpx;
 }
 
 .checkbox {
   width: 36rpx;
   height: 36rpx;
   border-radius: 8rpx;
-  border: 2rpx solid #ccc;
+  border: 2rpx solid #D1D5DB;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
 }
 
 .checkbox.checked {
-  background: #07C160;
-  border-color: #07C160;
+  background: #3B82F6;
+  border-color: #3B82F6;
 }
 
 .check-mark {
@@ -660,18 +490,17 @@ function openPrivacy() {
   flex: 1;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4rpx;
-  line-height: 1.6;
 }
 
 .text-normal {
   font-size: 22rpx;
-  color: #999;
+  color: #6B7280;
 }
 
 .text-link {
   font-size: 22rpx;
-  color: #07C160;
-  font-weight: 500;
+  color: #3B82F6;
 }
 </style>

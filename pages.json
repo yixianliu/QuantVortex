@@ -3,22 +3,29 @@
 		{
 			"path": "pages/index/index",
 			"style": {
-				"navigationBarTitleText": "DATA ANALYSIS",
+				"navigationBarTitleText": "数据分析",
 				"navigationStyle": "custom"
 			}
 		},
 		{
 			"path": "pages/report/report",
 			"style": {
-				"navigationBarTitleText": "REPORT",
+				"navigationBarTitleText": "分析报告",
+				"navigationStyle": "custom"
+			}
+		},
+		{
+			"path": "pages/system-upgrade/system-upgrade",
+			"style": {
+				"navigationBarTitleText": "系统维护",
 				"navigationStyle": "custom"
 			}
 		}
 	],
 	"globalStyle": {
 		"navigationBarTextStyle": "white",
-		"navigationBarTitleText": "DATA ANALYSIS",
-		"navigationBarBackgroundColor": "#1E88E5",
+		"navigationBarTitleText": "数据分析",
+		"navigationBarBackgroundColor": "#1F2937",
 		"backgroundColor": "#F5F7FA"
 	},
 	"easycom": {
