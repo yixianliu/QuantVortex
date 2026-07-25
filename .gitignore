@@ -38,3 +38,4 @@ nul
 # ================= 测试 fixtures（可选提交） =================
 # tests/fixtures/*.csv
 # tests/fixtures/*.json
+api_docs
