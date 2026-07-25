@@ -6,7 +6,7 @@ import sqlite3
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from futures_quant.storage import data_transfer as dtf
 from futures_quant.storage.analysis_store import AnalysisStore

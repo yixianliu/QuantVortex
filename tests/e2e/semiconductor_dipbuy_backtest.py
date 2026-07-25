@@ -62,7 +62,7 @@ TRAILING_STOP_PCT = 0.12     # 自持仓峰值回落 -12% 移动止损
 MAX_HOLD_BARS = 60           # 持仓超 60 交易日时间止损
 PREFIX = "semiconductor_dipbuy"
 
-DATA_FILE = HERE / "512480_daily_qfq.csv"
+DATA_FILE = HERE / "../../fixtures/512480_daily_qfq.csv"
 
 
 def load_data(path: Path) -> pd.DataFrame:

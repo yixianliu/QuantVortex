@@ -56,10 +56,10 @@ LOT_SIZE = 100                # ETF 100 份/手
 PREFIX_DCA = "dividend_dca"
 PREFIX_BH = "dividend_bh"
 
-DATA_FILE = HERE / "510880_daily_qfq.csv"
-SEMI_EQUITY = HERE / "semiconductor_dipbuy_equity.csv"
-SEMI_TRADES = HERE / "semiconductor_dipbuy_trades.csv"
-SEMI_SUMMARY = HERE / "semiconductor_dipbuy_summary.json"
+DATA_FILE = HERE / "../../fixtures/510880_daily_qfq.csv"
+SEMI_EQUITY = HERE / "../../fixtures/semiconductor_dipbuy_equity.csv"
+SEMI_TRADES = HERE / "../../fixtures/semiconductor_dipbuy_trades.csv"
+SEMI_SUMMARY = HERE / "../../fixtures/dividend_bh_summary.json"
 
 
 def load_data(path: Path) -> pd.DataFrame:

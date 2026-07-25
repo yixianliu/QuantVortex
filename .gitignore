@@ -4,7 +4,8 @@ config/ctp_settings.json
 
 # ================= 运行时数据 =================
 # 数据库、缓存、用户配置、会话状态均为运行时产物
-data/
+data/sina_cache/
+data/backtest_reports/
 logs/
 *.db
 *.bak
@@ -29,6 +30,11 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+nul
 
 # ================= 打包临时 =================
 *.spec.bak
+
+# ================= 测试 fixtures（可选提交） =================
+# tests/fixtures/*.csv
+# tests/fixtures/*.json
