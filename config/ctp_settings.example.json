@@ -1,0 +1,23 @@
+{
+  "comment": "CTP / SimNow 配置模板。复制本文件为 ctp_settings.json 并填入真实凭据；ctp_settings.json 已被 .gitignore 忽略，不会提交到仓库。程序在 data/ 目录与 config/ 目录依次查找 ctp_settings.json。",
+  "mode": "simnow",
+  "simnow": {
+    "md_front": "tcp://180.168.146.187:10211",
+    "td_front": "tcp://180.168.146.187:10201",
+    "broker_id": "9999",
+    "app_id": "simnow_client_test",
+    "auth_code": "0000000000000000"
+  },
+  "live": {
+    "md_front": "tcp://your-broker-md-address:port",
+    "td_front": "tcp://your-broker-td-address:port",
+    "broker_id": "your_broker_id",
+    "app_id": "your_app_id",
+    "auth_code": "your_auth_code"
+  },
+  "account": {
+    "user_id": "your_investor_id",
+    "password": "your_password"
+  },
+  "subscribe": ["rb.SHFE", "cu.SHFE", "IF.CFFEX", "au.SHFE"]
+}

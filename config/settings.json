@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "ui": { "theme": "dark" },
+  "data": {
+    "source": "sina",
+    "sina_cache_dir": "data/sina_cache",
+    "sqlite_path": "data/quant_analysis.db"
+  },
+  "analysis": {
+    "default_symbol": "rb.SHFE",
+    "default_period": "D",
+    "predictor_seq_len": 20,
+    "predictor_epochs": 25,
+    "default_horizon": 12
+  },
+  "data_path": "data"
+}

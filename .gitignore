@@ -1,0 +1,34 @@
+# ================= 机密 / 凭据 =================
+# CTP / SimNow 真实柜台凭据（由 config/ctp_settings.example.json 复制生成，绝不入库）
+config/ctp_settings.json
+
+# ================= 运行时数据 =================
+# 数据库、缓存、用户配置、会话状态均为运行时产物
+data/
+logs/
+*.db
+*.bak
+*.sqlite
+session_state.json
+session_state.json.bak
+user_settings.json
+user_settings.json.bak
+
+# ================= 构建产物 =================
+dist/
+build/
+build/futures_qt/
+__pycache__/
+*.pyc
+
+# ================= 本地项目记忆（不入库） =================
+.workbuddy/
+
+# ================= 编辑器 / 系统 =================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ================= 打包临时 =================
+*.spec.bak

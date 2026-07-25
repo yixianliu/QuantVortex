@@ -1,0 +1,27 @@
+# 期货智能分析预测系统 - 依赖清单
+# 安装：pip install -r requirements.txt
+# 设计原则：仅依赖 Python3.9+ / PyQt6 / numpy / pandas，零额外重依赖，
+#          可离线运行、可直接打包 EXE（免环境运行）。
+
+# ---- 核心（数据分析 / 指标 / AI 预测 / 存储）----
+pandas>=2.0
+numpy>=1.24
+
+# ---- 桌面 UI（现代化金融暗黑商务风，纯 PyQt6 + QPainter 绘制）----
+PyQt6>=6.6,<7.0
+
+# ---- 远程 MySQL 备份 / 迁移（可选；纯 Python，无需编译）----
+# 「数据管理」页的 备份到 MySQL / 从 MySQL 迁移恢复 功能需要：
+pymysql>=1.1
+
+# ---- 实盘数据源（可选，沙箱/默认合成行情无需安装）----
+# 生产环境接入真实 CTP 行情时取消注释并安装其一，再在
+# futures_quant/data/ctp_gateway.py 完成接入：
+# ctpbee>=0.6
+# pyctp
+
+# ---- 打包部署（生成 exe，仅打包时安装）----
+# pyinstaller>=6.0
+
+# 说明：技术指标体系与 AI 预测（LSTM）均已用原生 numpy 实现，无需 TA-Lib / scikit-learn；
+#       K 线图与预测曲线用原生 QPainter 绘制，无需 pyqtgraph / plotly。

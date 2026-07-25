@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大盘与板块投资价值筛选报告</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f8fafc;
+    --text: #1e293b;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --accent: #0f172a;
+    --up: #ef4444;
+    --down: #22c55e;
+    --link: #2563eb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.65;
+    max-width: 1000px; margin: 0 auto; padding: 32px 24px;
+  }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .section { margin-top: 28px; }
+  h2 { font-size: 18px; border-left: 4px solid var(--accent); padding-left: 10px; margin: 0 0 12px; }
+  h3 { font-size: 15px; margin: 18px 0 8px; color: var(--text); }
+  .summary-box {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .summary-box ul { margin: 0; padding-left: 18px; }
+  .summary-box li { margin: 6px 0; }
+  table {
+    width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px;
+    background: var(--bg); border: 1px solid var(--border);
+  }
+  th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { background: #f1f5f9; text-align: center; font-weight: 600; }
+  td:first-child, th:first-child { text-align: left; }
+  tr:nth-child(even) { background: #f8fafc; }
+  .num { font-family: "SFMono-Regular", Consolas, monospace; }
+  .up { color: var(--up); font-weight: 600; }
+  .down { color: var(--down); font-weight: 600; }
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px;
+    background: #e2e8f0; color: var(--text); margin-right: 4px;
+  }
+  .tag.core { background: #dbeafe; color: #1e40af; }
+  .tag.sat { background: #fef3c7; color: #92400e; }
+  .tag.hedge { background: #dcfce7; color: #166534; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .risk { color: #b91c1c; }
+  .disclaimer {
+    margin-top: 32px; padding: 14px; background: #fff7ed; border: 1px solid #fed7aa;
+    border-radius: 8px; color: #9a3412; font-size: 13px;
+  }
+  a { color: var(--link); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>大盘与板块投资价值筛选报告</h1>
+<div class="subtitle">数据日期：2026-07-21（收盘） &nbsp;|&nbsp; 报告生成：2026-07-22 00:24 &nbsp;|&nbsp; 数据来源：腾讯自选股公开行情</div>
+
+<div class="summary-box">
+  <strong>核心结论（ TL;DR ）</strong>
+  <ul>
+    <li>当前市场处于「<b>高估值 + 弱趋势 + 强情绪</b>」的背离状态：大盘评分仅 18 分，估值处于偏高区间，但情绪指标与个股宽度已现狂热，7 月 21 日出现大面积技术性反弹。</li>
+    <li>风格上<b>大盘/价值占优</b>：沪深300 涨幅 3.06%、科创50 涨幅 10.73%，中证1000 仍处 20 日 -16.36% 的深跌通道，大小盘分化严重。</li>
+    <li>操作策略建议<b>「防御打底 + 卫星博弹」</b>：核心仓位配置低估值大盘（沪深300ETF）、高股息防御（电力ETF）与避险资产（黄金ETF）；卫星仓位仅小仓位参与半导体/通信设备的政策+资金驱动反弹。</li>
+    <li>最大风险：反弹伴随<b>缩量</b>，若后续成交额继续萎缩且指数跌破近期低点，应果断降低仓位。</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h2>一、大盘整体画像</h2>
+  <p>市场统计模型给出总评 <b>18.04 / 100</b>，分项显示：</p>
+  <ul>
+    <li>大小盘轮动：大盘主导（沪深300 跑赢中证1000 逾 8%）</li>
+    <li>行业轮动：分化严重（头部涨、尾部跌，差值 >5%）</li>
+    <li>情绪指标：情绪狂热（涨停家数多、涨股比高）</li>
+    <li>技术指标 / 短期趋势：偏弱、弱势下跌</li>
+    <li>估值水平：偏高区间（PE 分位数 70%~90%）</li>
+    <li>成交量能：缩量下跌（成交额为近期均值的 70%~90%）</li>
+  </ul>
+
+  <h3>主要指数行情与估值</h3>
+  <table>
+    <tr>
+      <th>指数</th>
+      <th>收盘</th>
+      <th>涨跌幅</th>
+      <th>5日涨跌</th>
+      <th>20日涨跌</th>
+      <th>年初至今</th>
+      <th>PE(TTM)</th>
+      <th>风格/定位</th>
+    </tr>
+    <tr><td>上证指数</td><td class="num">3,864.37</td><td class="up">+1.79%</td><td class="down">-2.59%</td><td class="down">-5.89%</td><td class="down">-2.63%</td><td class="num">17.26</td><td>大盘基准</td></tr>
+    <tr><td>沪深300</td><td class="num">4,739.23</td><td class="up">+3.06%</td><td class="down">-1.19%</td><td class="down">-3.66%</td><td class="up">+2.36%</td><td class="num">14.49</td><td>核心蓝筹</td></tr>
+    <tr><td>深证成指</td><td class="num">14,264.29</td><td class="up">+4.81%</td><td class="down">-4.43%</td><td class="down">-10.03%</td><td class="up">+5.47%</td><td class="num">45.78</td><td>中大盘成长</td></tr>
+    <tr><td>创业板指</td><td class="num">3,685.97</td><td class="up">+7.05%</td><td class="down">-4.29%</td><td class="down">-12.08%</td><td class="up">+15.07%</td><td class="num">62.09</td><td>成长弹性</td></tr>
+    <tr><td>中证500</td><td class="num">7,800.61</td><td class="up">+5.25%</td><td class="down">-5.74%</td><td class="down">-10.22%</td><td class="up">+4.49%</td><td class="num">37.09</td><td>中盘</td></tr>
+    <tr><td>中证1000</td><td class="num">7,259.86</td><td class="up">+4.23%</td><td class="down">-8.39%</td><td class="down">-16.36%</td><td class="down">-4.42%</td><td class="num">43.76</td><td>小盘</td></tr>
+    <tr><td>科创50</td><td class="num">1,903.16</td><td class="up">+10.73%</td><td class="down">-5.30%</td><td class="down">-0.68%</td><td class="up">+41.58%</td><td class="num">235.72</td><td>科技高弹性</td></tr>
+  </table>
+  <p class="note">注：PE 为指数整体滚动市盈率；科创50 PE 超过 200，反映半导体/硬科技高估值特征。</p>
+</div>
+
+<div class="section">
+  <h2>二、板块表现与资金流向</h2>
+  <p>7 月 21 日涨幅居前的板块集中在 <b>半导体产业链</b>（电子化学品、半导体、元件、光学光电子、通信设备），属于典型的政策+资金驱动型超跌反弹；防御类板块（电力、银行、白酒）逆势回调或滞涨。</p>
+
+  <h3>重点板块行情与估值</h3>
+  <table>
+    <tr>
+      <th>板块</th>
+      <th>今日涨跌</th>
+      <th>5日涨跌</th>
+      <th>20日涨跌</th>
+      <th>年初至今</th>
+      <th>PE(TTM)</th>
+      <th>PB</th>
+      <th>领涨股</th>
+    </tr>
+    <tr><td>电子化学品Ⅱ</td><td class="up">+11.77%</td><td class="down">-17.77%</td><td class="down">-24.23%</td><td class="up">+53.25%</td><td class="num">88.57</td><td class="num">5.78</td><td>国瓷材料 +19.99%</td></tr>
+    <tr><td>半导体</td><td class="up">+11.71%</td><td class="down">-12.13%</td><td class="down">-9.58%</td><td class="up">+58.26%</td><td class="num">113.30</td><td class="num">8.87</td><td>格科微 +20.03%</td></tr>
+    <tr><td>通信设备</td><td class="up">+9.16%</td><td class="down">-8.68%</td><td class="down">-19.94%</td><td class="up">+54.42%</td><td class="num">71.36</td><td class="num">9.95</td><td>联特科技 +20.00%</td></tr>
+    <tr><td>元件</td><td class="up">+7.98%</td><td class="down">-13.77%</td><td class="down">-21.83%</td><td class="up">+60.48%</td><td class="num">72.20</td><td class="num">8.96</td><td>中富电路 +20.00%</td></tr>
+    <tr><td>光学光电子</td><td class="up">+7.32%</td><td class="down">-11.95%</td><td class="down">-20.36%</td><td class="up">+7.73%</td><td class="num">55.23</td><td class="num">2.25</td><td>—</td></tr>
+    <tr><td>贵金属</td><td class="up">+7.20%</td><td class="up">+0.10%</td><td class="up">+2.12%</td><td class="down">-8.94%</td><td class="num">18.66</td><td class="num">3.24</td><td>—</td></tr>
+    <tr><td>光伏设备</td><td class="up">+3.35%</td><td class="down">-6.00%</td><td class="down">-21.63%</td><td class="down">-23.91%</td><td class="num">41.05</td><td class="num">2.45</td><td>—</td></tr>
+    <tr><td>电力</td><td class="down">-0.53%</td><td class="up">+2.99%</td><td class="down">-3.09%</td><td class="up">+4.18%</td><td class="num">21.30</td><td class="num">1.58</td><td>—</td></tr>
+    <tr><td>白酒Ⅱ</td><td class="down">-1.63%</td><td class="up">+6.85%</td><td class="up">+5.51%</td><td class="down">-15.26%</td><td class="num">19.99</td><td class="num">3.71</td><td>—</td></tr>
+    <tr><td>证券Ⅱ</td><td class="up">+0.15%</td><td class="up">+1.52%</td><td class="down">-1.38%</td><td class="down">-8.15%</td><td class="num">15.74</td><td class="num">1.21</td><td>—</td></tr>
+  </table>
+
+  <h3>主力资金净流入（行业）</h3>
+  <table>
+    <tr><th>排名</th><th>板块</th><th>今日涨跌</th><th>主力净流入</th><th>近5日主力净流入</th><th>涨跌家数比</th></tr>
+    <tr><td>1</td><td>半导体</td><td class="up">+11.71%</td><td class="num up">1,751,213 万元</td><td class="down">-7,265,430 万元</td><td>176/177</td></tr>
+    <tr><td>2</td><td>通信设备</td><td class="up">+9.16%</td><td class="num up">482,135 万元</td><td class="down">-3,251,988 万元</td><td>78/85</td></tr>
+    <tr><td>3</td><td>消费电子</td><td class="up">+6.45%</td><td class="num up">383,428 万元</td><td class="down">-1,028,125 万元</td><td>76/91</td></tr>
+  </table>
+  <p class="note">注：资金单位为元，表中按「万元」显示；近 5 日主力净流入仍为负，说明今日反弹属于资金回补，尚未扭转中期流出态势。</p>
+</div>
+
+<div class="section">
+  <h2>三、投资价值筛选与推荐</h2>
+  <p>基于「估值合理/低 + 趋势稳健 + 资金偏好」三维度，结合当前高估值、弱趋势的市场环境，筛选出以下四类方向：</p>
+
+  <table>
+    <tr>
+      <th style="width:92px">类型</th>
+      <th>板块</th>
+      <th>推荐品种</th>
+      <th>今日表现</th>
+      <th>关键估值</th>
+      <th>投资逻辑</th>
+      <th>风险提示</th>
+    </tr>
+    <tr>
+      <td><span class="tag core">核心</span></td>
+      <td>沪深300 / 大盘蓝筹</td>
+      <td>沪深300ETF（510300）</td>
+      <td class="up">+2.95%</td>
+      <td>PE 14.49</td>
+      <td>市场风格偏向大盘，沪深300 估值处于历史中低位，适合作为底仓；ETF 流动性好、费率低。</td>
+      <td>若中小盘持续杀跌引发系统性波动，蓝筹亦难独善其身。</td>
+    </tr>
+    <tr>
+      <td><span class="tag core">核心</span></td>
+      <td>电力 / 公用事业</td>
+      <td>电力ETF广发（159611）<br>电力ETF华泰柏瑞（561560）</td>
+      <td>-0.74% / -0.53%</td>
+      <td>板块 PE 21.3 / PB 1.58</td>
+      <td>低估值、高股息属性，5 日涨幅 +2.99%~+5.25%，弱市中的防御避风港；电价改革与夏季用电高峰提供业绩支撑。</td>
+      <td>今日逆势回调，显示资金轮动；若利率上行，高股息资产相对吸引力下降。</td>
+    </tr>
+    <tr>
+      <td><span class="tag hedge">对冲</span></td>
+      <td>贵金属 / 黄金</td>
+      <td>黄金ETF华安（518880）</td>
+      <td class="up">+1.80%</td>
+      <td>板块 PE 18.66 / PB 3.24</td>
+      <td>在市场高估值、情绪狂热但趋势疲弱的环境下，黄金作为避险资产配置价值提升；年初至今下跌 8.96%，价位相对 52 周高点回落明显。</td>
+      <td>美元与实际利率波动会压制金价；短期若市场风险偏好回升，黄金或跑输。</td>
+    </tr>
+    <tr>
+      <td><span class="tag sat">卫星</span></td>
+      <td>半导体 / 芯片</td>
+      <td>半导体ETF国联安（512480）<br>芯片ETF华夏（159995）</td>
+      <td class="up">+10.00% / +10.03%</td>
+      <td>板块 PE 113.3 / PB 8.87</td>
+      <td>国产替代、大基金三期、AI 算力需求三重催化；7 月 21 日主力净流入行业第一，超跌反弹弹性最大，YTD 仍超 +52%。</td>
+      <td class="risk">估值极高，5 日/20 日趋势仍处下跌通道；反弹若无量，容易冲高回落。仅适合小仓位交易，严格止损。</td>
+    </tr>
+    <tr>
+      <td><span class="tag sat">卫星</span></td>
+      <td>通信设备 / 算力硬件</td>
+      <td>通信ETF国泰（515880）</td>
+      <td class="up">+8.68%</td>
+      <td>板块 PE 71.36 / PB 9.95</td>
+      <td>AI 算力基建与光模块需求维持高景气；今日资金净流入排名第二，与半导体形成科技反弹双主线。</td>
+      <td class="risk">估值偏高，近 20 日跌幅 -19.94%，趋势尚未扭转；若海外科技龙头回调，A股映射亦承压。</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <h2>四、配置思路与风控建议</h2>
+  <div class="summary-box">
+    <ul>
+      <li><b>仓位建议</b>：核心 60%（沪深300ETF 30% + 电力ETF 20% + 黄金ETF 10%） + 卫星 20%（半导体ETF 12% + 通信ETF 8%） + 现金/货币基金 20%。该结构兼顾防御与反弹弹性。</li>
+      <li><b>买入节奏</b>：当前为缩量反弹，不建议一次性满仓。核心仓位可逢低分批建仓；卫星仓位 strictly 小仓位试多，若半导体/通信跌破 7 月 21 日低点则止损。</li>
+      <li><b>观察指标</b>：后续重点关注两市成交额能否回升至近期均值上方、沪深300 能否守住 4600 点、半导体板块 5 日资金能否持续净流入。</li>
+      <li><b>止盈/止损</b>：卫星仓位建议以 5% 硬止损；若大盘评分回升至 50 以上且量能放大，可逐步加仓成长方向。</li>
+    </ul>
+  </div>
+</div>
+
+<div class="disclaimer">
+  ⚠️ 以上内容由 AI 基于公开信息整理生成，仅供参考，不构成任何投资建议或个股推荐。投资有风险，决策需谨慎。报告中的板块与品种仅为基于当前公开数据的分析示例，未考虑个人风险承受能力与交易成本，投资者应结合自身情况独立判断。
+</div>
+
+</body>
+</html>
