@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .pages import BasePage
-from .widgets import PageHeader, Badge, prepare_table, color_pnl, pal
+from .widgets import PageHeader, Badge, SectionHeader, prepare_table, color_pnl, pal
 from .pages import symbol_code
 from ..data.market_data import MarketDataManager
 from ..data.ctp_gateway import ctp_diagnose
@@ -96,7 +96,8 @@ class CTPMonitorPage(BasePage):
         # ---- 诊断卡 ----
         dcard = QFrame(); dcard.setObjectName("card")
         dl = QVBoxLayout(dcard); dl.setContentsMargins(10, 8, 10, 8); dl.setSpacing(4)
-        dl.addWidget(QLabel("连接诊断（还差什么才能连上柜台）"))
+        dl.addWidget(SectionHeader("连接诊断（还差什么才能连上柜台）",
+                                   accent="#f59e0b"))
         self.diag_lbl = QLabel("—")
         self.diag_lbl.setObjectName("hint")
         self.diag_lbl.setWordWrap(True)
@@ -106,7 +107,9 @@ class CTPMonitorPage(BasePage):
         # ---- 订阅合约盘口表 ----
         qcard = QFrame(); qcard.setObjectName("card")
         ql = QVBoxLayout(qcard); ql.setContentsMargins(10, 8, 10, 8); ql.setSpacing(4)
-        ql.addWidget(QLabel("订阅合约实时盘口"))
+        self.watch_hdr = SectionHeader("订阅合约实时盘口", accent="#3b82f6",
+                                       badge="实时盘口")
+        ql.addWidget(self.watch_hdr)
         self.qtable = QTableWidget(0, 7)
         self.qtable.setHorizontalHeaderLabels(
             ["合约", "最新价", "涨跌幅%", "成交量", "持仓量", "资金流(亿)", "数据源"])
@@ -118,7 +121,7 @@ class CTPMonitorPage(BasePage):
         # ---- 持仓 / 委托只读占位 ----
         pcard = QFrame(); pcard.setObjectName("card")
         pl = QVBoxLayout(pcard); pl.setContentsMargins(10, 8, 10, 8); pl.setSpacing(4)
-        pl.addWidget(QLabel("持仓 / 委托（只读原型）"))
+        pl.addWidget(SectionHeader("持仓 / 委托（只读原型）", accent="#8b5cf6"))
         note = QLabel("⚠️ 交易侧未启用：本系统定位为「行情分析 / AI 预测 / 量化研判」，"
                       "不做自动交易。下单、持仓、委托功能需用户明确确认后另行开发，"
                       "且须在期货公司模拟盘充分验证风控（见 docs/ctp_wiring.md）。")
@@ -140,6 +143,7 @@ class CTPMonitorPage(BasePage):
         if not watch:
             watch = [symbol_code(r) for r in self.mdm.universe[:5]]
         self._watch = watch
+        self.watch_hdr.set_badge(f"{len(watch)} 合约")
         self.qtable.setRowCount(len(watch))
         for i, sym in enumerate(watch):
             self.qtable.setItem(i, 0, QTableWidgetItem(sym))
@@ -176,10 +180,10 @@ class CTPMonitorPage(BasePage):
         connected = getattr(self.mdm, "is_real", False)
         if connected:
             self.status_dot.setText("● 已连接")
-            self.status_dot.setStyleSheet("color:#22c55e;")
+            self.status_dot.setStyleSheet(f"color:{pal()['up']};")
         else:
             self.status_dot.setText("● 离线")
-            self.status_dot.setStyleSheet("color:#ef4444;")
+            self.status_dot.setStyleSheet(f"color:{pal()['down']};")
         self.status_lbl.setText(self.mdm.status)
 
     def _refresh_diag(self) -> None:
@@ -223,3 +227,4 @@ class CTPMonitorPage(BasePage):
     def _on_status(self, text: str) -> None:
         self.status_lbl.setText(text)
         self._refresh_status()
+        self._toast(f"📡 连接状态：{text}", duration=3000)

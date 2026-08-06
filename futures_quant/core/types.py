@@ -97,6 +97,7 @@ class Trade:
     commission: float = 0.0
     order_id: str = ""
     pnl: float = 0.0  # 平仓时计算的已实现盈亏
+    multiplier: float = 10.0  # 合约乘数（每手对应标的单位数），盈亏与保证金计算用
 
 
 @dataclass
@@ -113,8 +114,13 @@ class Position:
     def net_qty(self) -> int:
         return self.long_qty - self.short_qty
 
-    def update_on_trade(self, direction: Direction, offset: Offset, qty: int, price: float) -> float:
-        """根据成交更新持仓，返回该笔成交产生的已实现盈亏（仅平仓时非零）。"""
+    def update_on_trade(self, direction: Direction, offset: Offset, qty: int,
+                         price: float, multiplier: float = 1.0) -> float:
+        """根据成交更新持仓，返回该笔成交产生的已实现盈亏（仅平仓时非零）。
+
+        multiplier：合约乘数（每手对应标的单位数）。期货盈亏 = 价差 × 乘数 × 手数，
+        此处必须乘乘数，否则盈亏与真实资金规模严重不符。
+        """
         realized = 0.0
         if direction == Direction.LONG:
             if offset == Offset.OPEN:
@@ -126,7 +132,7 @@ class Position:
                 self.long_qty = new_qty
             else:  # 平空
                 close_qty = min(qty, self.short_qty)
-                realized = (self.short_avg_price - price) * close_qty
+                realized = (self.short_avg_price - price) * close_qty * multiplier
                 self.short_qty -= close_qty
                 if self.short_qty == 0:
                     self.short_avg_price = 0.0
@@ -140,7 +146,7 @@ class Position:
                 self.short_qty = new_qty
             else:  # 平多
                 close_qty = min(qty, self.long_qty)
-                realized = (price - self.long_avg_price) * close_qty
+                realized = (price - self.long_avg_price) * close_qty * multiplier
                 self.long_qty -= close_qty
                 if self.long_qty == 0:
                     self.long_avg_price = 0.0

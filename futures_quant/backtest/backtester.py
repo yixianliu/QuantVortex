@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from datetime import datetime
@@ -21,6 +22,8 @@ import pandas as pd
 from ..config.settings import Config
 from ..core.engine import TradingEngine
 from ..core.types import Offset, Direction
+
+logger = logging.getLogger(__name__)
 
 
 def compute_metrics(equity_curve: list, trades: list) -> dict:
@@ -47,7 +50,13 @@ def compute_metrics(equity_curve: list, trades: list) -> dict:
             daily_ret = eqd.pct_change().dropna()
             if daily_ret.std() > 0:
                 sharpe = float(daily_ret.mean() / daily_ret.std() * (252 ** 0.5))
-            annual_return = float((eqd.iloc[-1] / eqd.iloc[0]) ** (252 / len(eqd)) - 1)
+            # 防止 eqd.iloc[0] 为负导致 (负数)^非整数幂产生 invalid value warning
+            ratio = eqd.iloc[-1] / eqd.iloc[0]
+            if ratio > 0:
+                annual_return = float(ratio ** (252 / len(eqd)) - 1)
+            else:
+                # ratio <= 0：负的复合年化无实际金融意义，跳过避免 NaN
+                annual_return = None
     except Exception:
         pass
 
@@ -100,7 +109,12 @@ class Backtester:
 
     def run(self, symbol: str, start: str, end: str, period: str = "1m", warmup: int = 0) -> dict:
         df = self.feed.get_history(symbol, start, end, period)
-        if df.empty:
+        # 日内周期（如 1m/5m）SinaFeed 等真实源返回 None，自动回退合成数据
+        if df is None:
+            from ..data.synthetic import SyntheticFeed
+            logger.warning("真实源未提供 %s 的 %s 行情，回退合成数据", symbol, period)
+            df = SyntheticFeed().get_history(symbol, start, end, period)
+        if df is None or df.empty:
             raise ValueError(f"未取到 {symbol} 的行情数据。")
         self.engine.start()
 

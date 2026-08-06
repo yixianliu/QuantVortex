@@ -35,15 +35,20 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter, QTextEdit, QFrame,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 
 from .pages import BasePage, Worker
 from ..ai.predictor import FuturesPredictor
+from ..ai.feedback import reliability_calibration, calibration_band_at
 from .widgets import (
     PageHeader, ToolBar, PALETTE, THEME, prepare_table, color_pnl,
-    ConfidenceBar, MetricChip, Badge,
+    ConfidenceBar, MetricChip, Badge, pal,
 )
+
+# 校准区间「低置信」阈值：与 predict_ops_page.LOW_CONF_BAND_WIDTH 保持一致
+# （该档概率历史校准样本稀疏 → 研判可信度下降，AI 方向标注「置信偏低」）。
+LOW_CONF_BAND_WIDTH = 0.25
 
 
 # ---------------------------------------------------------------------------
@@ -109,9 +114,14 @@ def _screen(mdm, store=None):
                      fund=fund, vr=vr, oi=oi)
             # AI 方向概率因子（快速岭回归，进程内廉价；异常时回退中性 0.5）
             try:
-                r["pu"] = _ai_p_up(df)
+                pu, ai_exp, ai_conf = _ai_full_predict(df)
+                r["pu"] = pu
+                r["ai_exp"] = ai_exp
+                r["ai_conf"] = ai_conf
             except Exception:
                 r["pu"] = 0.5
+                r["ai_exp"] = 0.0
+                r["ai_conf"] = 0.5
             # 历史信号回测（独立容错，避免回测异常导致该品种丢失）
             try:
                 r["hist"] = _backtest_symbol(df, horizon=5)
@@ -197,10 +207,12 @@ def _screen(mdm, store=None):
             for e in m["hist"]["examples"]:
                 examples.append(dict(name=m["name"], **e))
         examples.sort(key=lambda x: (x.get("date") or ""), reverse=True)
+        # 板块平均 AI 方向概率（用于「置信偏低」标注）
+        avg_pu = sum(m.get("pu", 0.5) for m in members) / len(members)
         cat_rows.append(dict(category=cat, avg=round(avg, 1), count=len(members),
                              rec=rec, top_name=top["name"], top_score=top["score"],
                              success_rate=rate, wins=hw, total=ht,
-                             examples=examples[:8]))
+                             examples=examples[:8], avg_pu=avg_pu))
     cat_rows.sort(key=lambda x: x["avg"], reverse=True)
     return raw, cat_rows
 
@@ -304,7 +316,7 @@ def _spearman(x, y) -> float:
 
 def _ai_p_up(df) -> float:
     """用快速岭回归给出「未来上涨概率」方向因子（进程内廉价，秒级）。
-
+    
     复用 FuturesPredictor 的 7 特征 + 正态近似涨跌概率；失败回退中性 0.5。
     仅作选品排序的第 7 个因子，不阻塞主流程。
     """
@@ -315,6 +327,27 @@ def _ai_p_up(df) -> float:
         return float(np.clip(res.get("p_up", 0.5), 0.01, 0.99))
     except Exception:
         return 0.5
+
+
+def _ai_full_predict(df) -> tuple:
+    """完整 AI 预测，返回 (p_up, expected_return, confidence)。
+    
+    用于选品页面展示 AI 预期收益和置信度，与预测页联动。
+    """
+    try:
+        pr = FuturesPredictor()
+        pr.fit(df, seq_len=20, epochs=15, force_ridge=True)
+        res = pr.predict(df, horizon=5)
+        p_up = float(np.clip(res.get("p_up", 0.5), 0.01, 0.99))
+        exp = float(res.get("expected_return_pct", 0.0))
+        # 置信度：基于模型信号强度计算
+        risk = res.get("risk", {})
+        resonance = res.get("resonance", {})
+        conf = 0.5 + 0.3 * abs(p_up - 0.5) + 0.2 * min(abs(exp) / 10, 0.5)
+        conf = min(0.95, max(0.1, conf))
+        return p_up, exp, conf
+    except Exception:
+        return 0.5, 0.0, 0.5
 
 
 def _history_kpi(raw: list) -> Optional[float]:
@@ -426,6 +459,8 @@ def _tier_color(tier: str) -> QColor:
 # 页面
 # ---------------------------------------------------------------------------
 class ScreeningPage(BasePage):
+    navig_to_predict = pyqtSignal(str, str)  # symbol, period → 切换到 AI 预测并自动运行
+
     def __init__(self, mdm, store, config=None, session=None):
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "screening"
@@ -434,8 +469,9 @@ class ScreeningPage(BasePage):
         self._filtered: list = []
         self._kpi_cards: list = []
         self._kpi_vals: dict = {}
+        self._calib_info: Optional[dict] = None  # 校准分箱（_on_done 时读一次）
         self._build()
-        self._run()
+        self._run_lazy = True      # 首次 showEvent 时延迟加载筛选
 
     # ---- 构建 ----
     def _build(self):
@@ -444,9 +480,11 @@ class ScreeningPage(BasePage):
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
         root.addWidget(PageHeader(
-            "选品入手机会", "全合约入手机会评分 · 趋势 / 资金流 / 量能 / 持仓 / 波动 五维综合，直接回答「哪些品种可考虑入手 · 哪些板块值得关注」"))
+            "选品入手机会 · AI 决策辅助",
+            "全合约入手机会评分 · 趋势 / 资金流 / 量能 / 持仓 / 波动 五维综合 + AI预测辅助 · "
+            "直接回答「哪些品种可考虑入手 · 哪些板块值得关注 · AI预测信号如何」"))
 
-        # 样本状态横幅：样本不足时醒目提示 + 一键补充采集
+        # 样本状态横幅
         self.banner = QFrame()
         self.banner.setObjectName("warn-banner")
         b_layout = QHBoxLayout(self.banner)
@@ -463,7 +501,8 @@ class ScreeningPage(BasePage):
         self.banner.setStyleSheet(
             "QFrame{background:#fff7ed;border:1px solid #f59e0b;"
             "border-radius:8px;}")
-        self.banner_lbl.setStyleSheet("color:#b45309;font-weight:bold;")
+        p = pal()
+        self.banner_lbl.setStyleSheet(f"color:{p['accent']};font-weight:bold;")
         self.collect_btn.setStyleSheet(
             "QPushButton{background:#f59e0b;color:#ffffff;border:none;"
             "border-radius:6px;padding:5px 14px;font-weight:bold;}"
@@ -475,7 +514,8 @@ class ScreeningPage(BasePage):
         ctl = QHBoxLayout()
         self.sort_cb = QComboBox()
         for k, t in [("score", "按评分"), ("fund", "按资金流"),
-                      ("rate", "按成功率"), ("ret", "按20日涨跌")]:
+                      ("rate", "按成功率"), ("ret", "按20日涨跌"),
+                      ("ai_dir", "按AI方向")]:
             self.sort_cb.addItem(t, k)
         self.sort_cb.currentIndexChanged.connect(lambda _: self._apply_filter())
         self.cat_cb = QComboBox()
@@ -521,12 +561,15 @@ class ScreeningPage(BasePage):
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
-        lv.addWidget(QLabel("全合约入手机会排行（单击查看入手逻辑 / 风险 / 历史成功率）"))
-        self.tbl = QTableWidget(0, 10)
+        lv.addWidget(QLabel("全合约入手机会排行（单击查看入手逻辑 / 风险 / 历史成功率 / AI预测信号）"))
+        self.tbl = QTableWidget(0, 13)
         self.tbl.setHorizontalHeaderLabels(
             ["合约", "板块", "评分", "历史成功率", "20日%", "资金流(亿)",
-             "量比", "持仓变%", "波动%", "信号"])
+             "量比", "持仓变%", "波动%", "信号", "AI方向", "AI预期%", "AI置信度"])
         self.tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.tbl.setColumnWidth(10, 65)
+        self.tbl.setColumnWidth(11, 70)
+        self.tbl.setColumnWidth(12, 70)
         self.tbl.itemSelectionChanged.connect(self._on_select)
         lv.addWidget(self.tbl)
         # 评分档位图例（提升可读性）
@@ -536,7 +579,7 @@ class ScreeningPage(BasePage):
             "<span style='color:#64748b;font-weight:600;'>■</span> 暂观望 (评分&lt;55)"
         )
         legend.setObjectName("legend-lbl")
-        legend.setStyleSheet("font-size:12px;padding:4px 2px;color:#64748b;")
+        legend.setStyleSheet(f"font-size:12px;padding:4px 2px;color:{p['sub']};")
         lv.addWidget(legend)
         split.addWidget(left)
 
@@ -573,6 +616,22 @@ class ScreeningPage(BasePage):
             "<b>一句话结论 · 入手逻辑 · 风险提示 · 历史信号回测</b> 白话解读，"
             "帮助判断是否值得入手、何时入手。</p>")
         root.addWidget(self.detail)
+
+        # 联动按钮：「在 AI 预测中分析」和「查看K线图」
+        btn_row = QHBoxLayout()
+        self.predict_btn = QPushButton("在 AI 预测中分析 →")
+        self.predict_btn.setObjectName("primary")
+        self.predict_btn.setVisible(False)
+        self.predict_btn.clicked.connect(self._on_navigate_to_predict)
+        btn_row.addWidget(self.predict_btn)
+        
+        self.chart_btn = QPushButton("查看K线图")
+        self.chart_btn.setObjectName("secondary")
+        self.chart_btn.setVisible(False)
+        self.chart_btn.clicked.connect(self._on_show_chart)
+        btn_row.addWidget(self.chart_btn)
+        btn_row.addStretch(1)
+        root.addLayout(btn_row)
 
     def _style_kpi(self):
         pal = PALETTE[THEME]
@@ -666,6 +725,13 @@ class ScreeningPage(BasePage):
         self.sum_badge.set_color(
             _tier_color(r["tier"]).name(), "#ffffff")
 
+    # ---- 懒加载：首次可见时启动筛选后台任务 ----
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_run_lazy", False):
+            self._run_lazy = False
+            QTimer.singleShot(100, self._run)
+
     # ---- 运行 ----
     def _run(self):
         self.run_btn.setEnabled(False)
@@ -677,10 +743,48 @@ class ScreeningPage(BasePage):
 
     def _on_done(self, payload):
         self._results, self._cats = payload
+        self._calib_info = self._load_calib()
         self.run_btn.setEnabled(True)
         self.run_btn.setText("开始筛选")
         self._render()
         self._refresh_sample_banner()
+
+    def _load_calib(self) -> Optional[dict]:
+        """筛选完成后读一次全局校准分箱（status='closed' 样本），供 AI 方向标注「置信偏低」。
+
+        失败 / 无样本时返回 None，_calib_low_conf 安全回退 False（不误报）。
+        """
+        try:
+            info = reliability_calibration(self.store)
+            if isinstance(info, dict) and (info.get("bins") or []):
+                return info
+        except Exception:
+            pass
+        return None
+
+    def _calib_low_conf(self, pu: float) -> bool:
+        """品种 AI 方向概率 pu 是否落在校准区间过宽档（该档历史样本稀疏）。
+
+        与 ⑬/⑭ 同一判定口径：落点 Wilson 区间宽 > 阈值 或 该档样本 < 50 即判低置信。
+        无校准信息 / 空 bins / 异常 → False（零副作用）。
+        """
+        info = getattr(self, "_calib_info", None)
+        if not isinstance(info, dict):
+            return False
+        bins = info.get("bins", []) or []
+        if not bins:
+            return False
+        try:
+            lo, hi = calibration_band_at(bins, float(pu))
+        except Exception:
+            return False
+        if lo is None or hi is None:
+            return False
+        # 用最近中心值匹配该落点所在分箱（避免 Wilson 区间边界截断导致误匹配）
+        n_at_bin = min(bins, key=lambda b: abs(b[0] - float(pu)))[2]
+        if n_at_bin < 50:
+            return True
+        return (hi - lo) > LOW_CONF_BAND_WIDTH
 
     def _refresh_sample_banner(self) -> None:
         """样本不足时显示醒目横幅 + 补充采集入口（T1）。"""
@@ -756,6 +860,8 @@ class ScreeningPage(BasePage):
             return rt if rt is not None else -1.0
         if key == "ret":
             return float(r.get("ret_20", 0.0))
+        if key == "ai_dir":
+            return float(r.get("pu", 0.5))
         return float(r.get("score", 0.0))
 
     @staticmethod
@@ -824,6 +930,34 @@ class ScreeningPage(BasePage):
             color_pnl(c, r["oi"])
             self._set(self.tbl, i, 8, f"{r['vol_20']:.1f}")
             self._set(self.tbl, i, 9, r["tier"], _tier_color(r["tier"]))
+            # AI 方向概率因子（秒级岭回归，复用 predictor）
+            pu = r.get("pu", 0.5)
+            # 校准不确定度 → AI 方向标注「置信偏低」：落点处 Wilson 区间过宽
+            # （该档概率历史校准样本稀疏）时，提示该方向研判可信度下降。
+            low_conf = self._calib_low_conf(pu)
+            ai_dir = "偏多" if pu >= 0.55 else ("偏空" if pu <= 0.45 else "中性")
+            if low_conf:
+                ai_dir += "·置信偏低"
+            pal = PALETTE[THEME]
+            ai_col = ("#f59e0b" if low_conf else
+                      pal["up"] if pu >= 0.55 else
+                      (pal["down"] if pu <= 0.45 else pal["sub"]))
+            it_ai = self._set(self.tbl, i, 10, ai_dir, QColor(ai_col))
+            font = it_ai.font()
+            font.setPointSize(9); font.setBold(True)
+            it_ai.setFont(font)
+            
+            # AI 预测预期收益（新增列）
+            ai_exp = r.get("ai_exp", 0.0)
+            exp_col = pal["up"] if ai_exp >= 0 else (pal["down"] if ai_exp < 0 else pal["sub"])
+            it_exp = self._set(self.tbl, i, 11, f"{ai_exp:+.1f}%", QColor(exp_col))
+            it_exp.setFont(font)
+            
+            # AI 置信度（新增列）
+            ai_conf = r.get("ai_conf", 0.5)
+            conf_col = "#22c55e" if ai_conf >= 0.65 else "#f59e0b" if ai_conf >= 0.5 else "#ef4444"
+            it_conf = self._set(self.tbl, i, 12, f"{ai_conf*100:.0f}%", QColor(conf_col))
+            it_conf.setFont(font)
         prepare_table(self.tbl)
 
     def _render_cats(self):
@@ -843,6 +977,10 @@ class ScreeningPage(BasePage):
             # 关注方向：有入手品种且平均评分较高 → 重点留意；仅有入手品种 → 可留意；无 → 暂观望
             direction = ("重点留意" if (c["rec"] > 0 and c["avg"] >= 60)
                          else ("可留意" if c["rec"] > 0 else "暂观望"))
+            # 校准不确定度 → 板块关注方向「置信偏低」标注（与品种表同一口径）
+            low_conf = self._calib_low_conf(c.get("avg_pu", 0.5))
+            if low_conf:
+                direction += " ·置信偏低"
             self._set(self.ctbl, i, 5, direction)
         prepare_table(self.ctbl)
         # 板块机会地图（彩色热力格）
@@ -873,6 +1011,54 @@ class ScreeningPage(BasePage):
         cat_ex = cat["examples"] if cat else []
         self.detail.setHtml(self._logic_html(r, cat_ex))
         self._update_summary(r)
+        # 显示联动按钮
+        sym = r["sym"].replace(".", ".")
+        self.predict_btn.setVisible(True)
+        self.predict_btn._current_sym = sym
+        self.predict_btn._current_per = "D"  # 默认日线周期
+        # K线图按钮
+        self.chart_btn.setVisible(True)
+        self.chart_btn._current_sym = sym
+        self.chart_btn._current_name = r["name"]
+
+    def _on_navigate_to_predict(self):
+        """将选中的品种联动到 AI 预测页。"""
+        sym = getattr(self.predict_btn, "_current_sym", None)
+        per = getattr(self.predict_btn, "_current_per", "D")
+        if sym:
+            self.navig_to_predict.emit(sym, per)
+    
+    def _on_show_chart(self):
+        """显示选中品种的 K 线图弹出窗口。"""
+        sym = getattr(self.chart_btn, "_current_sym", None)
+        name = getattr(self.chart_btn, "_current_name", "")
+        if not sym:
+            return
+        try:
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout
+            from .chart_widget import KLineChart
+            from ..indicators.tech import add_indicators
+            from ..ui.pages import df_to_bars
+            
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"{name} {sym} - K线图预览")
+            dlg.resize(800, 500)
+            layout = QVBoxLayout(dlg)
+            chart = KLineChart()
+            chart.set_theme(THEME)
+            layout.addWidget(chart)
+            
+            df = self.mdm.get_bars(sym, "D", 120)
+            if df is not None and not df.empty:
+                ind = add_indicators(df)
+                bars = df_to_bars(df)
+                chart.set_data(bars, ma={"MA10": ind["MA10"].tolist(), 
+                                          "MA20": ind["MA20"].tolist(),
+                                          "MA60": ind["MA60"].tolist()})
+                chart.set_watermark(f"{sym} · D")
+            dlg.exec()
+        except Exception:
+            pass
 
     def _set(self, table, r, c, text, color=None):
         it = QTableWidgetItem(str(text))
@@ -884,7 +1070,7 @@ class ScreeningPage(BasePage):
 
     # ---- 入手详情：结构化 HTML（比纯文本更易读） ----
     def _logic_html(self, r: dict, cat_examples: Optional[list] = None) -> str:
-        """把「入手逻辑 / 风险提示 / 历史信号回测」渲染为结构化 HTML，更直观易读。"""
+        """把「入手逻辑 / 风险提示 / 历史信号回测 / AI预测」渲染为结构化 HTML，更直观易读。"""
         p = PALETTE[THEME]
         tcol = _tier_color(r["tier"]).name()
         logic, risk = [], []
@@ -952,9 +1138,30 @@ class ScreeningPage(BasePage):
             f"<ul style='margin:2px 0 0 16px'>"
             f"{li([f'<span style=\"color:{p['down']}\">{x}</span>' if ('追高' in x or '止损' in x) else x for x in risk])}</ul>"
         )
+        # ③ AI 预测信号（新增板块，整合 AI 预测数据）
+        pu = r.get("pu", 0.5)
+        ai_exp = r.get("ai_exp", 0.0)
+        ai_conf = r.get("ai_conf", 0.5)
+        # 校准不确定度 → AI 方向标注「置信偏低」（与排行榜 AI方向列口径一致）
+        low_conf = self._calib_low_conf(pu)
+        ai_dir = "偏多" if pu >= 0.55 else ("偏空" if pu <= 0.45 else "中性")
+        ai_dir_color = ("#f59e0b" if low_conf else
+                        "#22c55e" if pu >= 0.55 else
+                        ("#ef4444" if pu <= 0.45 else "#f59e0b"))
+        exp_color = "#22c55e" if ai_exp >= 0 else "#ef4444"
+        conf_color = "#22c55e" if ai_conf >= 0.65 else "#f59e0b" if ai_conf >= 0.5 else "#ef4444"
+        ai_dir_suffix = (" <span style='color:#f59e0b'>·置信偏低</span>"
+                         if low_conf else "")
+        html += (f"<p style='font-weight:bold;margin:10px 0 2px'>③ AI 预测信号</p>"
+                 f"<p style='margin:2px 0'>AI 方向判断：<b style='color:{ai_dir_color}'>{ai_dir}</b>{ai_dir_suffix} "
+                 f"（上涨概率 {pu*100:.0f}%）</p>"
+                 f"<p style='margin:2px 0'>AI 预期收益：<b style='color:{exp_color}'>{ai_exp:+.1f}%</b></p>"
+                 f"<p style='margin:2px 0'>AI 置信度：<b style='color:{conf_color}'>{ai_conf*100:.0f}%</b></p>"
+                 f"{('<p style=\'margin:2px 0;color:#f59e0b\'>⚠ 该档概率历史校准样本稀疏，'
+                    'AI 方向研判可信度下降，建议结合其他维度谨慎参考。</p>') if low_conf else ''}")
         hist = r.get("hist", {})
         rate = hist.get("rate"); total = hist.get("total", 0)
-        html += "<p style='font-weight:bold;margin:10px 0 2px'>③ 历史信号回测（成功率）</p>"
+        html += "<p style='font-weight:bold;margin:10px 0 2px'>④ 历史信号回测（成功率）</p>"
         if rate is None or total == 0:
             html += f"<p style='color:{p['sub']};margin:2px 0'>历史样本不足，暂无成功率统计。</p>"
         else:
@@ -991,7 +1198,7 @@ class ScreeningPage(BasePage):
                 if shown >= 5:
                     break
             if parts:
-                html += (f"<p style='font-weight:bold;margin:10px 0 2px'>④ 过往类似选品（同板块）入手结果</p>"
+                html += (f"<p style='font-weight:bold;margin:10px 0 2px'>⑤ 过往类似选品（同板块）入手结果</p>"
                          f"<ul style='margin:2px 0 0 16px;font-size:12px'>{"".join(parts)}</ul>")
         html += (f"<p style='margin:10px 0 0;color:{p['sub']};font-size:11px'>"
                  f"本页为量化筛选工具，结果均不构成投资建议。</p></div>")

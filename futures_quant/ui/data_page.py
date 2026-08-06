@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .pages import BasePage
+from .widgets import PageHeader, SectionHeader
 from ..storage import data_transfer as dtf
 
 
@@ -44,16 +45,10 @@ class DataPage(BasePage):
         outer.setContentsMargins(18, 14, 18, 14)
         outer.setSpacing(10)
 
-        title = QLabel("数据管理")
-        f = title.font()
-        f.setPointSize(15)
-        f.setBold(True)
-        title.setFont(f)
-        sub = QLabel("数据导出 · 本地备份恢复 · 远程 MySQL 备份 / 迁移　（本地库："
-                     + self.store.path + "）")
-        sub.setObjectName("sub")
-        outer.addWidget(title)
-        outer.addWidget(sub)
+        outer.addWidget(PageHeader(
+            "数据管理",
+            "数据导出 · 本地备份恢复 · 远程 MySQL 备份 / 迁移　（本地库："
+            + self.store.path + "）"))
 
         # 主体滚动区（小屏防挤压）
         scroll = QScrollArea()
@@ -69,7 +64,7 @@ class DataPage(BasePage):
         lay.addWidget(self._build_mysql_card())
 
         # 操作日志
-        log_card, log_lay = self._card("操作日志")
+        log_card, log_lay = self._card("操作日志", accent="#10b981")
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setFixedHeight(140)
@@ -80,22 +75,18 @@ class DataPage(BasePage):
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
 
-    def _card(self, title: str) -> tuple[QFrame, QVBoxLayout]:
+    def _card(self, title: str, accent: str = "#3b82f6") -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
         card.setObjectName("toolbar")
         v = QVBoxLayout(card)
         v.setContentsMargins(16, 12, 16, 14)
         v.setSpacing(10)
-        lab = QLabel(title)
-        f = lab.font()
-        f.setBold(True)
-        lab.setFont(f)
-        v.addWidget(lab)
+        v.addWidget(SectionHeader(title, accent=accent))
         return card, v
 
     # ---- ① 数据导出 ----
     def _build_export_card(self) -> QFrame:
-        card, v = self._card("① 数据导出")
+        card, v = self._card("① 数据导出", accent="#3b82f6")
         tip = QLabel("导出数据库中的核心业务数据；CSV 可直接用 Excel 打开。")
         tip.setObjectName("sub")
         v.addWidget(tip)
@@ -130,7 +121,7 @@ class DataPage(BasePage):
 
     # ---- ② 本地备份 ----
     def _build_local_backup_card(self) -> QFrame:
-        card, v = self._card("② 本地备份 / 恢复")
+        card, v = self._card("② 本地备份 / 恢复", accent="#f59e0b")
         tip = QLabel("将整个数据库备份为单个 .db 文件；恢复时自动先生成安全备份，可回退。")
         tip.setObjectName("sub")
         v.addWidget(tip)
@@ -149,7 +140,7 @@ class DataPage(BasePage):
 
     # ---- ③ 远程 MySQL ----
     def _build_mysql_card(self) -> QFrame:
-        card, v = self._card("③ 远程 MySQL 备份 / 迁移")
+        card, v = self._card("③ 远程 MySQL 备份 / 迁移", accent="#0ea5e9")
         tip = QLabel("可选功能：将本地数据备份到远程 MySQL 服务器；或把旧版 MySQL "
                      "中的历史数据迁移 / 恢复到本地（覆盖前自动安全备份）。需已安装 pymysql。")
         tip.setObjectName("sub")
@@ -239,8 +230,8 @@ class DataPage(BasePage):
             detail = self._format_report(result)
             hint = ("\n\n注意：本地数据已被覆盖，建议重启程序以刷新各页面显示。"
                     if refresh_hint else "")
-            QMessageBox.information(self, "完成", done_msg +
-                                    (("\n\n" + detail) if detail else "") + hint)
+            # 非阻塞 toast（不干扰用户操作）
+            self._toast(f"✅ {done_msg}" + (f"\n{detail}" if detail else "") + hint)
             try:
                 self.store.add_log(str(dt.datetime.now()), "INFO", done_msg)
             except Exception:
@@ -249,7 +240,7 @@ class DataPage(BasePage):
         def on_err(err: str):
             self._set_busy(False)
             self._append_log(f"失败：{err}")
-            QMessageBox.critical(self, "操作失败", str(err))
+            self._toast(f"❌ 操作失败：{err}", level="error")
 
         self._run_worker(fn, on_done, on_err)
 

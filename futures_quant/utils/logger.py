@@ -2,12 +2,18 @@
 
 记录：登录、行情接收、下单、撤单、报错、风控触发。
 同时输出到控制台与本地文件，支持级别过滤。
+
+安全：所有 handler 一律使用 RedactingFormatter + RedactingFilter，
+任何写入日志的内容（含 traceback）都会先经过密钥脱敏。
+调用方无需自行处理，写错也不会泄露。
 """
 from __future__ import annotations
 
 import logging
 import os
 from logging.handlers import RotatingFileHandler
+
+from .redact import RedactingFilter, RedactingFormatter
 
 
 def get_logger(
@@ -29,10 +35,13 @@ def get_logger(
         return logger
 
     logger.setLevel(level)
-    fmt = logging.Formatter(
+    # 使用脱敏格式化器：format() 之后再抹一遍，可覆盖 exc_info 渲染的调用栈
+    fmt = RedactingFormatter(
         "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    # 过滤器在 record 进入 handler 前先脱敏 msg/args，双保险
+    logger.addFilter(RedactingFilter())
 
     if log_dir is None:
         log_dir = os.path.join(os.getcwd(), "logs")

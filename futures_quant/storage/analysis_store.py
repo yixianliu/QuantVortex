@@ -143,6 +143,7 @@ class AnalysisStore:
             "config": "TEXT DEFAULT 'enhanced'",
             "actual_return_pct": "REAL",
             "closed_ts": "TEXT",
+            "y_up": "REAL DEFAULT 0",
         }
         cur = self.conn.execute("PRAGMA table_info(predictions)")
         exist = {r[1] for r in cur.fetchall()}
@@ -188,13 +189,40 @@ class AnalysisStore:
         return cur.lastrowid
 
     def update_prediction_outcome(self, pred_id: int, actual_return_pct: float,
-                                   hit: int, closed_ts: str) -> None:
-        """预测到期结算：写入实际收益、方向是否命中、结算时间。"""
+                                   hit: int, closed_ts: str, y_up: float = 0.0) -> None:
+        """预测到期结算：写入实际收益、方向是否命中、结算时间、实际方向标签(y_up)。
+
+        y_up: 1=实际上涨，0=实际下跌/平盘。作为校准标签存入 score 列的语义扩展，
+              供 calibration_replay 和 reliability_calibration 读取。
+        """
         self.conn.execute(
             "UPDATE predictions SET status='closed', actual_return_pct=?, "
-            "score=?, closed_ts=? WHERE id=?",
-            (actual_return_pct, hit, closed_ts, pred_id))
+            "score=?, closed_ts=?, y_up=? WHERE id=?",
+            (actual_return_pct, hit, closed_ts, y_up, pred_id))
         self.conn.commit()
+
+    def save_closed_prediction(self, rec: dict) -> int:
+        """原子写入一条「已结算」预测记录（用于历史回放批量灌入校准样本）。
+
+        与 save_prediction + update_prediction_outcome 等价，但单次提交，
+        避免回放大批写入的竞态与多余 IO。rec 需含 p_up / score /
+        actual_return_pct / closed_ts / status='closed'；其余字段同 save_prediction。
+        """
+        cur = self.conn.execute(
+            "INSERT INTO predictions (ts,symbol,period,horizon,last_close,expected_return_pct,"
+            "p_up,p_down,risk_score,risk_label,model,regime,verdict,score,forecast,"
+            "confidence,status,config,actual_return_pct,closed_ts,y_up)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (rec.get("ts"), rec.get("symbol"), rec.get("period"), rec.get("horizon"),
+             rec.get("last_close"), rec.get("expected_return_pct"),
+             rec.get("p_up"), rec.get("p_down"), rec.get("risk_score"), rec.get("risk_label"),
+             rec.get("model"), rec.get("regime"), rec.get("verdict"), rec.get("score"),
+             rec.get("forecast"), rec.get("confidence"),
+             rec.get("status", "closed"), rec.get("config", "enhanced"),
+             rec.get("actual_return_pct"), rec.get("closed_ts"),
+             rec.get("y_up", 0.0)))
+        self.conn.commit()
+        return cur.lastrowid
 
     def query_open_predictions(self, limit: int = 200) -> list:
         """返回尚未结算（status='open'）的预测记录。"""
@@ -214,6 +242,19 @@ class AnalysisStore:
             "SELECT symbol, period, horizon, verdict, p_up, expected_return_pct, "
             "actual_return_pct, score, regime, model, config, closed_ts "
             "FROM predictions WHERE status='closed' ORDER BY id DESC LIMIT ?",
+            (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+    def query_closed_for_calibration(self, limit: int = 4000) -> list:
+        """返回已结算预测中用于「可靠性校准」的明细。
+
+        仅取 p_up 非空的已结算样本，字段：p_up / y_up(实际是否上涨) /
+        regime / config。供 reliability_calibration 构建「预测概率 → 真实
+        上涨概率」的经验映射。按 id 倒序返回最近样本在前。
+        """
+        cur = self.conn.execute(
+            "SELECT p_up, y_up, regime, config FROM predictions "
+            "WHERE status='closed' AND p_up IS NOT NULL ORDER BY id DESC LIMIT ?",
             (limit,))
         return [dict(r) for r in cur.fetchall()]
 

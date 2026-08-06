@@ -10,14 +10,29 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, pyqtProperty, QPropertyAnimation
 from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QFont, QLinearGradient, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView, QSizePolicy,
 )
 
-_FONT = "SimHei"
+_FONT = None  # 延迟初始化，使用 QFontDatabase 加载的系统字体
+
+
+def _get_font() -> str:
+    """返回优先使用的字体名称。"""
+    global _FONT
+    if _FONT is not None:
+        return _FONT
+    import sys
+    if sys.platform == "win32":
+        _FONT = "Microsoft YaHei"
+    elif sys.platform == "darwin":
+        _FONT = "PingFang SC"
+    else:
+        _FONT = "Noto Sans CJK SC"
+    return _FONT
 
 # 全局主题开关（main_window._apply_theme 写入）
 THEME = "dark"
@@ -95,6 +110,73 @@ class PageHeader(QWidget):
 
 
 # ============================================================================
+# 区块标题（强调色竖条 + 粗体标题 + 可选徽标）
+# ============================================================================
+class SectionHeader(QWidget):
+    """区块标题：强调色竖条 + 粗体标题 + 右侧可选徽标。
+
+    视觉风格与「行情全景」页面的区块标题栏完全一致，作为可复用组件供
+    各功能页（回测中心、实盘监控等）复用，保证全应用视觉一致。
+    主题切换由 BasePage.set_theme 递归下发到本组件，无需逐实例持有引用。
+    """
+
+    def __init__(self, title: str, accent: str = "#3b82f6",
+                 badge: Optional[str] = None, theme: Optional[str] = None) -> None:
+        super().__init__()
+        self._title = title
+        self._accent = accent
+        self._theme = THEME if theme is None else theme
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(2, 4, 6, 4)
+        root.setSpacing(6)
+
+        self._bar = QFrame()
+        self._bar.setFixedSize(4, 16)
+        self._bar.setStyleSheet(f"QFrame{{background:{self._accent};border-radius:2px;}}")
+        root.addWidget(self._bar)
+
+        self._t = QLabel(title)
+        root.addWidget(self._t, 1)
+
+        self._badge: Optional["Badge"] = None
+        if badge:
+            self._badge = Badge(badge, bg=self._accent, fg="#ffffff", theme=self._theme)
+            root.addWidget(self._badge)
+
+        self._apply()
+
+    # ------------------------------------------------------------------
+    def set_title(self, title: str) -> None:
+        self._title = title
+        self._t.setText(title)
+
+    def set_badge(self, text: str) -> None:
+        """动态更新右侧徽标文本；传空字符串则隐藏。"""
+        if not text:
+            if self._badge is not None:
+                self._badge.hide()
+            return
+        if self._badge is None:
+            self._badge = Badge(text, bg=self._accent, fg="#ffffff", theme=self._theme)
+            self.layout().addWidget(self._badge)
+        else:
+            self._badge.setText(text)
+            self._badge.show()
+
+    def set_theme(self, t: str) -> None:
+        self._theme = t
+        self._apply()
+        if self._badge is not None:
+            self._badge.set_theme(t)
+
+    def _apply(self) -> None:
+        p = PALETTE[self._theme]
+        self._t.setStyleSheet(
+            f"font-size:14px;font-weight:bold;color:{p['text']};")
+
+
+# ============================================================================
 # 圆角 Badge
 # ============================================================================
 class Badge(QLabel):
@@ -155,7 +237,7 @@ class MetricChip(QFrame):
     def set_value(self, text: str, color: str = "") -> None:
         self._val.setText(text)
         c = color or self._val_color or pal()["text"]
-        self._val.setStyleSheet(self._val.styleSheet().split("color:")[0] + f"color:{c};")
+        self._val.setStyleSheet(f"color:{c};font-size:16px;font-weight:bold;")
 
     def set_theme(self, t: str) -> None:
         self._theme = t
@@ -169,6 +251,111 @@ class MetricChip(QFrame):
         self._lab.setStyleSheet(f"color:{p['sub']};font-size:11px;")
         self._val.setStyleSheet(
             f"color:{self._val_color or p['text']};font-size:16px;font-weight:bold;")
+
+
+# ============================================================================
+# 市场状态指示灯 StatusTile
+# ============================================================================
+class StatusTile(QFrame):
+    """市场状态指示灯：左侧色条 + 图标 + 标签 + 数值 + 状态文案。
+
+    根据 good / bad / neutral 动态着色并切换图标；每次刷新调用 pulse()
+    做一次短暂的透明度脉冲（动画），让用户对行情好坏「一目了然」。
+    主题切换由调用方下发 set_theme 刷新配色。
+    """
+
+    def __init__(self, label: str, theme: Optional[str] = None) -> None:
+        super().__init__()
+        self.setObjectName("status-tile")
+        self._theme = THEME if theme is None else theme
+        self._glow = 0.0
+        self._level = "neutral"
+
+        self._ico = QLabel("●")
+        self._ico.setObjectName("st-ico")
+        self._lab = QLabel(label)
+        self._lab.setObjectName("st-lab")
+        self._val = QLabel("--")
+        self._val.setObjectName("st-val")
+        self._tip = QLabel("")
+        self._tip.setObjectName("st-tip")
+        self._tip.setWordWrap(True)
+
+        vb = QVBoxLayout()
+        vb.setContentsMargins(0, 0, 0, 0)
+        vb.setSpacing(2)
+        row1 = QHBoxLayout()
+        row1.setContentsMargins(0, 0, 0, 0)
+        row1.setSpacing(6)
+        row1.addWidget(self._ico)
+        row1.addWidget(self._lab)
+        row1.addStretch(1)
+        row1.addWidget(self._val)
+        vb.addLayout(row1)
+        vb.addWidget(self._tip)
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(8)
+        root.addLayout(vb, 1)
+        self._apply()
+
+    # ---- 动画属性：脉冲高亮（0~1）----
+    def _get_glow(self) -> float:
+        return self._glow
+
+    def _set_glow(self, v: float) -> None:
+        self._glow = v
+        self._apply_glow()
+
+    glow = pyqtProperty(float, _get_glow, _set_glow)
+
+    def set_status(self, level: str, value_text: str, tip: str = "") -> None:
+        """level: 'good' | 'bad' | 'neutral'。"""
+        self._level = level
+        self._val.setText(value_text)
+        self._tip.setText(tip)
+        self._apply()
+        self.pulse()
+
+    def pulse(self) -> None:
+        """刷新时做一次透明度脉冲（动画反馈）。"""
+        try:
+            a = QPropertyAnimation(self, b"glow")
+            a.setDuration(650)
+            a.setStartValue(1.0)
+            a.setEndValue(0.0)
+            a.start()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def set_theme(self, t: str) -> None:
+        self._theme = t
+        self._apply()
+
+    def _level_color(self) -> str:
+        p = PALETTE[self._theme]
+        return {"good": p["up"], "bad": p["down"],
+                "neutral": p["accent"]}.get(self._level, p["accent"])
+
+    def _apply(self) -> None:
+        p = PALETTE[self._theme]
+        col = self._level_color()
+        self._lab.setStyleSheet(f"color:{p['text']};font-size:12px;font-weight:bold;")
+        self._val.setStyleSheet(f"color:{col};font-size:15px;font-weight:bold;")
+        self._tip.setStyleSheet(f"color:{p['sub']};font-size:11px;")
+        self._ico.setStyleSheet(f"color:{col};font-size:14px;")
+        self._apply_glow()
+
+    def _apply_glow(self) -> None:
+        p = PALETTE[self._theme]
+        col = self._level_color()
+        bg = QColor(col)
+        bg.setAlpha(int(16 + self._glow * 70))
+        self.setStyleSheet(
+            f"QFrame#status-tile{{background:{bg.name(QColor.NameFormat.HexArgb)};"
+            f"border:1px solid {col};border-left:4px solid {col};"
+            f"border-radius:10px;}}")
 
 
 # ============================================================================
@@ -219,7 +406,7 @@ class ConfidenceBar(QWidget):
             p.setClipping(False)
         # 文字
         p.setPen(QColor(p_theme["text"]))
-        p.setFont(QFont(_FONT, 10, QFont.Weight.Bold))
+        p.setFont(QFont(_get_font(), 10, QFont.Weight.Bold))
         p.drawText(x0, y - 2, r.width(), h + 4,
                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                    f"{self._pct:.0%}")

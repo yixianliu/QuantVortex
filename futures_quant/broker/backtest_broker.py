@@ -10,10 +10,12 @@ from .base import BrokerBase
 
 
 class BacktestBroker(BrokerBase):
-    def __init__(self, slippage: float = 1.0, min_tick: float = 1.0, contracts: dict | None = None) -> None:
+    def __init__(self, slippage: float = 1.0, min_tick: float = 1.0,
+                 contracts: dict | None = None, multiplier: float = 10.0) -> None:
         self.slippage = slippage
         self.min_tick = min_tick
         self.contracts = contracts or {}
+        self.multiplier = multiplier   # 合约未知时的默认乘数
         self.pending: list[Order] = []
 
     def _tick(self, symbol: str) -> float:
@@ -28,6 +30,7 @@ class BacktestBroker(BrokerBase):
         trades: list[Trade] = []
         still_pending: list[Order] = []
         for order in self.pending:
+            c = self.contracts.get(order.symbol)
             tick = self._tick(order.symbol)
             fill = bar.open
             if order.direction == Direction.LONG:
@@ -51,6 +54,7 @@ class BacktestBroker(BrokerBase):
                 price=round(fill, 4),
                 datetime=bar.datetime,
                 order_id=order.order_id,
+                multiplier=c.multiplier if c else self.multiplier,
             )
             order.status = OrderStatus.FILLED
             order.filled_price = fill

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List, Optional
 
 from ..broker.backtest_broker import BacktestBroker
@@ -19,8 +20,24 @@ from ..risk.risk_manager import RiskManager
 from ..storage import StorageBackend
 
 
+def _parse_delivery(value) -> Optional[object]:
+    """将交割日字符串解析为 date 对象；支持 'YYYY-MM-DD' / 'YYYYMMDD'；非法返回 None。"""
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
 class TradingEngine:
-    def __init__(self, config: Config, logger=None, mode: str = "backtest", db: Optional[StorageBackend] = None) -> None:
+    def __init__(self, config: Config, logger=None, mode: str = "backtest", db: Optional[StorageBackend] = None,
+                 multiplier: Optional[float] = None) -> None:
         self.config = config
         self.mode = mode
         self.logger = logger
@@ -32,6 +49,8 @@ class TradingEngine:
             margin_rate=acc.margin_rate,
             commission_per_lot=acc.commission_per_lot,
             logger=logger,
+            multiplier=multiplier if multiplier else acc.multiplier,
+            close_today_ratio=acc.close_today_ratio,
         )
         self.risk = RiskManager(config.risk, logger)
 
@@ -107,6 +126,23 @@ class TradingEngine:
     def process_bar(self, bar: Bar) -> None:
         self._current_dt = bar.datetime
         self.portfolio.update_price(bar.symbol, bar.close)
+
+        # 交割日临近强制平仓（期货不能持有进入交割月/交割日之后）
+        contract = self.contracts.get(bar.symbol)
+        ddate = _parse_delivery(contract.delivery_date) if contract else None
+        if ddate is not None:
+            try:
+                bdate = bar.datetime.date() if hasattr(bar.datetime, "date") else None
+            except Exception:  # noqa: BLE001
+                bdate = None
+            if bdate is not None and bdate >= ddate:
+                pos = self.portfolio.positions.get(bar.symbol)
+                if pos and (pos.long_qty or pos.short_qty):
+                    if self.logger:
+                        self.logger.warning(
+                            f"[交割] {bar.symbol} 临近交割日 {contract.delivery_date}，"
+                            f"强制平掉全部持仓")
+                    self.flatten_all()
 
         if self.mode == "backtest":
             for t in self.broker.match(bar):

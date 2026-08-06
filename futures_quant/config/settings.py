@@ -13,8 +13,11 @@ from dataclasses import dataclass, field, asdict
 @dataclass
 class AccountConfig:
     initial_capital: float = 1_000_000.0
-    margin_rate: float = 0.10
-    commission_per_lot: float = 3.0
+    margin_rate: float = 0.10        # 保证金率（= 1 / leverage）
+    leverage: float = 10.0           # 杠杆倍数（与 margin_rate 互为推导，优先用 leverage）
+    multiplier: float = 10.0         # 合约乘数（每手对应标的单位数，如 rb=10, IF=300）
+    commission_per_lot: float = 3.0   # 每手手续费（元/手）
+    close_today_ratio: float = 0.5   # 平今仓手续费折扣（期货 T+0 平今通常减半或免收）
 
 
 @dataclass

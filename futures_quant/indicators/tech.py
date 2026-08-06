@@ -43,16 +43,19 @@ def dmi(high: pd.Series, low: pd.Series, close: pd.Series,
     """计算 +DI / -DI / ADX / ADXR。"""
     up = high.diff()
     dn = -low.diff()
-    plus_dm = np.where((up > dn) & (up > 0), up, 0.0)
-    minus_dm = np.where((dn > up) & (dn > 0), dn, 0.0)
+    # 注意：必须显式带上原索引。np.where 返回裸 ndarray，若直接 pd.Series(...) 会
+    # 生成 0..n-1 的默认 RangeIndex；当 high/low 为 DatetimeIndex 时，后续与 atr
+    # 相除会因索引对齐失败而产生全 NaN（历史 bug：ADX/±DI 恒为 NaN）。
+    plus_dm = pd.Series(np.where((up > dn) & (up > 0), up, 0.0), index=high.index)
+    minus_dm = pd.Series(np.where((dn > up) & (dn > 0), dn, 0.0), index=low.index)
     tr = pd.concat([
         (high - low).abs(),
         (high - close.shift()).abs(),
         (low - close.shift()).abs(),
     ], axis=1).max(axis=1)
     atr = tr.rolling(n, min_periods=1).sum()
-    plus_di = 100 * pd.Series(plus_dm).rolling(n, min_periods=1).sum() / atr.replace(0, np.nan)
-    minus_di = 100 * pd.Series(minus_dm).rolling(n, min_periods=1).sum() / atr.replace(0, np.nan)
+    plus_di = 100 * plus_dm.rolling(n, min_periods=1).sum() / atr.replace(0, np.nan)
+    minus_di = 100 * minus_dm.rolling(n, min_periods=1).sum() / atr.replace(0, np.nan)
     dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan))
     adx = dx.rolling(n, min_periods=1).mean()
     adxr = (adx + adx.shift(n)) / 2

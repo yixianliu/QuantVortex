@@ -24,7 +24,7 @@ from typing import List, Optional
 
 def is_frozen() -> bool:
     """PyInstaller 打包后（sys.frozen + sys._MEIPASS）返回 True。"""
-    return bool(getattr(sys, "frozen", False)) and hasattr(sys, "_MEIPASS")
+    return bool(getattr(sys, "frozen", False))
 
 
 def app_base_dir() -> str:

@@ -42,6 +42,7 @@ from ..indicators.tech import add_indicators
 from ..ai.predictor import FuturesPredictor
 from ..ai.feedback import (
     quick_regime, adaptive_config, calibrated_confidence,
+    reliability_calibration,
     evaluate_all_open, recommend_text,
 )
 from ..ai import news_feed
@@ -169,6 +170,50 @@ class BasePage(QWidget):
         w.finished.connect(_done)
         w.error.connect(_err)
         w.start()
+
+    # ---- 辅助：toast 非阻塞提示 / lazy worker ----
+
+    def _toast(self, msg: str, duration: int = 2500, level: str = "info") -> None:
+        """在页面顶部显示一条短暂提示（不阻塞，重复调用覆盖）。"""
+        from PyQt6.QtCore import QTimer
+        from PyQt6.QtWidgets import QLabel
+        p = pal()
+        if getattr(self, "_toast_lbl", None) is not None:
+            try:
+                self._toast_lbl.setParent(None)
+                self._toast_lbl.deleteLater()
+            except Exception:
+                pass
+        lbl = QLabel(f" {msg} ")
+        lbl.setObjectName("toast-label")
+        lbl.setStyleSheet(
+            f"QLabel#toast-label{{background:{p['card']};color:{p['text']};"
+            f"border:1px solid {p['border']};border-radius:6px;"
+            f"padding:4px 14px;font-size:12px;}}")
+        layout = self.layout()
+        if layout is not None:
+            layout.insertWidget(0, lbl)
+        self._toast_lbl = lbl
+
+        def _hide_toast() -> None:
+            """延迟隐藏 toast：安全清理 C++ 对象。"""
+            try:
+                lbl = getattr(self, "_toast_lbl", None)
+                if lbl is not None:
+                    lbl.setParent(None)
+                    lbl.deleteLater()
+                    self._toast_lbl = None
+            except Exception:  # noqa: BLE001
+                pass
+
+        QTimer.singleShot(duration, _hide_toast)
+
+    def _defer_refresh(self, interval: int = 200) -> None:
+        """首次进入页面时，延迟 interval ms 执行一个无阻塞刷新（用于初始化重计算）。"""
+        from PyQt6.QtCore import QTimer
+        if not getattr(self, "_defer_refresh_fn", None):
+            return
+        QTimer.singleShot(interval, self._defer_refresh_fn)
 
 
 # ============================================================================
@@ -877,8 +922,28 @@ class PredictPage(BasePage):
         ind_row.addStretch(1)
         root.addLayout(ind_row)
 
+        # 市场入手机会速览（Top3 品种评分 + 方向指示，与 AI 预测联动）
+        self.op_score = QLabel("—")
+        self.op_name = QLabel("—")
+        self.op_ai_dir = QLabel("—")
+        op_row = QHBoxLayout()
+        op_row.addWidget(QLabel("市场入手机会 Top1:"))
+        op_row.addWidget(self.op_name)
+        op_row.addSpacing(12)
+        op_row.addWidget(QLabel("评分:"))
+        op_row.addWidget(self.op_score)
+        op_row.addSpacing(12)
+        op_row.addWidget(QLabel("AI方向:"))
+        op_row.addWidget(self.op_ai_dir)
+        op_row.addStretch(1)
+        op_label = QLabel(" ← 选品机会板块联动数据（含AI预测信号）")
+        op_label.setObjectName("sub")
+        op_label.setStyleSheet("font-size:11px;color:#94a3b8;")
+        op_row.addWidget(op_label)
+        root.addLayout(op_row)
+
         split = QSplitter(Qt.Orientation.Horizontal)
-        # 左侧：主 K 线 + MACD/KDJ/RSI 副图（指标分析）
+        # 左侧：主 K 线 + MACD/KDJ/RSI 副图（指标分析 + 交易参考点标注）
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
@@ -890,7 +955,7 @@ class PredictPage(BasePage):
         self.rsi = PriceChart(); self.rsi.setMinimumHeight(80)
         lv.addWidget(self.macd, 1); lv.addWidget(self.kdj, 1); lv.addWidget(self.rsi, 1)
         split.addWidget(left)
-        # 右侧：综合预测解读（资讯情报 + 学习看板已并入此单页，无需切换）
+        # 右侧：综合预测解读 + 选品机会联动（资讯情报 + 学习看板已并入此单页，无需切换）
         right = QWidget()
         rv = QVBoxLayout(right); rv.setContentsMargins(0, 0, 0, 0)
         self.long_bar = ConfidenceBar(0.5); self.short_bar = ConfidenceBar(0.5)
@@ -914,13 +979,126 @@ class PredictPage(BasePage):
         self._base_refresh()
 
     def _base_refresh(self):
-        df = self.mdm.get_bars(self.cur_symbol, self.cur_period, 300)
+        df = self.mdm.get_bars(self.cur_symbol, self.cur_period, 600)
         if df.empty:
             return
         ind = add_indicators(df)
-        self.chart.set_data(df_to_bars(df),
-                           ma={"MA10": ind["MA10"].tolist(), "MA20": ind["MA20"].tolist()})
+        bars = df_to_bars(df)
+        self.chart.set_data(bars, ma={"MA10": ind["MA10"].tolist(), "MA20": ind["MA20"].tolist()})
         self.chart.set_watermark(f"{self.cur_symbol} · {self.cur_period}")
+
+    def _compute_trade_marks(self, res: dict, df=None) -> list:
+        """计算 K 线图交易参考点标注（增强版）。
+        
+        基于趋势分析结果 + 压力支撑位 + AI预测，在图上标注：
+        - 建议入手价格（绿色菱形）：支撑位附近、模型看多信号确认
+        - 建议出手价格（红色菱形）：压力位附近、目标止盈位
+        - 多档参考区间：给出更丰富的交易参考点
+        """
+        try:
+            levels = res.get("levels", [])
+            forecast = res.get("forecast", [])
+            last = float(res.get("last_close", 0))
+            p_up = float(res.get("p_up", 0.5))
+            exp_ret = float(res.get("expected_return_pct", 0.0))
+            
+            # 分离压力位和支撑位
+            supports = [lv for lv in levels if float(lv.get("price", 0)) < last]
+            resistances = [lv for lv in levels if float(lv.get("price", 0)) > last]
+            
+            # 排序取最近的关键价位
+            supports.sort(key=lambda lv: float(lv.get("price", 0)), reverse=True)
+            resistances.sort(key=lambda lv: float(lv.get("price", 0)))
+            
+            marks = []
+            
+            # 1. 建议入场位（基于支撑位 + 模型看多信号）
+            if supports and last > 0:
+                nearest_support = float(supports[0]["price"])
+                # 支撑位上方 0.3%~0.8% 作为入场区间
+                enter_low = nearest_support * 1.003
+                enter_high = nearest_support * 1.008
+                
+                # 如果模型偏多，入场区间更靠近支撑位；偏空则更保守
+                if p_up >= 0.55:
+                    enter_y = enter_low
+                elif p_up >= 0.45:
+                    enter_y = (enter_low + enter_high) / 2
+                else:
+                    enter_y = enter_high
+                
+                marks.append({
+                    "x_idx": -1,
+                    "y_enter": enter_y,
+                    "label_enter": "建议入场",
+                    "price_display": f"{nearest_support:,.1f}",
+                    "color_enter": "#22c55e",  # 绿色 = 买入
+                })
+                
+                # 第二支撑位（更保守的入场点）
+                if len(supports) > 1:
+                    second_support = float(supports[1]["price"])
+                    marks.append({
+                        "x_idx": -1,
+                        "y_enter": second_support * 1.005,
+                        "label_enter": "加仓区间",
+                        "price_display": f"{second_support:,.1f}",
+                        "color_enter": "#10b981",  # 深绿
+                    })
+            
+            # 2. 建议出场位（基于压力位 + 预测目标价）
+            exit_targets = []
+            
+            # 最近压力位
+            if resistances and last > 0:
+                nearest_resistance = float(resistances[0]["price"])
+                # 压力位下方 0.3% 作为第一目标
+                exit_y = nearest_resistance * 0.997
+                exit_targets.append((exit_y, nearest_resistance, "第一目标"))
+            
+            # AI预测的目标价（预测路径的终点）
+            if len(forecast) > 1:
+                forecast_target = float(forecast[-1])
+                if forecast_target > last:
+                    exit_targets.append((forecast_target * 0.997, forecast_target, "AI目标"))
+            
+            # 去重并排序（按价格从低到高）
+            seen_prices = set()
+            unique_targets = []
+            for y, price, label in exit_targets:
+                price_key = round(price, 0)
+                if price_key not in seen_prices:
+                    seen_prices.add(price_key)
+                    unique_targets.append((y, price, label))
+            unique_targets.sort(key=lambda x: x[1])
+            
+            # 添加出场标记（最多2个）
+            for i, (y, price, label) in enumerate(unique_targets[:2]):
+                marks.append({
+                    "x_idx": -1,
+                    "y_enter": y,
+                    "label_enter": label if i == 0 else "第二目标",
+                    "price_display": f"{price:,.1f}",
+                    "color_enter": "#ef4444",  # 红色 = 卖出
+                })
+            
+            # 3. 止损位（基于下方最远支撑位或模型风险度）
+            risk_score = float(res.get("risk", {}).get("score", 50))
+            if supports and last > 0:
+                # 取最远支撑位下方 1% 作为止损
+                far_support = float(supports[-1]["price"]) if len(supports) > 1 else float(supports[0]["price"])
+                stop_loss = far_support * 0.99
+                marks.append({
+                    "x_idx": -1,
+                    "y_enter": stop_loss,
+                    "label_enter": "止损位",
+                    "price_display": f"{far_support:,.1f}",
+                    "color_enter": "#f59e0b",  # 橙色 = 警告
+                })
+            
+            return marks
+        except Exception:
+            return []
 
     def _run(self):
         self.cur_symbol = self.sym_cb.currentData()
@@ -972,11 +1150,17 @@ class PredictPage(BasePage):
             res = self.predictor.predict(df, horizon=horizon,
                                           news_bias=bias_info["bias"],
                                           news_samples=bias_info["samples"])
-            # ⑤ 置信度校准：若该行情状态积累了足够历史样本，
-            #    用历史方向命中率与模型概率融合，重出一次预测结论。
+            # ⑤ 置信度校准：优先样本外「可靠性校准」（按模型概率分箱的实际命中率），
+            #    样本不足时回退到扁平 regime 命中率（旧行为）。
             cfg_key = "enhanced" if cfg["extended_features"] else "baseline"
             try:
-                conf = calibrated_confidence(store, res["regime"], cfg_key, res["p_up"])
+                calib_fn, _ = reliability_calibration(
+                    store, regime=res["regime"], min_samples=20)
+                if calib_fn is not None:
+                    conf = float(calib_fn(res["p_up"]))
+                else:
+                    conf = calibrated_confidence(store, res["regime"], cfg_key,
+                                                 res["p_up"])
             except Exception:
                 conf = res["p_up"]
             if abs(conf - res["p_up"]) > 1e-9:
@@ -1009,6 +1193,8 @@ class PredictPage(BasePage):
         self.chart.set_watermark(f"{res['symbol']} · {res['period']} · AI预测")
         self.chart.set_forecast(res["forecast"], res["upper"], res["lower"])
         self.chart.set_levels(res["levels"])
+        # K 线图标注：增强版建议入场/出场价位（多档参考 + 止损位）
+        self.chart.set_trade_marks(self._compute_trade_marks(res, df))
 
         # 指标分析副图（MACD / KDJ / RSI）与多指标共振研判
         x = list(range(len(ind)))
@@ -1072,6 +1258,29 @@ class PredictPage(BasePage):
         self.short_bar.set_pct(res["long_short"]["short"] / 100)
         self.rec_badge.setText("建议:" + res["long_short"]["recommend"])
         self.rec_badge.set_color(pal()["accent"], "#fff")
+
+        # 市场入手机会速览（Top1 品种评分 + AI方向，与选品机会板块联动）
+        try:
+            from .screening_page import _screen as screening_screen
+            # 用筛选引擎获取最新排名
+            scr_results, _ = screening_screen(self.mdm, self.store)
+            if scr_results:
+                top = scr_results[0]
+                self.op_name.setText(f"{top['name']} {top['sym']}")
+                self.op_score.setText(f"{top['score']:.1f}")
+                pu = top.get("pu", 0.5)
+                ai_dir = "偏多" if pu >= 0.55 else ("偏空" if pu <= 0.45 else "中性")
+                ai_col = "#22c55e" if pu >= 0.55 else ("#ef4444" if pu <= 0.45 else "#f59e0b")
+                self.op_ai_dir.setText(f"<span style='color:{ai_col}'>{ai_dir}</span>")
+                self.op_ai_dir.setTextFormat(Qt.TextFormat.RichText)
+            else:
+                self.op_name.setText("—")
+                self.op_score.setText("—")
+                self.op_ai_dir.setText("—")
+        except Exception:
+            self.op_name.setText("—")
+            self.op_score.setText("—")
+            self.op_ai_dir.setText("—")
 
         # 基本面/资金面：从全景聚合取该品种与所属板块的资金、持仓、量能数据
         fund_info = {"sym_flow": None, "sym_oi": None, "sym_vr": None, "sym_chg": None,
@@ -1195,6 +1404,25 @@ class PredictPage(BasePage):
         # 为什么不能入手（风险阻挡，始终给出）
         nb = res.get("news_bias", 0.0)
         fi = fund_info or {}
+        # 选品机会评分（与选品板块联动）
+        screening_score = None
+        screening_tier = None
+        try:
+            from .screening_page import _screen as screening_screen
+            scr_results, _ = screening_screen(self.mdm, self.store)
+            for sr in scr_results:
+                if sr.get("sym", "").startswith(sym.split(".")[0]):
+                    screening_score = sr.get("score")
+                    screening_tier = sr.get("tier")
+                    break
+        except Exception:
+            pass
+        if screening_score is not None:
+            sc_color = "#22c55e" if screening_score >= 68 else "#f59e0b" if screening_score >= 55 else "#94a3b8"
+            sc_text = f"{screening_score:.1f}"
+        else:
+            sc_color = "#94a3b8"
+            sc_text = "--"
         blockers = []
         if risk_score >= 70:
             blockers.append(f"风险度偏高（{risk_label} {risk_score:.0f} 分），波动大、逆风易止损；")
@@ -1435,24 +1663,31 @@ class PredictPage(BasePage):
 
             f"{sec('④ 关键价位')}<table style='border-collapse:collapse'>{''.join(rows)}</table>"
 
-            f"{sec('⑤ 技术面（指标分析 · 已并入 AI 预测）')}"
+            f"{sec('⑤ 选品机会评分（联动选品板块）')}"
+            f"<p style='margin:2px 0'>"
+            f"选品评分：<b style='color:{sc_color}'>{sc_text}</b>"
+            f"（{screening_tier if screening_tier else "暂未评分"}）"
+            f"｜ 综合趋势 / 资金流 / 量能 / 持仓 / 波动 + AI方向概率因子"
+            f"</p>"
+
+            f"{sec('⑥ 技术面（指标分析 · 已并入 AI 预测）')}"
             f"<p style='margin:2px 0'>指标共振「<b>{reso}</b>」（多空分 {ind_score:+.0f}），"
             f"趋势「{ind_state}」，方向 <b>{ind_dir}</b>；"
             f"MACD / KDJ / RSI 三副图可见：{ind_dir}信号已由 AI 预测方向辅助印证。</p>"
 
-            f"{sec('⑥ 模型面')}"
+            f"{sec('⑦ 模型面')}"
             f"<p style='margin:2px 0'>上涨概率 <b>{p_up*100:.0f}%</b> / 下跌 <b>{p_dn*100:.0f}%</b>，"
             f"校准后置信度 <b>{conf*100:.0f}%</b>；模型 <b>{res['model']}</b>"
             f"（{'自适应选参' if cfg.get('source')=='adaptive' else '默认增强配置'}）；"
             f"风险度「{risk_label}」（{risk_score:.0f} 分）。</p>"
 
-            f"{sec('⑦ 资讯面')}{ai_html}{overview_html}{news_html}"
+            f"{sec('⑧ 资讯面')}{ai_html}{overview_html}{news_html}"
 
-            f"{sec('⑧ 基本面 / 资金面')}{fund_html}"
+            f"{sec('⑨ 基本面 / 资金面')}{fund_html}"
 
-            f"{sec('⑨ 历史表现（持续自我学习）')}{hist_html}{note}"
+            f"{sec('⑩ 历史表现（持续自我学习）')}{hist_html}{note}"
 
-            f"{sec('⑩ 操作建议')}<table style='border-collapse:collapse'>{''.join(plan_rows)}</table>"
+            f"{sec('⑪ 操作建议')}<table style='border-collapse:collapse'>{''.join(plan_rows)}</table>"
 
             f"<p style='margin:12px 0 0;color:{mut_c};font-size:11px'>"
             f"提示：预测为概率参考而非投资建议；系统会在预测到期后自动用真实行情结算命中情况，持续自我校准。</p>"
@@ -1868,7 +2103,11 @@ class LogPage(BasePage):
         self.refresh_btn.clicked.connect(self._refresh)
         self.export_btn = QPushButton("导出CSV"); self.export_btn.setObjectName("secondary")
         self.export_btn.clicked.connect(self._export)
-        ctl.addWidget(self.refresh_btn); ctl.addWidget(self.export_btn); ctl.addStretch(1)
+        self.status_lbl = QLabel("就绪")
+        self.status_lbl.setObjectName("sub")
+        self.status_lbl.setStyleSheet(f"font-size:11px;color:{pal()['sub']};")
+        ctl.addWidget(self.refresh_btn); ctl.addWidget(self.export_btn)
+        ctl.addWidget(self.status_lbl); ctl.addStretch(1)
         root.addWidget(ToolBar(ctl))
 
         self.tabs = QTabWidget()
@@ -1888,47 +2127,59 @@ class LogPage(BasePage):
         self.tabs.addTab(self.tab_pred, "预测存档")
         self.tabs.addTab(self.tab_an, "研判存档")
         root.addWidget(self.tabs, 1)
-        self._refresh()
 
     def _refresh(self):
-        logs = self.store.query_logs(300)
-        self.tab_log.setRowCount(len(logs))
-        for i, r in enumerate(logs):
-            self.tab_log.setItem(i, 0, QTableWidgetItem(str(r["ts"])[11:19]))
-            self.tab_log.setItem(i, 1, QTableWidgetItem(str(r["level"])))
-            self.tab_log.setItem(i, 2, QTableWidgetItem(str(r["message"])))
-        prepare_table(self.tab_log)
+        self.status_lbl.setText("加载中…")
+        self.refresh_btn.setEnabled(False)
+        def work():
+            return (
+                self.store.query_logs(300),
+                self.store.query_alerts(200),
+                self.store.query_predictions(200),
+                self.store.query_analysis(200),
+            )
+        def done(payload):
+            logs, alerts, preds, an = payload
+            self.tab_log.setRowCount(len(logs))
+            for i, r in enumerate(logs):
+                self.tab_log.setItem(i, 0, QTableWidgetItem(str(r["ts"])[11:19]))
+                self.tab_log.setItem(i, 1, QTableWidgetItem(str(r["level"])))
+                self.tab_log.setItem(i, 2, QTableWidgetItem(str(r["message"])))
+            prepare_table(self.tab_log)
 
-        alerts = self.store.query_alerts(200)
-        self.tab_alert.setRowCount(len(alerts))
-        for i, r in enumerate(alerts):
-            self.tab_alert.setItem(i, 0, QTableWidgetItem(str(r["ts"])[11:19]))
-            self.tab_alert.setItem(i, 1, QTableWidgetItem(str(r["symbol"])))
-            self.tab_alert.setItem(i, 2, QTableWidgetItem(str(r["rule"])))
-            self.tab_alert.setItem(i, 3, QTableWidgetItem(str(r["level"])))
-            self.tab_alert.setItem(i, 4, QTableWidgetItem(str(r["message"])))
-        prepare_table(self.tab_alert)
+            self.tab_alert.setRowCount(len(alerts))
+            for i, r in enumerate(alerts):
+                self.tab_alert.setItem(i, 0, QTableWidgetItem(str(r["ts"])[11:19]))
+                self.tab_alert.setItem(i, 1, QTableWidgetItem(str(r["symbol"])))
+                self.tab_alert.setItem(i, 2, QTableWidgetItem(str(r["rule"])))
+                self.tab_alert.setItem(i, 3, QTableWidgetItem(str(r["level"])))
+                self.tab_alert.setItem(i, 4, QTableWidgetItem(str(r["message"])))
+            prepare_table(self.tab_alert)
 
-        preds = self.store.query_predictions(200)
-        self.tab_pred.setRowCount(len(preds))
-        for i, r in enumerate(preds):
-            self.tab_pred.setItem(i, 0, QTableWidgetItem(str(r["ts"])[11:19]))
-            self.tab_pred.setItem(i, 1, QTableWidgetItem(str(r["symbol"])))
-            self.tab_pred.setItem(i, 2, QTableWidgetItem(str(r["period"])))
-            self.tab_pred.setItem(i, 3, QTableWidgetItem(f"{r['expected_return_pct']:.2f}"))
-            self.tab_pred.setItem(i, 4, QTableWidgetItem(f"{r['p_up']*100:.1f}%"))
-            self.tab_pred.setItem(i, 5, QTableWidgetItem(f"{r['risk_label']}"))
-            self.tab_pred.setItem(i, 6, QTableWidgetItem(str(r["model"])))
-        prepare_table(self.tab_pred)
+            self.tab_pred.setRowCount(len(preds))
+            for i, r in enumerate(preds):
+                self.tab_pred.setItem(i, 0, QTableWidgetItem(str(r["ts"])[11:19]))
+                self.tab_pred.setItem(i, 1, QTableWidgetItem(str(r["symbol"])))
+                self.tab_pred.setItem(i, 2, QTableWidgetItem(str(r["period"])))
+                self.tab_pred.setItem(i, 3, QTableWidgetItem(f"{r['expected_return_pct']:.2f}"))
+                self.tab_pred.setItem(i, 4, QTableWidgetItem(f"{r['p_up']*100:.1f}%"))
+                self.tab_pred.setItem(i, 5, QTableWidgetItem(f"{r['risk_label']}"))
+                self.tab_pred.setItem(i, 6, QTableWidgetItem(str(r["model"])))
+            prepare_table(self.tab_pred)
 
-        an = self.store.query_analysis(200)
-        self.tab_an.setRowCount(len(an))
-        for i, r in enumerate(an):
-            self.tab_an.setItem(i, 0, QTableWidgetItem(str(r["ts"])[11:19]))
-            self.tab_an.setItem(i, 1, QTableWidgetItem(str(r["symbol"])))
-            self.tab_an.setItem(i, 2, QTableWidgetItem(str(r["kind"])))
-            self.tab_an.setItem(i, 3, QTableWidgetItem(str(r["summary"])))
-        prepare_table(self.tab_an)
+            self.tab_an.setRowCount(len(an))
+            for i, r in enumerate(an):
+                self.tab_an.setItem(i, 0, QTableWidgetItem(str(r["ts"])[11:19]))
+                self.tab_an.setItem(i, 1, QTableWidgetItem(str(r["symbol"])))
+                self.tab_an.setItem(i, 2, QTableWidgetItem(str(r["kind"])))
+                self.tab_an.setItem(i, 3, QTableWidgetItem(str(r["summary"])))
+            prepare_table(self.tab_an)
+            self.status_lbl.setText(f"就绪 · 日志:{len(logs)} 预警:{len(alerts)} 预测:{len(preds)} 研判:{len(an)}")
+            self.refresh_btn.setEnabled(True)
+        def err(e):
+            self.status_lbl.setText(f"加载失败: {e}")
+            self.refresh_btn.setEnabled(True)
+        self._run_worker(work, done, on_err=err)
 
     def _export(self):
         idx = self.tabs.currentIndex()
@@ -1938,3 +2189,7 @@ class LogPage(BasePage):
         self.store.add_log(str(dt.datetime.now()), "INFO",
                            f"导出 {table} -> {path} {'成功' if ok else '失败'}")
         self._refresh()
+        self._toast(
+            f"✅ 已导出 {table} → {path}" if ok
+            else f"❌ 导出失败：{table}",
+            duration=3000)

@@ -27,6 +27,9 @@ class Contract:
         margin_rate: float = 0.10,
         commission_per_lot: float = 3.0,
         trading_hours: Optional[list] = None,
+        delivery_date: Optional[str] = None,
+        leverage: Optional[float] = None,
+        close_today_commission_ratio: float = 0.5,
     ) -> None:
         self.symbol = symbol
         self.exchange = exchange
@@ -37,6 +40,12 @@ class Contract:
         self.commission_per_lot = commission_per_lot
         # 交易时段，如 [("09:00","10:15"),("10:30","11:30"),("13:30","15:00"),("21:00","23:00")]
         self.trading_hours = trading_hours or []
+        # 交割日（最后交易日，ISO "YYYY-MM-DD"）；非空时引擎在临近交割时强制平仓
+        self.delivery_date = delivery_date
+        # 该合约杠杆（覆盖账户默认杠杆）
+        self.leverage = leverage
+        # 平今仓手续费折扣（期货 T+0 平今优惠，如 0.5 / 0.0）
+        self.close_today_commission_ratio = close_today_commission_ratio
 
     def round_price(self, price: float) -> float:
         """将价格对齐到最小变动价位。"""

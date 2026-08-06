@@ -13,5 +13,8 @@
     "predictor_epochs": 25,
     "default_horizon": 12
   },
+  "ai": {
+    "timeout": 30
+  },
   "data_path": "data"
 }

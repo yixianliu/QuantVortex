@@ -27,10 +27,15 @@ BASE_FEATURES = ["ret", "vol", "RSI14", "MACD", "K", "boll_pct", "CCI14"]
 EXTENDED_FEATURES = [
     # —— 基础（保留）——
     "ret", "vol", "RSI14", "MACD", "K", "boll_pct", "CCI14",
-    # —— 扩展 ——
+    # —— 扩展（既有）——
     "MOM10", "ROC12", "BIAS6", "ADX", "dir_di",
     "ma20_gap", "ma60_gap", "vol5", "vol_ratio", "obv_chg",
     "fund_proxy", "atr_pct",
+    # —— 扩展（模型层深化·新增高阶因子）——
+    # 收益标准化（均值回复强度）、短长波动比（波动状态切换）、
+    # 中心化 RSI、MACD 快线 DIF（趋势动能）、波动率扩张、滚动偏度（尾部风险）、跳空
+    "ret_z", "vol_ratio_lr", "rsi_dev", "macd_dif",
+    "atr_chg", "roll_skew", "gap_open",
 ]
 
 
@@ -85,6 +90,24 @@ def build_features(df: pd.DataFrame, extended: bool = True):
     # 价格风险：真实波幅占比（不依赖 ATR 列，自行计算）
     atr = (high - low).rolling(14, min_periods=1).mean()
     ind["atr_pct"] = (atr / close).fillna(0.0)
+
+    # —— 模型层深化·新增高阶因子（纯量价，无外部列依赖）——
+    ret = ind["ret"]
+    ret_mean = ret.rolling(20, min_periods=1).mean()
+    ret_std = ret.rolling(20, min_periods=1).std() + 1e-8
+    ind["ret_z"] = ((ret - ret_mean) / ret_std).fillna(0.0)          # 收益标准化·均值回复强度
+    vol_long = ret_std
+    vol_short = ret.rolling(5, min_periods=1).std() + 1e-8
+    ind["vol_ratio_lr"] = (vol_short / vol_long).fillna(1.0)         # 短/长波动比·波动状态切换
+    ind["rsi_dev"] = ((ind["RSI14"] - 50.0) / 50.0).fillna(0.0) if "RSI14" in ind else 0.0  # 中心化 RSI
+    ind["macd_dif"] = ind["DIF"].fillna(0.0) if "DIF" in ind else 0.0  # MACD 快线·趋势动能
+    ind["atr_chg"] = ind["atr_pct"].diff(5).fillna(0.0)             # 波动率扩张
+    ind["roll_skew"] = ret.rolling(20, min_periods=5).skew().fillna(0.0)  # 滚动偏度·尾部风险
+    if "open" in ind.columns:
+        prev_close = ind["close"].shift(1)
+        ind["gap_open"] = ((ind["open"] - prev_close) / prev_close).fillna(0.0)
+    else:
+        ind["gap_open"] = 0.0
 
     feats = EXTENDED_FEATURES
     F = ind[feats].ffill().fillna(0.0)

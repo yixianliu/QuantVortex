@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import numpy as np
 import pandas as pd
@@ -21,6 +22,11 @@ from .synthetic import SyntheticFeed, FUTURES_UNIVERSE, resample_bars
 from ..runtime import get_data_dir
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+logger = logging.getLogger(__name__)
+
+# 真实行情源（非合成）。用于判定是否允许随机游走模拟 tick。
+REAL_SOURCES = ("sina", "akshare", "csv", "ctp")
 
 
 def _load_config() -> dict:
@@ -38,27 +44,83 @@ PERIOD_SESSION_BARS = {
 }
 
 
+def default_symbol() -> str:
+    """配置里的默认探测品种（模块级，供 _build_feed 与管理器共用）。"""
+    cfg = _load_config()
+    return cfg.get("analysis", {}).get("default_symbol", "rb.SHFE")
+
+
+# 最近一次构建数据源时的降级原因，供 UI / 日志展示（避免静默降级无从排查）
+LAST_FEED_ERROR: str = ""
+
+
+def _probe(feed, label: str) -> bool:
+    """轻量探测：拉取默认品种最近 3 根日线，判定该源是否真的可用。"""
+    global LAST_FEED_ERROR
+    try:
+        probe = feed.get_recent(default_symbol(), "D", 3)
+    except Exception as exc:                       # noqa: BLE001 - 需记录具体原因
+        LAST_FEED_ERROR = f"{label} 探测异常: {type(exc).__name__}: {exc}"
+        logger.warning("数据源 %s 探测失败，将降级为合成行情：%s", label, exc)
+        return False
+    if probe is None or getattr(probe, "empty", True):
+        LAST_FEED_ERROR = f"{label} 探测返回空数据"
+        logger.warning("数据源 %s 探测返回空数据，将降级为合成行情", label)
+        return False
+    return True
+
+
 def _build_feed(source: str, data_path: str):
-    """按 source 构建数据源；sina 探测失败自动回退 synthetic。返回 (feed, effective_source)。"""
+    """按 source 构建数据源；探测失败自动回退 synthetic。返回 (feed, effective_source)。
+
+    降级不再静默：失败原因写入模块级 LAST_FEED_ERROR 并打日志。
+    """
+    global LAST_FEED_ERROR
+    LAST_FEED_ERROR = ""
     synth = SyntheticFeed()
+
     if source == "sina":
         try:
             from .sina_feed import SinaFeed
-            cache = os.path.join(data_path, "sina_cache")
-            f = SinaFeed(cache_dir=cache)
-            # 轻量探测：拉取默认品种最近 3 根日线，失败则回退
-            probe = f.get_recent("rb.SHFE", "D", 3)
-            if probe is not None and not probe.empty:
+            f = SinaFeed(cache_dir=os.path.join(data_path, "sina_cache"))
+            if _probe(f, "sina"):
                 return f, "sina"
-        except Exception:
-            pass
+        except Exception as exc:                   # noqa: BLE001
+            LAST_FEED_ERROR = f"sina 初始化失败: {type(exc).__name__}: {exc}"
+            logger.warning("sina 数据源初始化失败：%s", exc)
         return synth, "synthetic"
+
     if source == "ctp":
         try:
             from .ctp_gateway import CTPFeed
             return CTPFeed(), "ctp"
-        except Exception:
+        except Exception as exc:                   # noqa: BLE001
+            LAST_FEED_ERROR = f"ctp 初始化失败: {type(exc).__name__}: {exc}"
+            logger.warning("CTP 数据源初始化失败：%s", exc)
             return synth, "synthetic"
+
+    if source == "akshare":
+        try:
+            from .akshare_feed import AkshareFeed
+            f = AkshareFeed()
+            if _probe(f, "akshare"):
+                return f, "akshare"
+        except Exception as exc:                   # noqa: BLE001
+            LAST_FEED_ERROR = f"akshare 初始化失败: {type(exc).__name__}: {exc}"
+            logger.warning("akshare 数据源初始化失败：%s", exc)
+        return synth, "synthetic"
+
+    if source == "csv":
+        try:
+            from .csv_feed import CsvFeed
+            f = CsvFeed()
+            if _probe(f, "csv"):
+                return f, "csv"
+        except Exception as exc:                   # noqa: BLE001
+            LAST_FEED_ERROR = f"csv 初始化失败: {type(exc).__name__}: {exc}"
+            logger.warning("csv 数据源初始化失败：%s", exc)
+        return synth, "synthetic"
+
     return synth, "synthetic"
 
 
@@ -84,7 +146,10 @@ class MarketDataManager(QObject):
             self.allow_sim = True
         else:
             self.feed, self.source = _build_feed(source, data_path)
-        self.allow_sim = (self.source != "sina")   # 仅 sina 为真实源，禁止随机游走伪造
+        # 真实源一律禁止随机游走伪造；只有合成/自定义源才允许模拟 tick
+        if feed is None:
+            self.allow_sim = (self.source not in REAL_SOURCES)
+        self.feed_error = LAST_FEED_ERROR          # 降级原因（供 UI 展示，空串表示无降级）
         self.is_real = False                        # 是否存在「真正连上的实盘源」
         self.universe = FUTURES_UNIVERSE
         self._full: dict[str, pd.DataFrame] = {}     # (symbol, period) -> 完整序列
@@ -97,36 +162,47 @@ class MarketDataManager(QObject):
 
     # ------------------------------------------------------------------
     def _default_symbol(self) -> str:
-        cfg = _load_config()
-        return cfg.get("analysis", {}).get("default_symbol", "rb.SHFE")
+        return default_symbol()
 
     def _period_real(self, period: str) -> bool:
         """该周期是否有真实数据。
 
-        - 非真实源（合成 / sina 获取失败回退）：一律按合成处理；
-        - sina 连上时仅 D/W 真实（免费接口无分钟线）；
+        - 非真实源（合成 / 真实源探测失败回退）：一律按合成处理；
+        - sina / akshare / csv 为日线级免费源，仅 D/W 真实（无分钟线）；
         - ctp 连上时全部周期真实。
         """
         if not self.is_real:
             return False
-        if self.source == "sina":
+        if self.source in ("sina", "akshare", "csv"):
             return period in ("D", "1D", "W", "1W")
         return True
 
+    # 日线级真实源的展示名（探测成功后用于状态栏）
+    _DAILY_SOURCE_LABEL = {
+        "sina": "新浪实盘日线", "akshare": "akshare日线(真实)", "csv": "本地CSV回放(真实)",
+    }
+
     def connect(self) -> None:
-        """建立数据源连接（按 source）。sina 实时不可达时自动回退合成；
+        """建立数据源连接（按 source）。日线级真实源探测失败时回退合成并标注原因；
         ctp 未连上时明确报告「未连接」并允许合成回退（绝不冒充实盘）。"""
         self.is_real = False
-        if self.source == "sina":
-            probe = self.feed.get_recent(self._default_symbol(), "D", 3)
-            if probe is None or probe.empty:
+        if self.source in self._DAILY_SOURCE_LABEL:
+            label = self._DAILY_SOURCE_LABEL[self.source]
+            try:
+                probe = self.feed.get_recent(self._default_symbol(), "D", 3)
+            except Exception as exc:               # noqa: BLE001
+                logger.warning("%s 连接探测异常：%s", self.source, exc)
+                probe = None
+            if probe is None or getattr(probe, "empty", True):
+                failed = self.source
                 self.feed = self._synth
                 self.source = "synthetic"
                 self.allow_sim = True
-                self.status = "已连接 · 合成行情(模拟, 实盘获取失败)"
+                self.status = f"已连接 · 合成行情(模拟, {failed}获取失败)"
             else:
                 self.is_real = True
-                self.status = "已连接 · 新浪实盘日线"
+                self.allow_sim = False
+                self.status = f"已连接 · {label}"
         elif self.source == "ctp":
             self._wire_ctp_feed()
             ok = self.feed.connect()
@@ -223,9 +299,9 @@ class MarketDataManager(QObject):
         if df.empty:
             return {}
         last = float(df["close"].iloc[-1])
-        ref = float(df["close"].iloc[0])          # 时段开盘基准
         prev = float(df["close"].iloc[-2]) if len(df) > 1 else last
-        chg = last - ref
+        ref  = prev                          # 昨收（D 周期下为前一根收盘）
+        chg  = last - ref
         chg_pct = (chg / ref * 100.0) if ref else 0.0
         mult = 10.0
         for row in self.universe:
@@ -234,9 +310,9 @@ class MarketDataManager(QObject):
                 break
         vol = float(df["volume"].iloc[-1]) if "volume" in df else 0.0
         oi = float(df["open_interest"].iloc[-1]) if "open_interest" in df else 0.0
-        # 资金流代理：近期 (收-开)*量*价*乘数（亿元），正为净流入
+        # 资金流代理：近期 (收-开)*量*乘数（亿元），正为净流入
         recent = df.tail(20)
-        fund = float(((recent["close"] - recent["open"]) * recent["volume"] * recent["close"] * mult).sum() / 1e8)
+        fund = float(((recent["close"] - recent["open"]) * recent["volume"] * mult).sum() / 1e8)
         return {
             "symbol": symbol, "last": last, "ref": ref, "prev": prev,
             "chg": chg, "chg_pct": chg_pct, "volume": vol, "open_interest": oi,
@@ -268,7 +344,7 @@ class MarketDataManager(QObject):
             oi_prev = float(df["open_interest"].iloc[half]) if "open_interest" in df else 0.0
             oi_chg = (oi_now - oi_prev) / oi_prev * 100.0 if oi_prev else 0.0
             mult = row[5]
-            fund = float(((df["close"] - df["open"]) * df["volume"] * df["close"] * mult).tail(half).sum() / 1e8)
+            fund = float(((df["close"] - df["open"]) * df["volume"] * mult).tail(half).sum() / 1e8)
             rows.append({
                 "symbol": sym, "name": row[1], "category": row[2],
                 "last": last, "chg_pct": round(chg_pct, 2),

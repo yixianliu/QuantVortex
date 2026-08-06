@@ -20,21 +20,25 @@ from PyQt6.QtWidgets import (
 from .widgets import THEME, pal, PALETTE
 from .icons import icon
 from .pages import (
-    MarketPage, PredictPage, PanoramaPage, ValidatePage, LogPage,
+    ValidatePage, LogPage,
 )
+from .predict_ops_page import PredictOpsPage
+from .market_overview_page import MarketOverviewPage
 from .backtest_page import BacktestCenterPage
-from .screening_page import ScreeningPage
 from .ctp_monitor_page import CTPMonitorPage
 from .data_page import DataPage
+from .simple_backtest_page import SimpleBacktestPage
+from .ai_settings_dialog import AIConfigDialog
 from ..storage.config_manager import ConfigManager, SessionState
 from ..runtime import get_font_paths
 
+AGNES_API_BASE = "https://api.agnes-ai.cn/v1/chat/completions"
+
 NAV = [
-    ("行情全景", MarketPage, "market", "market"),
-    ("AI 预测", PredictPage, "predict", "predict"),
-    ("市场全景", PanoramaPage, "panorama", "panorama"),
+    ("行情全景", MarketOverviewPage, "market", "market"),
+    ("预测操作", PredictOpsPage, "predict", "predict_ops"),
     ("回测中心", BacktestCenterPage, "backtest", "backtest"),
-    ("选品机会", ScreeningPage, "filter", "screening"),
+    ("独立回测", SimpleBacktestPage, "backtest", "simple_backtest"),
     ("实盘监控", CTPMonitorPage, "ctp", "ctp"),
     ("日志预警", LogPage, "log", "log"),
     ("数据管理", DataPage, "db", "data"),
@@ -60,9 +64,11 @@ class MainWindow(QMainWindow):
         db_path = self.config.get("data.sqlite_path", "data/quant_analysis.db")
         self.store = AnalysisStore(db_path)
         self.store.maintenance()   # 启动维护：合并 WAL + 限容
-        self.mdm.connect()
-        self.store.add_log(str(dt.datetime.now()), "INFO",
-                          f"系统启动 · 数据源：{self.mdm.source_label}")
+        # 数据源探测改为异步：window 先显示，避免网络探测阻塞 10s+
+        self._connect_deferred = QTimer(self)
+        self._connect_deferred.setSingleShot(True)
+        self._connect_deferred.timeout.connect(self._do_connect)
+        self._connect_deferred.start(0)  # 下一轮事件循环再执行
 
         self.setWindowTitle("期货智能分析预测系统")
         # 最小尺寸约束：避免窗口过小导致组件挤压 / 遮挡
@@ -83,11 +89,10 @@ class MainWindow(QMainWindow):
         self._session_timer.setSingleShot(True)
         self._session_timer.timeout.connect(lambda: self.session.flush())
 
-        # 恢复上次停留页
-        last = int(self.session.get("last_page", 0) or 0)
-        if 0 <= last < len(self.pages):
-            self.nav.setCurrentRow(last)
-            self.stack.setCurrentIndex(last)
+        # 启动默认进入「行情全景」页（需求：程序启动后默认进入行情全景页面，
+        # 并自动触发市场数据刷新与新闻 AI 解读——由该页 showEvent 自动拉取）。
+        self.nav.setCurrentRow(0)
+        self.stack.setCurrentIndex(0)
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
@@ -178,6 +183,12 @@ class MainWindow(QMainWindow):
         act_export.triggered.connect(lambda: self._goto_page("data"))
         act_backup = data.addAction("备份 / 恢复…")
         act_backup.triggered.connect(lambda: self._goto_page("data"))
+        # AI
+        ai_menu = mb.addMenu("AI")
+        act_ai_config = ai_menu.addAction(icon("settings", self.theme), "模型配置…")
+        act_ai_config.triggered.connect(self._open_ai_settings)
+        act_ai_status = ai_menu.addAction("API状态")
+        act_ai_status.triggered.connect(self._show_ai_status)
         # 帮助
         helpm = mb.addMenu("帮助")
         act_about = helpm.addAction("关于")
@@ -220,6 +231,43 @@ class MainWindow(QMainWindow):
             "行情分析 · AI 趋势预测 · 量化信号研判 · 数据复盘 · 风险分析\n"
             "数据默认接入新浪实盘日线（可切换合成 / CTP 柜台）。\n\n"
             "本软件仅用于学习与研究，不构成任何投资建议。")
+
+    def _open_ai_settings(self) -> None:
+        """打开 AI 模型配置对话框。"""
+        from ..ai.config import get_ai_config
+        ai_cfg = get_ai_config(self.config)
+        dlg = AIConfigDialog(config=self.config, parent=self)
+        dlg.config_applied.connect(self._on_ai_config_applied)
+        dlg.exec()
+
+    def _on_ai_config_applied(self) -> None:
+        """AI 配置已应用：刷新状态栏 AI 状态提示。"""
+        from ..ai.llm_client import api_status
+        st = api_status()
+        if st.get("usable"):
+            self._status_log.setText(f"Agnes AI：已连接")
+        elif st.get("configured"):
+            self._status_log.setText("AI 代理：已配置（未连接）")
+        else:
+            self._status_log.setText("AI 代理：未配置（降级模式）")
+        self._status_log.setStyleSheet(f"color:{pal()['sub']};")
+
+    def _show_ai_status(self) -> None:
+        """弹出 Agnes AI 状态信息框（只读）。"""
+        from PyQt6.QtWidgets import QMessageBox
+        from ..ai.llm_client import api_status
+        from ..ai.config import get_ai_config
+        st = api_status()
+        ai = get_ai_config(self.config)
+        s = ai.status()
+        lines = [
+            f"API 密钥：{'已配置' if s.get('api_key_set') else '未配置'}",
+            f"端点地址：{AGNES_API_BASE}",
+            f"请求超时：{s.get('timeout', 30)} 秒",
+            f"requests 可用：{'是' if s.get('requests_available') else '否'}",
+            f"整体可用：{'是 ✓' if s.get('usable') else '否'}",
+        ]
+        QMessageBox.information(self, "Agnes AI 状态", "\n".join(lines))
 
     def _goto_page(self, key: str) -> None:
         """按页面 key 跳转（菜单快捷入口用）。"""
@@ -286,13 +334,21 @@ class MainWindow(QMainWindow):
         self.mdm.connect()
         self._update_status()
 
+    def _do_connect(self) -> None:
+        """异步数据源探测（由 _connect_deferred 触发），完成后更新状态栏。"""
+        self.mdm.connect()
+        self.store.add_log(str(dt.datetime.now()), "INFO",
+                          f"系统启动 · 数据源：{self.mdm.source_label}")
+        self._update_status()
+        self._connect_deferred.deleteLater()
+
     def _update_status(self) -> None:
         if self.mdm.status.startswith("已连接"):
             self._status_conn.setText("● 已连接")
-            self._status_conn.setStyleSheet("color:#22c55e;")
+            self._status_conn.setStyleSheet(f"color:{pal()['up']};")
         else:
             self._status_conn.setText("● 离线")
-            self._status_conn.setStyleSheet("color:#ef4444;")
+            self._status_conn.setStyleSheet(f"color:{pal()['down']};")
         self._status_src.setText(f"数据源：{self.mdm.source_label}")
 
     def _tick_clock(self) -> None:

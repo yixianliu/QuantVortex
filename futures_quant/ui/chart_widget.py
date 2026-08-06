@@ -17,7 +17,7 @@ def _finite(v) -> bool:
     return isinstance(v, (int, float)) and math.isfinite(v)
 
 from PyQt6.QtCore import Qt, QPointF
-from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QBrush, QLinearGradient
+from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QBrush, QLinearGradient, QPolygonF
 from PyQt6.QtWidgets import QWidget
 
 
@@ -26,7 +26,22 @@ _DEFAULT_SERIES_COLORS = [
 ]
 
 
-_FONT = "SimHei"
+_FONT = None  # 延迟初始化，使用 QFontDatabase 加载的系统字体
+
+
+def _get_font() -> str:
+    """返回优先使用的字体名称。"""
+    global _FONT
+    if _FONT is not None:
+        return _FONT
+    import sys
+    if sys.platform == "win32":
+        _FONT = "Microsoft YaHei"
+    elif sys.platform == "darwin":
+        _FONT = "PingFang SC"
+    else:
+        _FONT = "Noto Sans CJK SC"
+    return _FONT
 
 
 def _to_color(c) -> QColor:
@@ -126,13 +141,14 @@ class PriceChart(QWidget):
         # 标题
         if self._title:
             painter.setPen(pal["text"])
-            painter.setFont(QFont(_FONT, 11, QFont.Weight.Bold))
-            painter.drawText(x0, 6 + title_h - 6, self._title)
+            painter.setFont(QFont(_get_font(), 11, QFont.Weight.Bold))
+            # 修正标题Y坐标，避免紧贴顶部被截断：增加上边距，让文字完整显示
+            painter.drawText(x0, 18 + title_h, self._title)
 
         # 无数据
         if not self._series:
             painter.setPen(pal["text"])
-            painter.setFont(QFont(_FONT, 11))
+            painter.setFont(QFont(_get_font(), 11))
             painter.drawText(x0, (y0 + y1) // 2, "暂无数据")
             return
 
@@ -148,7 +164,7 @@ class PriceChart(QWidget):
 
         # 横向网格 + Y 轴标签
         painter.setPen(QPen(pal["grid"], 1))
-        painter.setFont(QFont(_FONT, 9))
+        painter.setFont(QFont(_get_font(), 9))
         for k in range(5):
             yy = y0 + k * (y1 - y0) / 4
             painter.drawLine(int(x0), int(yy), int(x1), int(yy))
@@ -162,7 +178,7 @@ class PriceChart(QWidget):
         # X 轴刻度（调用方提供）
         if self._x_ticks:
             painter.setPen(pal["text"])
-            painter.setFont(QFont(_FONT, 9))
+            painter.setFont(QFont(_get_font(), 9))
             for frac, label in self._x_ticks:
                 xx = x0 + frac * (x1 - x0)
                 painter.drawLine(int(xx), int(y1), int(xx), int(y1) + 3)
@@ -207,7 +223,7 @@ class PriceChart(QWidget):
 
         # 图例（左上）
         if self._series:
-            painter.setFont(QFont(_FONT, 9))
+            painter.setFont(QFont(_get_font(), 9))
             fm = painter.fontMetrics()
             lx = x0 + 6
             ly = y0 + 2
@@ -224,8 +240,268 @@ class PriceChart(QWidget):
 
 
 # ============================================================================
+# 可靠性校准图（Reliability Diagram）：预测概率 vs 实际命中率
+# ============================================================================
+
+class ReliabilityChart(QWidget):
+    """可靠性校准图（Reliability Diagram）：预测概率 vs 实际命中率。
+
+    把模型「自信度」摊开给用户看——理想情况下所有经验点应落在
+    对角虚线（完美校准）上：模型说涨 70%，历史上就该 70% 真涨。
+    点落在对角线下方 = 模型过度自信（需压缩）；上方 = 过度保守（需抬升）。
+    点半径随样本量增大，颜色按偏离方向着色，便于一眼识别系统性偏差。
+    另用红色高亮点标出「本次预测」在校准图上的落点（预测值→校准值）。
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setMinimumHeight(220)
+        self._bins: list = []          # [(center, smoothed, n, lo, hi), ...]
+        self._status = ""
+        self._coverage = 0
+        self._mark: Optional[tuple] = None   # (p_up, conf[, lo, hi]) 当前预测落点
+        self._theme = "dark"
+
+    def set_theme(self, theme: str) -> None:
+        self._theme = theme
+        self.update()
+
+    def set_data(self, bins=None, status: str = "", coverage: int = 0,
+                 mark=None) -> None:
+        # 归一化：兼容旧 3 元组 (center, smoothed, n) 与新 5 元组 (+lo, +hi)
+        norm = []
+        for b in (bins or []):
+            t = tuple(b)
+            if len(t) >= 5:
+                norm.append((t[0], t[1], t[2], t[3], t[4]))
+            elif len(t) == 3:
+                norm.append((t[0], t[1], t[2], None, None))
+        self._bins = norm
+        self._status = status
+        self._coverage = coverage
+        self._mark = mark
+        self.update()
+
+    def _palette(self) -> dict:
+        if self._theme == "dark":
+            return dict(grid=QColor(42, 46, 58), text=QColor(139, 147, 167),
+                        axis=QColor(58, 63, 78), bg=QColor(15, 17, 22))
+        return dict(grid=QColor(229, 231, 235), text=QColor(107, 114, 128),
+                    axis=QColor(203, 213, 225), bg=QColor(255, 255, 255))
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pal = self._palette()
+        W, H = self.width(), self.height()
+        padL, padR, padT, padB = 42, 16, 16, 30
+        plotW, plotH = W - padL - padR, H - padT - padB
+        if plotW <= 10 or plotH <= 10:
+            return
+
+        painter.fillRect(self.rect(), pal["bg"])
+
+        def mx(v):
+            return padL + float(v) * plotW
+
+        def my(v):
+            return padT + (1.0 - float(v)) * plotH
+
+        # 网格 + 刻度
+        painter.setFont(QFont(_get_font(), 9))
+        for k in range(5):
+            frac = k / 4
+            yy = my(frac)
+            painter.setPen(QPen(pal["grid"], 1))
+            painter.drawLine(int(padL), int(yy), int(padL + plotW), int(yy))
+            painter.setPen(pal["text"])
+            painter.drawText(6, int(yy) + 3, f"{frac*100:.0f}")
+            xx = mx(frac)
+            painter.setPen(QPen(pal["grid"], 1))
+            painter.drawLine(int(xx), int(padT), int(xx), int(padT + plotH))
+            painter.setPen(pal["text"])
+            painter.drawText(int(xx) - 10, int(padT + plotH) + 16,
+                             f"{frac*100:.0f}")
+
+        # 轴标题
+        painter.setPen(pal["text"])
+        painter.setFont(QFont(_FONT, 10, QFont.Weight.Bold))
+        painter.drawText(int(padL + plotW / 2 - 48), H - 2, "预测上涨概率 (%)")
+        painter.save()
+        painter.translate(12, int(padT + plotH / 2 + 30))
+        painter.rotate(-90)
+        painter.drawText(-50, 0, "实际命中率 (%)")
+        painter.restore()
+
+        # 完美校准对角线
+        painter.setPen(QPen(pal["axis"], 1.5, Qt.PenStyle.DashLine))
+        painter.drawLine(int(mx(0)), int(my(0)), int(mx(1)), int(my(1)))
+
+        # 区间置信带（Wilson 95%）：经验命中率上下界填充半透明带 + 误差须。
+        # 用对角参考线之后的「数据层」绘制，确保压在网格之上、经验线之下。
+        band_pts = [(c, s, n, lo, hi) for (c, s, n, lo, hi) in self._bins
+                    if lo is not None and hi is not None and n > 0
+                    and 0.0 <= s <= 1.0 and 0.0 <= c <= 1.0]
+        if len(band_pts) >= 2:
+            top = [QPointF(mx(c), my(hi)) for (c, s, n, lo, hi) in band_pts]
+            bot = [QPointF(mx(c), my(lo)) for (c, s, n, lo, hi) in band_pts][::-1]
+            band_col = QColor("#3b82f6")
+            band_col.setAlpha(40)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(band_col))
+            painter.drawPolygon(QPolygonF(top + bot))
+            painter.setPen(QPen(QColor(59, 130, 246, 110), 1, Qt.PenStyle.DashLine))
+            for seg in (top, bot):
+                for j in range(1, len(seg)):
+                    painter.drawLine(seg[j - 1], seg[j])
+        # 误差须：每个经验点的 Wilson 区间竖向短线，给出单点可信度读数
+        for (c, s, n, lo, hi) in band_pts:
+            painter.setPen(QPen(QColor(148, 163, 184, 170), 1))
+            painter.drawLine(int(mx(c)), int(my(hi)), int(mx(c)), int(my(lo)))
+
+        valid = [(c, s, n) for (c, s, n, *_ ) in self._bins
+                 if n > 0 and 0.0 <= s <= 1.0 and 0.0 <= c <= 1.0]
+
+        if not valid:
+            painter.setPen(pal["text"])
+            painter.setFont(QFont(_get_font(), 11))
+            msg = ("样本不足，暂无可绘制的校准点"
+                   if not self._mark else "样本不足，仅显示本次预测落点")
+            painter.drawText(int(padL + 8), int(padT + plotH / 2), msg)
+
+        # 经验连线
+        if len(valid) >= 2:
+            painter.setPen(QPen(QColor("#3b82f6"), 2))
+            pts = [QPointF(mx(c), my(s)) for (c, s, n) in valid]
+            for j in range(1, len(pts)):
+                painter.drawLine(pts[j - 1], pts[j])
+        # 经验点（半径随样本量，颜色按偏离方向）
+        for (c, s, n) in valid:
+            r = max(3.0, min(9.0, 3.0 + math.sqrt(n)))
+            over = s < c          # 实际 < 预测 = 过度自信
+            col = QColor("#f59e0b") if over else QColor("#22c55e")
+            painter.setBrush(QBrush(col))
+            painter.setPen(QPen(QColor(255, 255, 255, 160), 1))
+            painter.drawEllipse(QPointF(mx(c), my(s)), r, r)
+            if n >= 3:
+                painter.setPen(pal["text"])
+                painter.setFont(QFont(_get_font(), 8))
+                painter.drawText(int(mx(c)) + int(r) + 2, int(my(s)) + 3,
+                                 f"n={n}")
+
+        # 本次预测落点（红点 + 水平校准区间误差棒 + 标注）
+        if self._mark:
+            try:
+                pu, conf = float(self._mark[0]), float(self._mark[1])
+            except Exception:
+                pu, conf = 0.5, 0.5
+            pxx, pyy = mx(pu), my(conf)
+            # 校准区间水平误差棒（本次预测的校准不确定性）
+            blo = bhi = None
+            if len(self._mark) >= 4 and self._mark[2] is not None and self._mark[3] is not None:
+                try:
+                    blo, bhi = float(self._mark[2]), float(self._mark[3])
+                    painter.setPen(QPen(QColor("#ef4444"), 1.5, Qt.PenStyle.DashLine))
+                    painter.drawLine(int(mx(blo)), int(pyy), int(mx(bhi)), int(pyy))
+                except Exception:
+                    blo = bhi = None
+            painter.setPen(QPen(QColor("#ef4444"), 2))
+            painter.setBrush(QBrush(QColor("#ef4444")))
+            painter.drawEllipse(QPointF(pxx, pyy), 5.5, 5.5)
+            painter.setPen(QColor("#ef4444"))
+            painter.setFont(QFont(_get_font(), 9, QFont.Weight.Bold))
+            if blo is not None and bhi is not None:
+                label = (f"本次: 预测{pu*100:.0f}% → 校准{conf*100:.0f}% "
+                         f"[{blo*100:.0f}–{bhi*100:.0f}]")
+            else:
+                label = f"本次: 预测{pu*100:.0f}% → 校准{conf*100:.0f}%"
+            lx = int(pxx - painter.fontMetrics().horizontalAdvance(label) - 10)
+            if lx < padL:
+                lx = int(pxx + 10)
+            painter.drawText(lx, int(pyy - 8), label)
+
+
+# ============================================================================
 # K 线（蜡烛）图组件：蜡烛 + 成交量 + 均线 + 十字光标 + 悬浮提示
 # ============================================================================
+
+
+def draw_trade_marks(painter, pal, marks: list, px_fn, py_fn, total_n: int,
+                     padL: int, priceTop: int, plotW: int) -> None:
+    """在 K 线图上绘制交易参考点标注（增强版）。
+
+    每个 mark 包含: y_enter, label_enter, color_enter, price_display。
+    渲染策略（提升可读性的关键）：
+    - 先画贯穿全宽的半透明水平虚线（价位参考线），一眼看清所处价格区间；
+    - 在左边缘画菱形锚点 + 圆角标签（标签含「名称 价格」），避免所有标注
+      挤在最后一根 K 线处互相重叠；
+    - 按 y 排序绘制，相邻标签过近时自动下移，杜绝文字堆叠。
+    """
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    # 按语义分组，保证视觉层次：止损(底) → 卖出 → 买入(顶) → 其它
+    enter_marks = [m for m in marks if m.get("color_enter", "") in ("#22c55e", "#10b981")]
+    exit_marks = [m for m in marks if m.get("color_enter", "") == "#ef4444"]
+    stop_marks = [m for m in marks if m.get("color_enter", "") == "#f59e0b"]
+    other_marks = [m for m in marks if m not in enter_marks + exit_marks + stop_marks]
+
+    # 统一收集后按 y 升序绘制（价格由低到高），便于防重叠
+    flat = []
+    for grp in (stop_marks, exit_marks, enter_marks, other_marks):
+        flat.extend(grp)
+    flat.sort(key=lambda m: py_fn(m.get("y_enter", 0)) if _finite(py_fn(m.get("y_enter", 0))) else 1e18)
+
+    last_label_y = None
+    for m in flat:
+        y_entry = py_fn(m.get("y_enter", 0))
+        if not _finite(y_entry):
+            continue
+        color = QColor(m.get("color_enter", "#10b981"))
+        label = m.get("label_enter", "")
+        price_val = m.get("price_display", "")
+
+        # 1) 贯穿全宽的水平参考虚线（半透明）
+        lc = QColor(color)
+        lc.setAlpha(55)
+        painter.setPen(QPen(lc, 1, Qt.PenStyle.DashLine))
+        painter.drawLine(int(padL), int(y_entry), int(padL + plotW), int(y_entry))
+
+        # 2) 左边缘菱形锚点（贴在参考线上）
+        ax = int(padL + 10)
+        pc = QColor(color)
+        pc.setAlpha(235)
+        s = 6
+        painter.setBrush(QBrush(pc))
+        painter.setPen(QPen(color, 1.5))
+        painter.drawPolygon([
+            QPointF(ax, y_entry - s), QPointF(ax + s * 0.6, y_entry),
+            QPointF(ax, y_entry + s), QPointF(ax - s * 0.6, y_entry),
+        ])
+
+        # 3) 标签（菱形右侧）；与上一个标签过近则下移，避免重叠
+        txt = f"{label} {price_val}"
+        painter.setFont(QFont(_FONT, 9, QFont.Weight.Bold))
+        fm = painter.fontMetrics()
+        tw = fm.horizontalAdvance(txt)
+        ty = int(y_entry)
+        if last_label_y is not None and abs(ty - last_label_y) < 16:
+            ty = last_label_y + 16
+        last_label_y = ty
+
+        bx = ax + s + 4
+        # 标签背景（圆角，实色块保证对比度）
+        bg = QColor(color)
+        bg.setAlpha(205)
+        painter.setBrush(QBrush(bg))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(bx - 2, ty - 9, tw + 6, 16, 3, 3)
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(bx, ty + 4, txt)
+
+    painter.restore()
+
+
 class KLineChart(QWidget):
     """期货 K 线图组件（纯 QPainter，零额外依赖，主题感知）。
 
@@ -260,6 +536,7 @@ class KLineChart(QWidget):
         self._down_color = "#22c55e"
         self._forecast = None     # {"y":[...], "upper":[...], "lower":[...]}
         self._levels: list = []   # 压力/支撑线 [{price, kind, label}]
+        self._trade_marks: list = []  # 交易参考点 [{x, y, type, label, price, anchor_y, color}]
         self._watermark = ""      # 背景水印文字（如合约代码 / 周期）
         self._vol_ma: list = []   # 成交量 MA5（与 _bars 等长，前 N 为 None）
 
@@ -322,6 +599,15 @@ class KLineChart(QWidget):
         self._levels = [dict(l) for l in (levels or [])]
         self.update()
 
+    def set_trade_marks(self, marks: Optional[Sequence[dict]] = None) -> None:
+        """叠加交易参考点：买入区间(绿)、卖出目标(红)。
+        
+        参数 marks: [{x_idx, y_enter, label_enter, color_enter, anchor_x, anchor_y}, ...]
+        x_idx = 相对可见K线起始位置偏移量（整数），负数表示从尾部倒数。
+        """
+        self._trade_marks = [dict(m) for m in (marks or [])]
+        self.update()
+
     def clear(self) -> None:
         self._bars = []
         self._ma = {}
@@ -330,21 +616,23 @@ class KLineChart(QWidget):
 
     # ---------- 调色板 ----------
     def _palette(self) -> dict:
+        from .widgets import pal
+        p = pal()
         if self._theme == "dark":
             return dict(
-                grid=QColor(34, 39, 50), text=QColor(170, 178, 198),
+                grid=QColor(p["grid"]), text=QColor(p["text"]),
                 axis=QColor(54, 60, 74), cross=QColor(148, 160, 184),
-                bg=QColor(15, 17, 22), band=QColor(37, 99, 235),
+                bg=QColor(p["bg"]), band=QColor(p["accent"]),
                 plot=QColor(12, 14, 19), plot_top=QColor(20, 23, 30),
                 plot_bot=QColor(9, 11, 15), sep=QColor(58, 64, 80),
-                volma=QColor(245, 158, 11), hi=QColor(255, 255, 255, 14))
+                volma=QColor(p["accent2"]), hi=QColor(255, 255, 255, 14))
         return dict(
-            grid=QColor(225, 229, 235), text=QColor(71, 85, 105),
+            grid=QColor(p["grid"]), text=QColor(p["text"]),
             axis=QColor(203, 213, 225), cross=QColor(120, 130, 150),
-            bg=QColor(255, 255, 255), band=QColor(37, 99, 235),
-            plot=QColor(248, 250, 252), plot_top=QColor(252, 253, 255),
+            bg=QColor(p["bg"]), band=QColor(p["accent"]),
+            plot=QColor(p["card"]), plot_top=QColor(252, 253, 255),
             plot_bot=QColor(240, 244, 248), sep=QColor(203, 213, 225),
-            volma=QColor(217, 119, 6), hi=QColor(15, 23, 42, 16))
+            volma=QColor(p["accent2"]), hi=QColor(15, 23, 42, 16))
 
     _MA_COLORS = ["#f59e0b", "#3b82f6", "#a855f7", "#06b6d4", "#eab308"]
 
@@ -381,7 +669,7 @@ class KLineChart(QWidget):
         bars = self._bars
         total = len(bars)
         if total == 0:
-            painter.setPen(pal["text"]); painter.setFont(QFont(_FONT, 11))
+            painter.setPen(pal["text"]); painter.setFont(QFont(_get_font(), 11))
             painter.drawText(padL, padT + plotH // 2, "暂无数据")
             return
 
@@ -456,7 +744,7 @@ class KLineChart(QWidget):
             painter.save()
             wcol = QColor(255, 255, 255, 16) if self._theme == "dark" else QColor(15, 23, 42, 12)
             painter.setPen(wcol)
-            painter.setFont(QFont(_FONT, 30, QFont.Weight.Bold))
+            painter.setFont(QFont(_get_font(), 30, QFont.Weight.Bold))
             fmw = painter.fontMetrics()
             wx = int(padL + plotW) - fmw.horizontalAdvance(self._watermark) - 14
             wy = int(volBot) - 14
@@ -464,7 +752,7 @@ class KLineChart(QWidget):
             painter.restore()
 
         # ---- 横向网格 + 右侧价格刻度（自适应小数位） ----
-        painter.setFont(QFont(_FONT, 9))
+        painter.setFont(QFont(_get_font(), 9))
         for k in range(5):
             yy = priceTop + k * priceH / 4
             painter.setPen(QPen(pal["grid"], 1))
@@ -487,12 +775,12 @@ class KLineChart(QWidget):
             painter.setPen(QPen(pal["sep"], 1))
             painter.drawLine(int(xx), int(priceTop), int(xx), int(volBot))
             if xx - last_label_x > 44:
-                painter.setPen(pal["text"]); painter.setFont(QFont(_FONT, 8))
+                painter.setPen(pal["text"]); painter.setFont(QFont(_get_font(), 8))
                 # 放在绘图区上方空白处，避免与左上角 MA 图例重叠
                 painter.drawText(int(xx) + 3, int(priceTop) - 4, m)
                 last_label_x = xx
         # 末根日期常驻底部，确保最新时点可读
-        painter.setPen(pal["text"]); painter.setFont(QFont(_FONT, 8))
+        painter.setPen(pal["text"]); painter.setFont(QFont(_get_font(), 8))
         _last_dt = self._fmt_time(str(bars[total - 1].get("datetime", "")))
         painter.drawText(int(padL + plotW) - 72, int(volBot) + 16, _last_dt)
 
@@ -569,31 +857,64 @@ class KLineChart(QWidget):
             lc = QColor("#22c55e" if is_sup else "#ef4444")
             painter.setPen(QPen(lc, 1, Qt.PenStyle.DashLine))
             painter.drawLine(int(padL), int(yy), int(padL + plotW), int(yy))
-            painter.setFont(QFont(_FONT, 8))
+            painter.setFont(QFont(_get_font(), 8))
             painter.setPen(lc)
             painter.drawText(int(padL + 3), int(yy) - 2, f"{lv.get('label','')} {pr:,.0f}")
 
-        # ---- AI 预测曲线 + 置信带 ----
+        # ---- 交易参考点标注（买入区间 / 卖出目标） ----
+        if self._trade_marks:
+            draw_trade_marks(painter, pal, self._trade_marks, px, py, total_n, padL, priceTop, plotW)
+
+        # ---- AI 预测曲线 + 置信带（增强：方向色 + 分隔线 + 终点价签） ----
         if fc and len(fc["y"]) > 1:
             base = total - 1  # 与最后一根蜡烛衔接
-            if fc.get("upper") and fc.get("lower"):
-                up, lo = fc["upper"], fc["lower"]
-                poly = [QPointF(px(base + i), py(up[i])) for i in range(len(up)) if _finite(up[i])]
-                for i in range(len(lo) - 1, -1, -1):
-                    if _finite(lo[i]):
-                        poly.append(QPointF(px(base + i), py(lo[i])))
-                if len(poly) >= 3:
-                    bc = QColor(self._MA_COLORS[1]); bc.setAlpha(45)
-                    painter.setBrush(QBrush(bc)); painter.setPen(Qt.PenStyle.NoPen)
-                    painter.drawPolygon(poly); painter.setBrush(Qt.BrushStyle.NoBrush)
-            pen = QPen(QColor("#f59e0b"), 2.0, Qt.PenStyle.DashLine)
-            painter.setPen(pen)
+            # 历史 / 预测 分隔竖线（虚线，明确预测起点）
+            sep_x = px(base)
+            painter.setPen(QPen(pal["sep"], 1, Qt.PenStyle.DashLine))
+            painter.drawLine(int(sep_x), int(priceTop), int(sep_x), int(volBot))
+
+            # 预测方向色（中国惯例：涨红 跌绿）
+            y0 = float(fc["y"][0]); y1 = float(fc["y"][-1])
+            up_dir = y1 >= y0
+            fc_color = QColor(self._up_color if up_dir else self._down_color)
+
             pts = [QPointF(px(base + i), py(v)) for i, v in enumerate(fc["y"]) if _finite(v)]
-            for j in range(1, len(pts)):
-                painter.drawLine(pts[j - 1], pts[j])
-            if pts and _finite(pts[-1].x()) and _finite(pts[-1].y()):
-                painter.setBrush(QBrush(QColor("#f59e0b"))); painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawEllipse(pts[-1], 3, 3)
+            if len(pts) >= 2:
+                # 置信带（方向色着色，淡透明）
+                if fc.get("upper") and fc.get("lower"):
+                    up, lo = fc["upper"], fc["lower"]
+                    poly = [QPointF(px(base + i), py(up[i])) for i in range(len(up)) if _finite(up[i])]
+                    for i in range(len(lo) - 1, -1, -1):
+                        if _finite(lo[i]):
+                            poly.append(QPointF(px(base + i), py(lo[i])))
+                    if len(poly) >= 3:
+                        bc = QColor(fc_color); bc.setAlpha(40)
+                        painter.setBrush(QBrush(bc)); painter.setPen(Qt.PenStyle.NoPen)
+                        painter.drawPolygon(poly); painter.setBrush(Qt.BrushStyle.NoBrush)
+                # 发光底线（宽、低透明度）提升趋势走向的视觉权重
+                glow = QColor(fc_color); glow.setAlpha(45)
+                painter.setPen(QPen(glow, 5))
+                for j in range(1, len(pts)):
+                    painter.drawLine(pts[j - 1], pts[j])
+                # 主预测线（虚线，方向色，更醒目）
+                painter.setPen(QPen(fc_color, 2.2, Qt.PenStyle.DashLine))
+                for j in range(1, len(pts)):
+                    painter.drawLine(pts[j - 1], pts[j])
+                # 起点圆点
+                painter.setBrush(QBrush(fc_color)); painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(pts[0], 3, 3)
+                # 终点目标价签（方向色 + 涨跌幅度），清晰展示预测目标
+                last_close = float(bars[total - 1]["close"])
+                tgt = y1
+                pct = (tgt / last_close - 1.0) * 100.0 if last_close else 0.0
+                tag_txt = f"{self._fmt_price(tgt)} ({pct:+.1f}%)"
+                self._forecast_tag(painter, pts[-1].x(), pts[-1].y(),
+                                   tag_txt, fc_color, padL, plotW)
+                # 顶部「预测 N 根」标注，紧贴分隔线
+                painter.setFont(QFont(_get_font(), 9, QFont.Weight.Bold))
+                painter.setPen(fc_color)
+                painter.drawText(int(sep_x) + 4, int(priceTop) + 12,
+                                 f"预测 {len(fc['y']) - 1} 根")
 
         # ---- 成交量副图 ----
         if self._show_volume:
@@ -617,11 +938,11 @@ class KLineChart(QWidget):
                     vp.append(QPointF(px(gi), vy(v)))
                 for j in range(1, len(vp)):
                     painter.drawLine(vp[j - 1], vp[j])
-            painter.setPen(pal["text"]); painter.setFont(QFont(_FONT, 8))
+            painter.setPen(pal["text"]); painter.setFont(QFont(_get_font(), 8))
             painter.drawText(int(padL + plotW + 5), int(volTop) + 8, f"{vmax:,.0f}")
 
         # ---- 均线图例（左上） ----
-        painter.setFont(QFont(_FONT, 9)); fm = painter.fontMetrics()
+        painter.setFont(QFont(_get_font(), 9)); fm = painter.fontMetrics()
         lx, ly = padL + 6, priceTop + 2
         for mi, (name, series) in enumerate(self._ma.items()):
             color = QColor(self._MA_COLORS[mi % len(self._MA_COLORS)])
@@ -669,6 +990,28 @@ class KLineChart(QWidget):
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(x + 5, yy + 12, text)
 
+    def _forecast_tag(self, painter, x: float, y: float, text: str,
+                      color: QColor, padL: int, plotW: int) -> None:
+        """预测终点目标价签（含方向色与涨跌幅度），置于端点左侧避免越界。"""
+        if not _finite(x) or not _finite(y):
+            return
+        painter.setFont(QFont(_FONT, 9, QFont.Weight.Bold))
+        fm = painter.fontMetrics()
+        w = fm.horizontalAdvance(text) + 10
+        h = 16
+        xx = int(x - w - 6)                       # 默认放端点左侧
+        if xx < padL + 2:
+            xx = int(x + 6)                        # 左侧放不下则放右侧
+        yy = int(y - h / 2)
+        sh = QColor(0, 0, 0, 70)                  # 柔和阴影
+        painter.setBrush(QBrush(sh)); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(xx + 2, yy + 2, w, h, 3, 3)
+        tag = QColor(color); tag.setAlpha(240)
+        painter.setBrush(QBrush(tag)); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(xx, yy, w, h, 3, 3)
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(xx + 5, yy + 12, text)
+
     def _draw_crosshair(self, painter, pal, gi, px, py, vy,
                         padL, priceTop, plotW, priceBot, volBot,
                         pmin, pmax, priceH, total, start, total_n, body_w) -> None:
@@ -707,7 +1050,7 @@ class KLineChart(QWidget):
                     rows.append((name, f"{fv:,.2f}"))
 
         # 信息框（圆角 + 阴影 + 涨/跌色顶条 + 对齐双列）
-        painter.setFont(QFont(_FONT, 9)); fm = painter.fontMetrics()
+        painter.setFont(QFont(_get_font(), 9)); fm = painter.fontMetrics()
         bw = max((fm.horizontalAdvance(f"{l}  {v}") for l, v in rows), default=80) + 26
         bw = max(bw, fm.horizontalAdvance(str(b.get('datetime', ''))[:19]) + 24)
         line_h = 16
@@ -731,11 +1074,11 @@ class KLineChart(QWidget):
         painter.setBrush(QBrush(col)); painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(bx, by, 4, bh, 2, 2)
         # 表头（时间，加粗着色）
-        painter.setPen(col); painter.setFont(QFont(_FONT, 10, QFont.Weight.Bold))
+        painter.setPen(col); painter.setFont(QFont(_get_font(), 10, QFont.Weight.Bold))
         painter.drawText(bx + 12, by + 18, str(b.get('datetime', ''))[:19])
         # 双列行
         val_bright = QColor(222, 228, 242) if self._theme == "dark" else QColor(30, 41, 59)
-        painter.setFont(QFont(_FONT, 9))
+        painter.setFont(QFont(_get_font(), 9))
         for i, (l, v) in enumerate(rows):
             ry = by + 18 + (i + 1) * line_h
             painter.setPen(pal["text"]); painter.drawText(bx + 12, ry, l)

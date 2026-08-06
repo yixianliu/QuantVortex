@@ -20,11 +20,15 @@ class Portfolio:
         margin_rate: float = 0.10,
         commission_per_lot: float = 3.0,
         logger=None,
+        multiplier: float = 10.0,
+        close_today_ratio: float = 1.0,
     ) -> None:
         self.initial_capital = float(initial_capital)
         self.margin_rate = float(margin_rate)
         self.commission_per_lot = float(commission_per_lot)
         self.logger = logger
+        self.multiplier = float(multiplier)            # 合约乘数（每手标的单位数）
+        self.close_today_ratio = float(close_today_ratio)  # 平今仓手续费折扣（T+0）
 
         self.cash = float(initial_capital)       # 可用资金（扣除保证金与手续费后）
         self.positions: Dict[str, Position] = {}
@@ -46,10 +50,16 @@ class Portfolio:
     def process_trade(self, trade: Trade) -> None:
         """处理一笔成交，更新持仓、保证金占用、手续费与盈亏。"""
         pos = self._get_position(trade.symbol)
-        realized = pos.update_on_trade(trade.direction, trade.offset, trade.quantity, trade.price)
+        # 成交自带合约乘数（经纪商按合约填），回落到账户默认乘数
+        mult = float(getattr(trade, "multiplier", None) or self.multiplier or 1.0)
+        realized = pos.update_on_trade(trade.direction, trade.offset,
+                                       trade.quantity, trade.price, mult)
 
-        # 手续费：双边收取（开平都收）
-        commission = abs(trade.quantity) * self.commission_per_lot
+        # 手续费：双边收取（开平都收）；平今仓按折扣比率（期货 T+0 平今优惠）
+        ratio = (self.close_today_ratio
+                 if trade.offset in (Offset.CLOSE_TODAY, Offset.CLOSE_YESTERDAY)
+                 else 1.0)
+        commission = abs(trade.quantity) * self.commission_per_lot * ratio
         trade.commission = commission
         trade.pnl = realized
         self.realized_pnl += realized
@@ -70,7 +80,8 @@ class Portfolio:
             price = self._current_prices.get(sym, 0.0)
             if price <= 0:
                 continue
-            margin += (pos.long_qty + pos.short_qty) * price * self.margin_rate
+            # 期货保证金 = 手数 × 标记价 × 合约乘数 × 保证金率
+            margin += (pos.long_qty + pos.short_qty) * price * self.multiplier * self.margin_rate
         return margin
 
     def unrealized_pnl(self) -> float:
@@ -79,8 +90,8 @@ class Portfolio:
             price = self._current_prices.get(sym, 0.0)
             if price <= 0:
                 continue
-            upnl += (price - pos.long_avg_price) * pos.long_qty
-            upnl += (pos.short_avg_price - price) * pos.short_qty
+            upnl += (price - pos.long_avg_price) * pos.long_qty * self.multiplier
+            upnl += (pos.short_avg_price - price) * pos.short_qty * self.multiplier
         return upnl
 
     def equity(self) -> float:

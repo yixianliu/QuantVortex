@@ -62,12 +62,21 @@ class SinaFeed(DataFeed):
     # 网络与缓存
     # ------------------------------------------------------------------
     def _http(self, url: str) -> str:
+        # ⚠️ SSL 验证已禁用以兼容部分内网/代理环境。
+        # 生产环境若涉及敏感数据，建议启用 check_hostname=True 和 CERT_REQUIRED。
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=self.timeout, context=ctx) as r:
-            return r.read().decode("utf-8", "ignore")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout, context=ctx) as r:
+                return r.read().decode("utf-8", "ignore")
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code}: {e.reason}") from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"网络请求失败: {e.reason}") from e
+        except OSError as e:
+            raise RuntimeError(f"IO 错误: {e}") from e
 
     def _cache_path(self, sina_sym: str) -> str:
         safe = sina_sym.replace("/", "_")

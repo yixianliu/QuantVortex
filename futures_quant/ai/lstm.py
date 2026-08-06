@@ -117,7 +117,7 @@ class LSTM:
             setattr(self, name, p - lr * mhat / (np.sqrt(vhat) + eps))
 
     # ----------------------------- 训练 -----------------------------
-    def fit(self, sequences, targets, epochs=30, lr=0.01, batch=32, verbose=False):
+    def fit(self, sequences, targets, epochs=50, lr=0.005, batch=32, verbose=False):
         X3 = np.array(sequences, dtype=float)      # (N,T,F)
         Y = np.array(targets, dtype=float)         # (N,) or (N,out)
         if Y.ndim == 1:

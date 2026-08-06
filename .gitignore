@@ -39,3 +39,5 @@ nul
 # tests/fixtures/*.csv
 # tests/fixtures/*.json
 api_docs
+build_tools
+tests

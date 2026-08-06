@@ -1,0 +1,4 @@
+OK   rb.SHFE: rows=4208 -> d:\PythonProject\QuantVortex\data\real_samples\rb_SHFE_D.csv
+OK   i.DCE: rows=3105 -> d:\PythonProject\QuantVortex\data\real_samples\i_DCE_D.csv
+OK   au.SHFE: rows=4272 -> d:\PythonProject\QuantVortex\data\real_samples\au_SHFE_D.csv
+OK   IF.CFFEX: rows=2310 -> d:\PythonProject\QuantVortex\data\real_samples\IF_CFFEX_D.csv
