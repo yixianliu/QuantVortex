@@ -314,15 +314,28 @@ class GeneStrategy(StrategyBase):
     default_params: dict = {}
 
     def __init__(self, symbol: str, gene: dict):
+        """初始化相关对象。
+        
+            参数:
+                symbol: str
+                gene: dict"""
         super().__init__(symbol, {})
         self.gene = gene
         self._stop: Optional[float] = None
         self._tp: Optional[float] = None
 
     def _window_size(self) -> int:
+        """处理窗口大小。
+        
+            返回:
+                int"""
         return gene_window(self.gene)
 
     def on_bar(self, bar: Bar) -> None:
+        """处理onK线。
+        
+            参数:
+                bar: Bar"""
         self._push(bar)
         g = self.gene
         if len(self._closes) < self._window_size() - 3:
@@ -405,6 +418,10 @@ def is_profitable(m: dict) -> tuple[bool, list[str]]:
 # 盈利策略库（落盘 + 供 AI 预测读取）
 # ---------------------------------------------------------------------------
 def load_profitable() -> list[dict]:
+    """加载profitable。
+    
+        返回:
+            list[dict]"""
     try:
         with open(STORE_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -532,6 +549,17 @@ class EvolutionEngine:
                  end: str = "2100-01-01", period: str = "D",
                  capital: float = 1_000_000.0, seed: Optional[int] = None,
                  futures_params: Optional[dict] = None):
+        """初始化相关对象。
+        
+            参数:
+                feed
+                universe: list
+                start: str
+                end: str
+                period: str
+                capital: float
+                seed: Optional[int]
+                futures_params: Optional[dict]"""
         self.feed = feed
         self.universe = list(universe)
         self.start, self.end, self.period = start, end, period
@@ -591,16 +619,26 @@ class EvolutionEngine:
 
     # ---- 品种/合约 ----
     def _row(self):
+        """处理行。"""
         return self.universe[self.sym_idx % len(self.universe)]
 
     def symbol(self) -> str:
+        """处理合约代码。
+        
+            返回:
+                str"""
         r = self._row()
         return f"{r[0]}.{r[3]}"
 
     def symbol_name(self) -> str:
+        """处理合约代码名称。
+        
+            返回:
+                str"""
         return self._row()[1]
 
     def _contract(self):
+        """处理合约。"""
         from ..data.base import Contract
         r = self._row()
         fp = self.futures_params
@@ -616,6 +654,7 @@ class EvolutionEngine:
                         close_today_commission_ratio=float(fp.get("close_today_ratio", 0.5)))
 
     def _config(self):
+        """配置相关对象。"""
         from ..config.settings import Config
         cfg = Config()
         fp = self.futures_params
@@ -641,6 +680,10 @@ class EvolutionEngine:
 
     # ---- 种群初始化：随机 + 盈利库定向播种 ----
     def _seed_population(self) -> list:
+        """处理seedpopulation。
+        
+            返回:
+                list"""
         pop = []
         seeds = [e["gene"] for e in load_profitable()
                  if e.get("symbol") == self.symbol()][:3]
@@ -653,6 +696,13 @@ class EvolutionEngine:
 
     # ---- 单基因回测评估 ----
     def _evaluate(self, gene: dict) -> dict:
+        """评估相关对象。
+        
+            参数:
+                gene: dict
+        
+            返回:
+                dict"""
         from ..backtest.backtester import Backtester
         sym = self.symbol()
         bt = Backtester(self._config(), self.feed)

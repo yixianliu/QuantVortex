@@ -135,6 +135,10 @@ def _screen(mdm, store=None):
         return [], []
 
     def _rank(vals):
+        """处理rank。
+        
+            参数:
+                vals"""
         s = sorted(vals)
         n = len(s)
         return [bisect_right(s, v) / n for v in vals]
@@ -448,6 +452,13 @@ def _logic_text(r: dict, cat_examples: Optional[list] = None) -> str:
 
 
 def _tier_color(tier: str) -> QColor:
+    """处理tier颜色。
+    
+        参数:
+            tier: str
+    
+        返回:
+            QColor"""
     if tier == "优先入手":
         return QColor(PALETTE[THEME]["up"])       # 红（期货涨色）
     if tier == "可留意":
@@ -459,9 +470,19 @@ def _tier_color(tier: str) -> QColor:
 # 页面
 # ---------------------------------------------------------------------------
 class ScreeningPage(BasePage):
+    """选品评分页面：按多维因子对品种打分排序并高亮机会。
+    
+        继承: BasePage"""
     navig_to_predict = pyqtSignal(str, str)  # symbol, period → 切换到 AI 预测并自动运行
 
     def __init__(self, mdm, store, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "screening"
         self._results: list = []
@@ -475,6 +496,7 @@ class ScreeningPage(BasePage):
 
     # ---- 构建 ----
     def _build(self):
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         self._root = root
         root.setContentsMargins(10, 8, 10, 8)
@@ -634,6 +656,7 @@ class ScreeningPage(BasePage):
         root.addLayout(btn_row)
 
     def _style_kpi(self):
+        """处理stylekpi。"""
         pal = PALETTE[THEME]
         for card in self._kpi_cards:
             card.setStyleSheet(
@@ -645,6 +668,7 @@ class ScreeningPage(BasePage):
 
     # ---- 决策摘要卡 ----
     def _build_summary(self) -> None:
+        """构建summary。"""
         pal = PALETTE[THEME]
         box = QHBoxLayout()
         box.setSpacing(8)
@@ -679,12 +703,14 @@ class ScreeningPage(BasePage):
         self._root.addLayout(box)
 
     def _apply_summary_theme(self) -> None:
+        """应用summary主题。"""
         pal = PALETTE[THEME]
         self.rate_val.setStyleSheet(
             f"color:{pal['text']};font-size:16px;font-weight:bold;")
         self._style_rate_card()
 
     def _style_rate_card(self) -> None:
+        """处理styleratecard。"""
         pal = PALETTE[THEME]
         self.rate_card.setStyleSheet(
             f"#chip{{background:{pal['chip_bg']};border:1px solid {pal['border']};"
@@ -727,6 +753,10 @@ class ScreeningPage(BasePage):
 
     # ---- 懒加载：首次可见时启动筛选后台任务 ----
     def showEvent(self, event):
+        """显示事件。
+        
+            参数:
+                event"""
         super().showEvent(event)
         if getattr(self, "_run_lazy", False):
             self._run_lazy = False
@@ -734,6 +764,7 @@ class ScreeningPage(BasePage):
 
     # ---- 运行 ----
     def _run(self):
+        """运行相关对象。"""
         self.run_btn.setEnabled(False)
         self.run_btn.setText("筛选中…")
         self.src_lbl.setText(f"数据源：{self.mdm.source_label}")
@@ -742,6 +773,10 @@ class ScreeningPage(BasePage):
                          self._on_done, self._on_err)
 
     def _on_done(self, payload):
+        """处理ondone。
+        
+            参数:
+                payload"""
         self._results, self._cats = payload
         self._calib_info = self._load_calib()
         self.run_btn.setEnabled(True)
@@ -811,6 +846,7 @@ class ScreeningPage(BasePage):
         syms = [b["symbol"] for b in bad]
 
         def work():
+            """处理work。"""
             collected = []
             for sym in syms:
                 try:
@@ -832,6 +868,10 @@ class ScreeningPage(BasePage):
             return collected
 
         def done(collected):
+            """处理done。
+            
+                参数:
+                    collected"""
             self.collect_btn.setEnabled(True)
             self.collect_btn.setText("补充采集")
             if collected:
@@ -845,6 +885,10 @@ class ScreeningPage(BasePage):
             self._refresh_sample_banner()))
 
     def _on_err(self, msg):
+        """处理onerr。
+        
+            参数:
+                msg"""
         self.run_btn.setEnabled(True)
         self.run_btn.setText("开始筛选")
         self.detail.setPlainText(f"筛选失败：{msg}（请检查行情源是否可取）")
@@ -852,6 +896,11 @@ class ScreeningPage(BasePage):
     # ---- 渲染 ----
     @staticmethod
     def _sort_key(r: dict, key: str):
+        """排序密钥。
+        
+            参数:
+                r: dict
+                key: str"""
         if key == "fund":
             return float(r.get("fund", 0.0))
         if key == "rate":
@@ -866,6 +915,13 @@ class ScreeningPage(BasePage):
 
     @staticmethod
     def _heat_color(avg: float) -> str:
+        """处理heat颜色。
+        
+            参数:
+                avg: float
+        
+            返回:
+                str"""
         if avg >= 68:
             return "#ef4444"      # 红：机会强
         if avg >= 60:
@@ -875,6 +931,7 @@ class ScreeningPage(BasePage):
         return "#64748b"            # 灰：偏弱
 
     def _apply_filter(self):
+        """应用filter。"""
         if not self._results:
             return
         cat = self.cat_cb.currentText()
@@ -887,6 +944,7 @@ class ScreeningPage(BasePage):
         self._auto_select()
 
     def _render(self):
+        """渲染相关对象。"""
         self._style_kpi()
         # KPI
         rec = [r for r in self._results if r["tier"] != "暂观望"]
@@ -901,6 +959,7 @@ class ScreeningPage(BasePage):
         self._apply_filter()
 
     def _render_table(self):
+        """渲染表。"""
         res = self._filtered
         self.tbl.setRowCount(len(res))
         for i, r in enumerate(res):
@@ -961,6 +1020,7 @@ class ScreeningPage(BasePage):
         prepare_table(self.tbl)
 
     def _render_cats(self):
+        """渲染cats。"""
         self.ctbl.setRowCount(len(self._cats))
         for i, c in enumerate(self._cats):
             self._set(self.ctbl, i, 0, c["category"])
@@ -997,12 +1057,14 @@ class ScreeningPage(BasePage):
         self.heat.setText("<div style='line-height:1.9'>" + "".join(cells) + "</div>")
 
     def _auto_select(self):
+        """处理autoselect。"""
         if self._filtered:
             self.tbl.selectRow(0)
         else:
             self.detail.setPlainText("当前筛选条件下无品种。")
 
     def _on_select(self):
+        """处理onselect。"""
         row = self.tbl.currentRow()
         if row < 0 or row >= len(self._filtered):
             return
@@ -1061,6 +1123,14 @@ class ScreeningPage(BasePage):
             pass
 
     def _set(self, table, r, c, text, color=None):
+        """设置相关对象。
+        
+            参数:
+                table
+                r
+                c
+                text
+                color"""
         it = QTableWidgetItem(str(text))
         fg = (QColor(color) if isinstance(color, str) else color) if color is not None \
             else QColor(PALETTE[THEME]["text"])
@@ -1206,6 +1276,10 @@ class ScreeningPage(BasePage):
 
     # ---- 主题 ----
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         super().set_theme(t)
         self._style_kpi()
         self._apply_summary_theme()

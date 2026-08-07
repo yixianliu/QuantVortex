@@ -32,6 +32,13 @@ class DataPage(BasePage):
     progress = pyqtSignal(str)
 
     def __init__(self, mdm, store, config=None, session=None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self._busy = False
         self._build()
@@ -41,6 +48,7 @@ class DataPage(BasePage):
     # UI 构建
     # ------------------------------------------------------------------
     def _build(self) -> None:
+        """构建相关对象。"""
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 14, 18, 14)
         outer.setSpacing(10)
@@ -76,6 +84,14 @@ class DataPage(BasePage):
         outer.addWidget(scroll, 1)
 
     def _card(self, title: str, accent: str = "#3b82f6") -> tuple[QFrame, QVBoxLayout]:
+        """处理card。
+        
+            参数:
+                title: str
+                accent: str
+        
+            返回:
+                tuple[QFrame, QVBoxLayout]"""
         card = QFrame()
         card.setObjectName("toolbar")
         v = QVBoxLayout(card)
@@ -86,6 +102,10 @@ class DataPage(BasePage):
 
     # ---- ① 数据导出 ----
     def _build_export_card(self) -> QFrame:
+        """构建exportcard。
+        
+            返回:
+                QFrame"""
         card, v = self._card("① 数据导出", accent="#3b82f6")
         tip = QLabel("导出数据库中的核心业务数据；CSV 可直接用 Excel 打开。")
         tip.setObjectName("sub")
@@ -121,6 +141,10 @@ class DataPage(BasePage):
 
     # ---- ② 本地备份 ----
     def _build_local_backup_card(self) -> QFrame:
+        """构建localbackupcard。
+        
+            返回:
+                QFrame"""
         card, v = self._card("② 本地备份 / 恢复", accent="#f59e0b")
         tip = QLabel("将整个数据库备份为单个 .db 文件；恢复时自动先生成安全备份，可回退。")
         tip.setObjectName("sub")
@@ -140,6 +164,10 @@ class DataPage(BasePage):
 
     # ---- ③ 远程 MySQL ----
     def _build_mysql_card(self) -> QFrame:
+        """构建mysqlcard。
+        
+            返回:
+                QFrame"""
         card, v = self._card("③ 远程 MySQL 备份 / 迁移", accent="#0ea5e9")
         tip = QLabel("可选功能：将本地数据备份到远程 MySQL 服务器；或把旧版 MySQL "
                      "中的历史数据迁移 / 恢复到本地（覆盖前自动安全备份）。需已安装 pymysql。")
@@ -193,10 +221,18 @@ class DataPage(BasePage):
     # 通用
     # ------------------------------------------------------------------
     def _append_log(self, msg: str) -> None:
+        """处理appendlog。
+        
+            参数:
+                msg: str"""
         ts = dt.datetime.now().strftime("%H:%M:%S")
         self.log_view.append(f"[{ts}] {msg}")
 
     def _set_busy(self, busy: bool) -> None:
+        """设置busy。
+        
+            参数:
+                busy: bool"""
         self._busy = busy
         for b in (self.btn_export, self.btn_export_zip, self.btn_backup_file,
                   self.btn_restore_file, self.btn_my_test, self.btn_my_backup,
@@ -204,12 +240,20 @@ class DataPage(BasePage):
             b.setEnabled(not busy)
 
     def _guard(self) -> bool:
+        """处理guard。
+        
+            返回:
+                bool"""
         if self._busy:
             QMessageBox.information(self, "请稍候", "上一个数据操作尚未完成。")
             return False
         return True
 
     def _mysql_params(self) -> tuple:
+        """处理mysql参数。
+        
+            返回:
+                tuple"""
         p = (self.my_host.text().strip(), int(self.my_port.value()),
              self.my_db.text().strip(), self.my_user.text().strip(),
              self.my_pwd.text())
@@ -225,6 +269,10 @@ class DataPage(BasePage):
         self._set_busy(True)
 
         def on_done(result):
+            """处理ondone。
+            
+                参数:
+                    result"""
             self._set_busy(False)
             self._append_log(done_msg)
             detail = self._format_report(result)
@@ -238,6 +286,10 @@ class DataPage(BasePage):
                 pass
 
         def on_err(err: str):
+            """处理onerr。
+            
+                参数:
+                    err: str"""
             self._set_busy(False)
             self._append_log(f"失败：{err}")
             self._toast(f"❌ 操作失败：{err}", level="error")
@@ -246,6 +298,13 @@ class DataPage(BasePage):
 
     @staticmethod
     def _format_report(result) -> str:
+        """格式化report。
+        
+            参数:
+                result
+        
+            返回:
+                str"""
         if isinstance(result, dict):
             lines = []
             for t, v in result.items():
@@ -265,12 +324,21 @@ class DataPage(BasePage):
     # ① 导出
     # ------------------------------------------------------------------
     def _sel_tables(self) -> list[str]:
+        """处理seltables。
+        
+            返回:
+                list[str]"""
         return [t for t, cb in self._tbl_checks.items() if cb.isChecked()]
 
     def _fmt(self) -> str:
+        """处理fmt。
+        
+            返回:
+                str"""
         return "json" if self.fmt_combo.currentIndex() == 1 else "csv"
 
     def _do_export(self) -> None:
+        """处理doexport。"""
         if not self._guard():
             return
         tables = self._sel_tables()
@@ -287,6 +355,7 @@ class DataPage(BasePage):
                   f"数据导出完成（{out}）")
 
     def _do_export_zip(self) -> None:
+        """处理doexportzip。"""
         if not self._guard():
             return
         out = QFileDialog.getExistingDirectory(self, "选择 ZIP 保存目录")
@@ -302,6 +371,7 @@ class DataPage(BasePage):
     # ② 本地备份 / 恢复
     # ------------------------------------------------------------------
     def _do_backup_file(self) -> None:
+        """处理dobackup文件。"""
         if not self._guard():
             return
         stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -316,6 +386,7 @@ class DataPage(BasePage):
                   f"数据库备份完成（{path}）")
 
     def _do_restore_file(self) -> None:
+        """处理dorestore文件。"""
         if not self._guard():
             return
         path, _ = QFileDialog.getOpenFileName(
@@ -338,11 +409,13 @@ class DataPage(BasePage):
     # ③ 远程 MySQL
     # ------------------------------------------------------------------
     def _do_mysql_test(self) -> None:
+        """处理domysqltest。"""
         if not self._guard():
             return
         host, port, db, user, pwd = self._mysql_params()
 
         def _test():
+            """测试相关对象。"""
             conn = dtf._mysql_connect(host, port, db, user, pwd, create_db=True)
             conn.close()
             return f"连接成功：{host}:{port}/{db}"
@@ -351,6 +424,7 @@ class DataPage(BasePage):
         self._run(_test, "MySQL 连接测试通过")
 
     def _do_mysql_backup(self) -> None:
+        """处理domysqlbackup。"""
         if not self._guard():
             return
         host, port, db, user, pwd = self._mysql_params()
@@ -367,6 +441,7 @@ class DataPage(BasePage):
                   "备份到 MySQL 完成")
 
     def _do_mysql_restore(self) -> None:
+        """处理domysqlrestore。"""
         if not self._guard():
             return
         host, port, db, user, pwd = self._mysql_params()

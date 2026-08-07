@@ -41,6 +41,11 @@ class AgnesLLMClient:
 
     def __init__(self, api_key: str | None = None,
                  timeout: int = 30) -> None:
+        """初始化相关对象。
+        
+            参数:
+                api_key: str | None
+                timeout: int"""
         self.api_key = api_key
         self.base = DEFAULT_BASE
         self.timeout = timeout

@@ -21,7 +21,12 @@ from ..runtime import normalize_data_path
 
 
 class AnalysisStore:
+    """分析结果存储：以 SQLite 持久化预测、离线回放与归因等分析结果，供 UI 与评估读取。"""
     def __init__(self, path: str = "data/quant_analysis.db") -> None:
+        """初始化相关对象。
+        
+            参数:
+                path: str"""
         self.path = normalize_data_path(path, "quant_analysis.db")
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         # 使用归一化后的可写路径打开库，避免打包后从不可写目录启动时
@@ -39,6 +44,10 @@ class AnalysisStore:
     # ----------------------------- 健壮性与恢复 -----------------------------
     @property
     def healthy(self) -> bool:
+        """处理healthy。
+        
+            返回:
+                bool"""
         return getattr(self, "_healthy", True)
 
     def integrity_check(self) -> bool:
@@ -79,6 +88,7 @@ class AnalysisStore:
         self.prune()
 
     def _init_schema(self) -> None:
+        """初始化表结构。"""
         c = self.conn.cursor()
         c.executescript("""
         CREATE TABLE IF NOT EXISTS bars (
@@ -157,6 +167,12 @@ class AnalysisStore:
 
     # ----------------------------- 行情缓存 -----------------------------
     def cache_bars(self, symbol: str, period: str, df) -> None:
+        """处理缓存K线。
+        
+            参数:
+                symbol: str
+                period: str
+                df"""
         rows = [(symbol, period, str(r["datetime"]), float(r["open"]), float(r["high"]),
                  float(r["low"]), float(r["close"]), float(r["volume"]),
                  float(r.get("open_interest", 0) or 0)) for _, r in df.iterrows()]
@@ -166,6 +182,15 @@ class AnalysisStore:
         self.conn.commit()
 
     def load_cached_bars(self, symbol: str, period: str, limit: int = 600) -> list:
+        """加载cachedK线。
+        
+            参数:
+                symbol: str
+                period: str
+                limit: int
+        
+            返回:
+                list"""
         cur = self.conn.execute(
             "SELECT * FROM bars WHERE symbol=? AND period=? ORDER BY datetime DESC LIMIT ?",
             (symbol, period, limit))
@@ -321,6 +346,11 @@ class AnalysisStore:
         return [dict(r) for r in cur.fetchall()]
 
     def mark_sample_collected(self, symbol: str, available: int) -> None:
+        """处理marksamplecollected。
+        
+            参数:
+                symbol: str
+                available: int"""
         self.conn.execute(
             "UPDATE screening_samples SET sufficient=1, available_bars=?, "
             "last_collected_ts=?, status='ok' WHERE symbol=?",
@@ -328,6 +358,14 @@ class AnalysisStore:
         self.conn.commit()
 
     def query_predictions(self, symbol: Optional[str] = None, limit: int = 100) -> list:
+        """处理query预测值。
+        
+            参数:
+                symbol: Optional[str]
+                limit: int
+        
+            返回:
+                list"""
         if symbol:
             cur = self.conn.execute(
                 "SELECT * FROM predictions WHERE symbol=? ORDER BY id DESC LIMIT ?",
@@ -338,23 +376,54 @@ class AnalysisStore:
 
     # ----------------------------- 研判记录 -----------------------------
     def save_analysis(self, ts: str, symbol: str, kind: str, summary: str, detail: str = "") -> None:
+        """保存analysis。
+        
+            参数:
+                ts: str
+                symbol: str
+                kind: str
+                summary: str
+                detail: str"""
         self.conn.execute(
             "INSERT INTO analysis (ts,symbol,kind,summary,detail) VALUES (?,?,?,?,?)",
             (ts, symbol, kind, summary, detail))
         self.conn.commit()
 
     def query_analysis(self, limit: int = 100) -> list:
+        """处理queryanalysis。
+        
+            参数:
+                limit: int
+        
+            返回:
+                list"""
         cur = self.conn.execute("SELECT * FROM analysis ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in cur.fetchall()]
 
     # ----------------------------- 预警 -----------------------------
     def save_alert(self, ts: str, symbol: str, rule: str, level: str, message: str, fired: int = 1) -> None:
+        """保存预警。
+        
+            参数:
+                ts: str
+                symbol: str
+                rule: str
+                level: str
+                message: str
+                fired: int"""
         self.conn.execute(
             "INSERT INTO alerts (ts,symbol,rule,level,message,fired) VALUES (?,?,?,?,?,?)",
             (ts, symbol, rule, level, message, fired))
         self.conn.commit()
 
     def query_alerts(self, limit: int = 200) -> list:
+        """处理query预警。
+        
+            参数:
+                limit: int
+        
+            返回:
+                list"""
         cur = self.conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in cur.fetchall()]
 
@@ -371,6 +440,13 @@ class AnalysisStore:
         return cur.lastrowid
 
     def list_alert_rules(self, enabled_only: bool = False) -> list:
+        """列出预警规则。
+        
+            参数:
+                enabled_only: bool
+        
+            返回:
+                list"""
         sql = "SELECT * FROM alert_rules"
         if enabled_only:
             sql += " WHERE enabled=1"
@@ -379,11 +455,23 @@ class AnalysisStore:
         return [dict(r) for r in cur.fetchall()]
 
     def get_alert_rule(self, rid: int) -> Optional[dict]:
+        """获取预警规则。
+        
+            参数:
+                rid: int
+        
+            返回:
+                Optional[dict]"""
         cur = self.conn.execute("SELECT * FROM alert_rules WHERE id=?", (rid,))
         r = cur.fetchone()
         return dict(r) if r else None
 
     def update_alert_rule(self, rid: int, **fields) -> None:
+        """更新预警规则。
+        
+            参数:
+                rid: int
+                **fields: 可变关键字参数"""
         allowed = {"symbol", "kind", "param", "enabled", "note"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
@@ -397,6 +485,11 @@ class AnalysisStore:
         self.conn.commit()
 
     def set_alert_rule_enabled(self, rid: int, enabled: bool) -> None:
+        """设置预警规则enabled。
+        
+            参数:
+                rid: int
+                enabled: bool"""
         self.update_alert_rule(rid, enabled=enabled)
 
     def touch_rule_fired(self, rid: int, ts: str) -> None:
@@ -406,6 +499,10 @@ class AnalysisStore:
         self.conn.commit()
 
     def remove_alert_rule(self, rid: int) -> None:
+        """移除预警规则。
+        
+            参数:
+                rid: int"""
         self.conn.execute("DELETE FROM alert_rules WHERE id=?", (rid,))
         self.conn.commit()
 
@@ -423,6 +520,14 @@ class AnalysisStore:
         return cur.lastrowid
 
     def query_judgments(self, symbol: Optional[str] = None, limit: int = 300) -> list:
+        """处理queryjudgments。
+        
+            参数:
+                symbol: Optional[str]
+                limit: int
+        
+            返回:
+                list"""
         if symbol:
             cur = self.conn.execute(
                 "SELECT * FROM judgments WHERE symbol=? ORDER BY id DESC LIMIT ?",
@@ -459,15 +564,36 @@ class AnalysisStore:
 
     # ----------------------------- 日志 -----------------------------
     def add_log(self, ts: str, level: str, message: str) -> None:
+        """添加log。
+        
+            参数:
+                ts: str
+                level: str
+                message: str"""
         self.conn.execute("INSERT INTO logs (ts,level,message) VALUES (?,?,?)", (ts, level, message))
         self.conn.commit()
 
     def query_logs(self, limit: int = 300) -> list:
+        """处理querylogs。
+        
+            参数:
+                limit: int
+        
+            返回:
+                list"""
         cur = self.conn.execute("SELECT * FROM logs ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in cur.fetchall()]
 
     # ----------------------------- 导出 -----------------------------
     def export_csv(self, table: str, path: str) -> bool:
+        """导出csv。
+        
+            参数:
+                table: str
+                path: str
+        
+            返回:
+                bool"""
         cols = {"predictions": ["ts","symbol","period","horizon","last_close","expected_return_pct",
                                 "p_up","p_down","risk_score","risk_label","model","regime","verdict","score"],
                 "alerts": ["ts","symbol","rule","level","message","fired"],

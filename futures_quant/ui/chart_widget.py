@@ -45,6 +45,13 @@ def _get_font() -> str:
 
 
 def _to_color(c) -> QColor:
+    """处理to颜色。
+    
+        参数:
+            c
+    
+        返回:
+            QColor"""
     if isinstance(c, QColor):
         return c
     return QColor(c)
@@ -64,6 +71,10 @@ class PriceChart(QWidget):
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                parent: Optional[QWidget]"""
         super().__init__(parent)
         self.setMinimumHeight(240)
         self._series: List[dict] = []
@@ -74,10 +85,18 @@ class PriceChart(QWidget):
 
     # ---------- 公开接口 ----------
     def set_theme(self, theme: str) -> None:
+        """设置主题。
+        
+            参数:
+                theme: str"""
         self._theme = theme
         self.update()
 
     def set_title(self, title: str) -> None:
+        """设置title。
+        
+            参数:
+                title: str"""
         self._title = title
         self.update()
 
@@ -85,6 +104,13 @@ class PriceChart(QWidget):
                  bands: Optional[Sequence[dict]] = None,
                  x_ticks: Optional[List[tuple]] = None,
                  title: str = "") -> None:
+        """设置数据。
+        
+            参数:
+                series: Optional[Sequence[dict]]
+                bands: Optional[Sequence[dict]]
+                x_ticks: Optional[List[tuple]]
+                title: str"""
         self._series = [dict(s) for s in (series or [])]
         self._bands = [dict(b) for b in (bands or [])]
         self._x_ticks = x_ticks
@@ -92,6 +118,7 @@ class PriceChart(QWidget):
         self.update()
 
     def clear(self) -> None:
+        """清空相关对象。"""
         self._series = []
         self._bands = []
         self._x_ticks = None
@@ -99,6 +126,10 @@ class PriceChart(QWidget):
 
     # ---------- 内部 ----------
     def _palette(self) -> dict:
+        """处理palette。
+        
+            返回:
+                dict"""
         if self._theme == "dark":
             return dict(grid=QColor(42, 46, 58), text=QColor(139, 147, 167),
                         axis=QColor(58, 63, 78))
@@ -106,6 +137,7 @@ class PriceChart(QWidget):
                     axis=QColor(209, 213, 219))
 
     def _y_range(self):
+        """处理y区间。"""
         vals = []
         for s in self._series:
             for v in s.get("y", []):
@@ -128,6 +160,10 @@ class PriceChart(QWidget):
         return lo - pad, hi + pad
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        """绘制事件。
+        
+            参数:
+                event"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pal = self._palette()
@@ -157,9 +193,23 @@ class PriceChart(QWidget):
         n_max = max(len(s.get("y", [])) for s in self._series)
 
         def mx(i: int) -> float:
+            """处理mx。
+            
+                参数:
+                    i: int
+            
+                返回:
+                    float"""
             return x0 + (i / (n_max - 1)) * (x1 - x0) if n_max > 1 else (x0 + x1) / 2
 
         def my(v: float) -> float:
+            """处理my。
+            
+                参数:
+                    v: float
+            
+                返回:
+                    float"""
             return y1 - (v - ymin) / span * (y1 - y0)
 
         # 横向网格 + Y 轴标签
@@ -254,6 +304,10 @@ class ReliabilityChart(QWidget):
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                parent: Optional[QWidget]"""
         super().__init__(parent)
         self.setMinimumHeight(220)
         self._bins: list = []          # [(center, smoothed, n, lo, hi), ...]
@@ -263,12 +317,23 @@ class ReliabilityChart(QWidget):
         self._theme = "dark"
 
     def set_theme(self, theme: str) -> None:
+        """设置主题。
+        
+            参数:
+                theme: str"""
         self._theme = theme
         self.update()
 
     def set_data(self, bins=None, status: str = "", coverage: int = 0,
                  mark=None) -> None:
         # 归一化：兼容旧 3 元组 (center, smoothed, n) 与新 5 元组 (+lo, +hi)
+        """设置数据。
+        
+            参数:
+                bins
+                status: str
+                coverage: int
+                mark"""
         norm = []
         for b in (bins or []):
             t = tuple(b)
@@ -283,6 +348,10 @@ class ReliabilityChart(QWidget):
         self.update()
 
     def _palette(self) -> dict:
+        """处理palette。
+        
+            返回:
+                dict"""
         if self._theme == "dark":
             return dict(grid=QColor(42, 46, 58), text=QColor(139, 147, 167),
                         axis=QColor(58, 63, 78), bg=QColor(15, 17, 22))
@@ -290,6 +359,10 @@ class ReliabilityChart(QWidget):
                     axis=QColor(203, 213, 225), bg=QColor(255, 255, 255))
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        """绘制事件。
+        
+            参数:
+                event"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pal = self._palette()
@@ -302,9 +375,17 @@ class ReliabilityChart(QWidget):
         painter.fillRect(self.rect(), pal["bg"])
 
         def mx(v):
+            """处理mx。
+            
+                参数:
+                    v"""
             return padL + float(v) * plotW
 
         def my(v):
+            """处理my。
+            
+                参数:
+                    v"""
             return padT + (1.0 - float(v)) * plotH
 
         # 网格 + 刻度
@@ -524,6 +605,10 @@ class KLineChart(QWidget):
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                parent: Optional[QWidget]"""
         super().__init__(parent)
         self.setMinimumHeight(300)
         self._bars: List[dict] = []
@@ -542,11 +627,20 @@ class KLineChart(QWidget):
 
     # ---------- 公开接口 ----------
     def set_theme(self, theme: str) -> None:
+        """设置主题。
+        
+            参数:
+                theme: str"""
         self._theme = theme
         self.update()
 
     def set_data(self, bars: Sequence[dict],
                  ma: Optional[dict] = None) -> None:
+        """设置数据。
+        
+            参数:
+                bars: Sequence[dict]
+                ma: Optional[dict]"""
         self._bars = [dict(b) for b in bars]
         self._ma = {k: list(v) for k, v in (ma or {}).items()}
         self._max_bars = min(max(self._max_bars, 20), max(20, len(self._bars)))
@@ -562,6 +656,14 @@ class KLineChart(QWidget):
 
     @staticmethod
     def _rolling_mean(seq: Sequence[float], n: int) -> list:
+        """处理rollingmean。
+        
+            参数:
+                seq: Sequence[float]
+                n: int
+        
+            返回:
+                list"""
         out = []
         for i in range(len(seq)):
             if i < n - 1:
@@ -571,10 +673,18 @@ class KLineChart(QWidget):
         return out
 
     def set_ma(self, ma: dict) -> None:
+        """设置均线。
+        
+            参数:
+                ma: dict"""
         self._ma = {k: list(v) for k, v in (ma or {}).items()}
         self.update()
 
     def set_show_volume(self, show: bool) -> None:
+        """设置show成交量。
+        
+            参数:
+                show: bool"""
         self._show_volume = show
         self.update()
 
@@ -609,6 +719,7 @@ class KLineChart(QWidget):
         self.update()
 
     def clear(self) -> None:
+        """清空相关对象。"""
         self._bars = []
         self._ma = {}
         self._hover = -1
@@ -616,6 +727,10 @@ class KLineChart(QWidget):
 
     # ---------- 调色板 ----------
     def _palette(self) -> dict:
+        """处理palette。
+        
+            返回:
+                dict"""
         from .widgets import pal
         p = pal()
         if self._theme == "dark":
@@ -638,6 +753,13 @@ class KLineChart(QWidget):
 
     @staticmethod
     def _fmt_price(v: float) -> str:
+        """处理fmt价格。
+        
+            参数:
+                v: float
+        
+            返回:
+                str"""
         if v is None:
             return ""
         a = abs(v)
@@ -646,6 +768,13 @@ class KLineChart(QWidget):
 
     @staticmethod
     def _fmt_time(s: str) -> str:
+        """处理fmt时间。
+        
+            参数:
+                s: str
+        
+            返回:
+                str"""
         s = str(s).strip()
         # 日线通常带 00:00:00，不显示无意义的时间
         if len(s) >= 19 and s[11:19] == "00:00:00":
@@ -656,6 +785,10 @@ class KLineChart(QWidget):
 
     # ---------- 绘制 ----------
     def paintEvent(self, event) -> None:  # noqa: N802
+        """绘制事件。
+        
+            参数:
+                event"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pal = self._palette()
@@ -720,12 +853,33 @@ class KLineChart(QWidget):
         vmax = vmax * 1.1 or 1.0
 
         def px(gi: int) -> float:
+            """处理px。
+            
+                参数:
+                    gi: int
+            
+                返回:
+                    float"""
             return padL + (gi - start + 0.5) / total_n * plotW
 
         def py(v: float) -> float:
+            """处理py。
+            
+                参数:
+                    v: float
+            
+                返回:
+                    float"""
             return priceBot - (v - pmin) / (pmax - pmin) * priceH
 
         def vy(v: float) -> float:
+            """处理vy。
+            
+                参数:
+                    v: float
+            
+                返回:
+                    float"""
             return volBot - (v / vmax) * (volBot - volTop)
 
         # ---- 绘图区底色（细腻竖向渐变）+ 细边框 ----
@@ -1015,6 +1169,27 @@ class KLineChart(QWidget):
     def _draw_crosshair(self, painter, pal, gi, px, py, vy,
                         padL, priceTop, plotW, priceBot, volBot,
                         pmin, pmax, priceH, total, start, total_n, body_w) -> None:
+        """绘制crosshair。
+        
+            参数:
+                painter
+                pal
+                gi
+                px
+                py
+                vy
+                padL
+                priceTop
+                plotW
+                priceBot
+                volBot
+                pmin
+                pmax
+                priceH
+                total
+                start
+                total_n
+                body_w"""
         b = self._bars[gi]
         x = px(gi)
         # 高亮当前蜡烛（更柔和的竖向高亮带）
@@ -1091,6 +1266,10 @@ class KLineChart(QWidget):
 
     # ---------- 交互 ----------
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        """处理mousemove事件。
+        
+            参数:
+                event"""
         if not self._bars:
             return
         padL, padR = 8, 64
@@ -1109,11 +1288,19 @@ class KLineChart(QWidget):
             self.update()
 
     def leaveEvent(self, event) -> None:  # noqa: N802
+        """处理leave事件。
+        
+            参数:
+                event"""
         if self._hover != -1:
             self._hover = -1
             self.update()
 
     def wheelEvent(self, event) -> None:  # noqa: N802
+        """处理wheel事件。
+        
+            参数:
+                event"""
         if not self._bars:
             return
         delta = event.angleDelta().y()

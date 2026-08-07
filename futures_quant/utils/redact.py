@@ -136,6 +136,13 @@ class RedactingFilter(logging.Filter):
     """在记录进入 handler 前脱敏消息与参数。"""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """过滤相关对象。
+        
+            参数:
+                record: logging.LogRecord
+        
+            返回:
+                bool"""
         try:
             if record.args:
                 # 提前把参数渲染进消息，避免 args 里的密钥绕过脱敏
@@ -157,6 +164,13 @@ class RedactingFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        """格式化相关对象。
+        
+            参数:
+                record: logging.LogRecord
+        
+            返回:
+                str"""
         return redact(super().format(record))
 
 

@@ -46,7 +46,11 @@ NAV = [
 
 
 class MainWindow(QMainWindow):
+    """主窗口：承载各功能页面与菜单，负责页面切换、会话保活与全局异常处理。
+    
+        继承: QMainWindow"""
     def __init__(self) -> None:
+        """初始化相关对象。"""
         super().__init__()
         # ---- 持久化：配置 + 运行时状态 ----
         self.config = ConfigManager()
@@ -96,6 +100,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
+        """构建相关对象。"""
         central = QWidget()
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
@@ -167,6 +172,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _build_menu(self) -> None:
+        """构建菜单。"""
         mb = self.menuBar()
         mb.setObjectName("menubar")
         # 视图
@@ -196,6 +202,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _setup_tray(self) -> None:
+        """初始化tray。"""
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self._tray = None
             return
@@ -224,6 +231,7 @@ class MainWindow(QMainWindow):
         self._status_log.setText(f"◌ {msg}")
 
     def _about(self) -> None:
+        """处理about。"""
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.information(
             self, "关于",
@@ -279,6 +287,10 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _switch(self, idx: int) -> None:
+        """处理switch。
+        
+            参数:
+                idx: int"""
         self.stack.setCurrentIndex(idx)
         self.session.set("last_page", idx)
         self._schedule_session_save()
@@ -290,6 +302,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _restore_geometry(self) -> None:
+        """处理restoregeometry。"""
         w = self.session.get("window", {})
         self._want_max = bool(w.get("maximized", True))
         x, y = w.get("x"), w.get("y")
@@ -300,10 +313,12 @@ class MainWindow(QMainWindow):
             self.resize(ww, hh)
 
     def _schedule_session_save(self) -> None:
+        """处理schedule会话save。"""
         if not self._session_timer.isActive():
             self._session_timer.start(600)
 
     def _save_geometry(self) -> None:
+        """保存geometry。"""
         if self.isMaximized():
             self.session.set("window", {"maximized": True,
                                         "w": self.width(), "h": self.height()})
@@ -315,14 +330,26 @@ class MainWindow(QMainWindow):
         self._schedule_session_save()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
+        """调整大小事件。
+        
+            参数:
+                event"""
         super().resizeEvent(event)
         self._save_geometry()
 
     def moveEvent(self, event) -> None:  # noqa: N802
+        """处理move事件。
+        
+            参数:
+                event"""
         super().moveEvent(event)
         self._save_geometry()
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        """关闭事件。
+        
+            参数:
+                event"""
         self.session.flush()
         try:
             self.store.close()
@@ -331,6 +358,7 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _reconnect(self) -> None:
+        """处理reconnect。"""
         self.mdm.connect()
         self._update_status()
 
@@ -343,6 +371,7 @@ class MainWindow(QMainWindow):
         self._connect_deferred.deleteLater()
 
     def _update_status(self) -> None:
+        """更新状态。"""
         if self.mdm.status.startswith("已连接"):
             self._status_conn.setText("● 已连接")
             self._status_conn.setStyleSheet(f"color:{pal()['up']};")
@@ -352,16 +381,19 @@ class MainWindow(QMainWindow):
         self._status_src.setText(f"数据源：{self.mdm.source_label}")
 
     def _tick_clock(self) -> None:
+        """处理Tick 数据clock。"""
         self._status_clock.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
 
     # ------------------------------------------------------------------
     def _toggle_theme(self) -> None:
+        """切换主题。"""
         self.theme = "light" if self.theme == "dark" else "dark"
         self.config.set("ui.theme", self.theme)
         self.config.save()
         self._apply_theme()
 
     def _apply_theme(self) -> None:
+        """应用主题。"""
         from . import widgets as W
         W.THEME = self.theme
         qss = DARK_QSS if self.theme == "dark" else LIGHT_QSS
@@ -573,6 +605,7 @@ QToolTip { background:#ffffff; color:#1f2937; border:1px solid #d1d5db; border-r
 
 
 def main() -> None:
+    """处理main。"""
     import os
     import sys
     from PyQt6.QtGui import QFont, QFontDatabase
@@ -595,6 +628,12 @@ def main() -> None:
 
     # ---- 全局崩溃兜底：异常时尽量落盘状态，并写入崩溃日志 ----
     def _excepthook(etype, exc, tb):  # noqa: ANN001
+        """处理excepthook。
+        
+            参数:
+                etype
+                exc
+                tb"""
         try:
             win.session.flush()
             win.store.add_log(

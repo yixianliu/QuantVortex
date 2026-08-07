@@ -15,6 +15,7 @@ from ..core.types import Bar, Direction, Offset, OrderType
 
 
 class StrategyBase:
+    """策略抽象基类：定义 on_bar 信号回调与持仓辅助方法，子类实现具体交易逻辑。"""
     name: str = "base"
     # 默认参数，子类覆盖
     default_params: dict = {}
@@ -24,6 +25,11 @@ class StrategyBase:
     HISTORY_LEN: int = 500
 
     def __init__(self, symbol: str, params: Optional[dict] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                symbol: str
+                params: Optional[dict]"""
         self.symbol = symbol
         self.params = dict(self.default_params)
         if params:
@@ -47,6 +53,14 @@ class StrategyBase:
         order_type: OrderType = OrderType.MARKET,
         limit_price: Optional[float] = None,
     ) -> None:
+        """发送订单。
+        
+            参数:
+                direction: Direction
+                offset: Offset
+                quantity: int
+                order_type: OrderType
+                limit_price: Optional[float]"""
         if self.engine is None:
             raise RuntimeError("策略未注册到引擎，无法下单。")
         self.engine.send_order(
@@ -67,6 +81,10 @@ class StrategyBase:
 
     # ---------- 子类实现 ----------
     def on_bar(self, bar: Bar) -> None:
+        """处理onK线。
+        
+            参数:
+                bar: Bar"""
         raise NotImplementedError
 
     # ---------- 指标历史维护 ----------
@@ -79,6 +97,10 @@ class StrategyBase:
         return int(self.HISTORY_LEN)
 
     def _push(self, bar: Bar) -> None:
+        """处理push。
+        
+            参数:
+                bar: Bar"""
         self._closes.append(bar.close)
         self._highs.append(bar.high)
         self._lows.append(bar.low)
@@ -92,15 +114,28 @@ class StrategyBase:
             self._bars.popleft()
 
     def closes(self) -> pd.Series:
+        """处理closes。
+        
+            返回:
+                pd.Series"""
         return pd.Series(self._closes)
 
     def highs(self) -> pd.Series:
+        """处理highs。
+        
+            返回:
+                pd.Series"""
         return pd.Series(self._highs)
 
     def lows(self) -> pd.Series:
+        """处理lows。
+        
+            返回:
+                pd.Series"""
         return pd.Series(self._lows)
 
     def reset(self) -> None:
+        """重置相关对象。"""
         self._closes.clear()
         self._highs.clear()
         self._lows.clear()

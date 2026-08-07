@@ -46,6 +46,10 @@ _COLS = ["datetime", "open", "high", "low", "close", "volume", "open_interest"]
 
 
 def _project_root() -> str:
+    """处理projectroot。
+    
+        返回:
+            str"""
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -65,11 +69,19 @@ class CTPCredentials:
 
     @property
     def complete(self) -> bool:
+        """处理complete。
+        
+            返回:
+                bool"""
         return bool(self.md_front and self.td_front and self.broker_id
                     and self.user_id and self.password)
 
     @property
     def label(self) -> str:
+        """处理标签。
+        
+            返回:
+                str"""
         return "SimNow 仿真" if self.mode == "simnow" else "期货公司实盘"
 
     @classmethod
@@ -94,6 +106,13 @@ class CTPCredentials:
 
     @classmethod
     def _from_dict(cls, d: dict) -> "CTPCredentials":
+        """处理fromdict。
+        
+            参数:
+                d: dict
+        
+            返回:
+                'CTPCredentials'"""
         acct = d.get("account", {}) or {}
         if (d.get("mode") or "simnow") == "simnow":
             f = d.get("simnow", {}) or {}
@@ -130,6 +149,10 @@ class CTPFeed(DataFeed):
     """
 
     def __init__(self, creds: Optional[CTPCredentials] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                creds: Optional[CTPCredentials]"""
         self.creds = creds or CTPCredentials.load()
         self.connected = False
         self._gw = None                     # 底层 vnpy/ctpbee 网关实例
@@ -143,6 +166,10 @@ class CTPFeed(DataFeed):
 
     # ------------------------- 库探测 -------------------------
     def _detect_lib(self) -> Optional[str]:
+        """处理detectlib。
+        
+            返回:
+                Optional[str]"""
         for name in ("vnpy_ctp", "ctpbee"):
             try:
                 __import__(name)
@@ -153,6 +180,10 @@ class CTPFeed(DataFeed):
 
     # ------------------------- 状态回调 -------------------------
     def _set_status(self, text: str) -> None:
+        """设置状态。
+        
+            参数:
+                text: str"""
         if self.on_status:
             try:
                 self.on_status(text)
@@ -274,6 +305,10 @@ class CTPFeed(DataFeed):
 
     # ------------------------- 行情回报 → 系统 Bar -------------------------
     def _on_vnpy_tick(self, event) -> None:
+        """处理onvnpyTick 数据。
+        
+            参数:
+                event"""
         tick = event.data
         # vnpy tick → 系统 Bar 字典（此处按 tick 累积，真实部署应聚合为分钟 Bar）
         bar = {
@@ -287,6 +322,10 @@ class CTPFeed(DataFeed):
             self.on_bar(bar)
 
     def _on_ctpbee_tick(self, tick) -> None:
+        """处理onctpbeeTick 数据。
+        
+            参数:
+                tick"""
         bar = {
             "datetime": pd.to_datetime(getattr(tick, "datetime", None) or pd.Timestamp.now()),
             "open": float(getattr(tick, "open", 0) or 0),
@@ -319,6 +358,7 @@ class CTPFeed(DataFeed):
                 pass
 
     def disconnect(self) -> None:
+        """断开连接相关对象。"""
         try:
             # ★ 通知 ctpbee 停止 refresh_query 线程
             if hasattr(self, "_ctpbee_core") and self._ctpbee_core is not None:
@@ -351,13 +391,37 @@ class CTPFeed(DataFeed):
     # ------------------------- DataFeed 接口 -------------------------
     def get_history(self, symbol, start, end, period="1m", limit=0) -> pd.DataFrame:
         # 真实连接后应由 CTP 历史接口或本地缓存读取；当前回退合成（明确标注非实盘）
+        """获取history。
+        
+            参数:
+                symbol
+                start
+                end
+                period
+                limit
+        
+            返回:
+                pd.DataFrame"""
         return self._fallback.get_history(symbol, start, end, period, limit)
 
     def get_recent(self, symbol, period="1m", limit=600) -> pd.DataFrame:
+        """获取recent。
+        
+            参数:
+                symbol
+                period
+                limit
+        
+            返回:
+                pd.DataFrame"""
         return self._fallback.get_recent(symbol, period, limit)
 
     @property
     def source_label(self) -> str:
+        """处理source标签。
+        
+            返回:
+                str"""
         if self.connected:
             return f"CTP{'(SimNow)' if self.creds.mode == 'simnow' else '(实盘)'}·已连接"
         return "CTP未连接·回退合成"

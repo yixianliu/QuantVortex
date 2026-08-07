@@ -33,6 +33,14 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def _get_path(d: dict, path: str) -> tuple[Optional[dict], str]:
+    """获取路径。
+    
+        参数:
+            d: dict
+            path: str
+    
+        返回:
+            tuple[Optional[dict], str]"""
     node = d
     parts = path.split(".")
     for p in parts[:-1]:
@@ -61,12 +69,22 @@ class AtomicJSON:
 
     def __init__(self, path: str, default: Optional[dict] = None,
                  version: int = 1) -> None:
+        """初始化相关对象。
+        
+            参数:
+                path: str
+                default: Optional[dict]
+                version: int"""
         self.path = path
         self.version = version
         self._default = default or {}
         self.data = self._load()
 
     def _load(self) -> dict:
+        """加载相关对象。
+        
+            返回:
+                dict"""
         data = safe_load_json(self.path, None)
         if data is None:
             # 主文件损坏/缺失 → 尝试备份
@@ -80,20 +98,41 @@ class AtomicJSON:
 
     # ---------- 读写 ----------
     def get(self, path: str, default: Any = None) -> Any:
+        """获取相关对象。
+        
+            参数:
+                path: str
+                default: Any
+        
+            返回:
+                Any"""
         node, key = _get_path(self.data, path)
         if key in node and node[key] is not None:
             return node[key]
         return default
 
     def set(self, path: str, value: Any) -> None:
+        """设置相关对象。
+        
+            参数:
+                path: str
+                value: Any"""
         node, key = _get_path(self.data, path)
         node[key] = value
 
     def update(self, mapping: dict) -> None:
+        """更新相关对象。
+        
+            参数:
+                mapping: dict"""
         for k, v in mapping.items():
             self.set(k, v)
 
     def as_dict(self) -> dict:
+        """处理asdict。
+        
+            返回:
+                dict"""
         return {k: v for k, v in self.data.items() if k != "__version__"}
 
     # ---------- 落盘 ----------
@@ -125,4 +164,8 @@ class AtomicJSON:
             return False
 
     def exists(self) -> bool:
+        """处理exists。
+        
+            返回:
+                bool"""
         return os.path.exists(self.path)

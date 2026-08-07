@@ -46,11 +46,26 @@ COOLDOWN_SECONDS = 24 * 3600
 
 
 def rule_label(kind: str) -> str:
+    """处理规则标签。
+    
+        参数:
+            kind: str
+    
+        返回:
+            str"""
     return RULE_KINDS.get(kind, {}).get("label", kind)
 
 
 # ----------------------------- 指标小工具 -----------------------------
 def _rsi(close: np.ndarray, n: int = 14) -> float:
+    """处理RSI。
+    
+        参数:
+            close: np.ndarray
+            n: int
+    
+        返回:
+            float"""
     if len(close) < n + 1:
         return float("nan")
     diffs = np.diff(close.astype(float))

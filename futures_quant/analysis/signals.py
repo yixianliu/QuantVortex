@@ -14,6 +14,13 @@ import pandas as pd
 
 
 def _safe(v) -> float:
+    """处理safe。
+    
+        参数:
+            v
+    
+        返回:
+            float"""
     try:
         f = float(v)
         return f if np.isfinite(f) else 0.0
@@ -119,6 +126,11 @@ def divergence(df: pd.DataFrame, lookback: int = 60) -> dict:
 
     def _last_extreme(series, kind):
         # 返回最近一个局部极值索引与值
+        """处理lastextreme。
+        
+            参数:
+                series
+                kind"""
         s = series.values
         n = len(s)
         for i in range(n - 3, 2, -1):

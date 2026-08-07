@@ -253,6 +253,10 @@ def _cache_read() -> dict | None:
 
 
 def _cache_fresh() -> bool:
+    """处理缓存fresh。
+    
+        返回:
+            bool"""
     data = _cache_read()
     if not data:
         return False
@@ -260,6 +264,10 @@ def _cache_fresh() -> bool:
 
 
 def _cache_put(items: list) -> None:
+    """处理缓存put。
+    
+        参数:
+            items: list"""
     try:
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump({"ts": time.time(), "items": items}, f,
@@ -666,6 +674,13 @@ def _get(url: str, timeout: int = 10, referer: str = None, retries: int = 3):
 
 
 def _clean_html(s: str) -> str:
+    """处理cleanhtml。
+    
+        参数:
+            s: str
+    
+        返回:
+            str"""
     s = re.sub(r'<[^>]+>', '', s or '')
     return html.unescape(s).strip()
 
@@ -887,6 +902,13 @@ _CAT_DYNAMICS = ["收盘", "开盘", "主力", "持仓", "成交", "涨停", "�
 
 
 def _classify_category(text: str) -> str:
+    """处理classifycategory。
+    
+        参数:
+            text: str
+    
+        返回:
+            str"""
     t = text or ""
     if any(k in t for k in _CAT_POLICY):
         return "政策资讯"
@@ -1034,6 +1056,13 @@ SOURCE_CREDIBILITY = {
 
 
 def _source_cred(src: str) -> float:
+    """处理sourcecred。
+    
+        参数:
+            src: str
+    
+        返回:
+            float"""
     return SOURCE_CREDIBILITY.get(src, 0.7)
 
 
@@ -1772,6 +1801,10 @@ def _concurrent_fetch_all(cls_kwargs={}, em_kwargs={}, hx_kwargs={},
     
     # 按时间排序（有ctime的优先，无的按标题hash）
     def _sort_key(item):
+        """排序密钥。
+        
+            参数:
+                item"""
         ctime = item.get("ctime", 0)
         try:
             return float(ctime) if ctime else 0.0

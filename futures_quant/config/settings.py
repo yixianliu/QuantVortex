@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, asdict
 
 @dataclass
 class AccountConfig:
+    """账户配置：保证金率、手续费、杠杆等账户级回测参数。"""
     initial_capital: float = 1_000_000.0
     margin_rate: float = 0.10        # 保证金率（= 1 / leverage）
     leverage: float = 10.0           # 杠杆倍数（与 margin_rate 互为推导，优先用 leverage）
@@ -22,6 +23,7 @@ class AccountConfig:
 
 @dataclass
 class RiskConfig:
+    """风险配置：单笔/总仓位上限、最大回撤等风控参数。"""
     max_single_loss: float = 5_000.0        # 单笔最大亏损
     max_daily_loss: float = 30_000.0        # 单日最大亏损
     max_drawdown: float = 0.20              # 总资金最大回撤阈值
@@ -33,6 +35,7 @@ class RiskConfig:
 
 @dataclass
 class BacktestConfig:
+    """回测配置。"""
     slippage: float = 1.0                   # 滑点（最小变动价位个数）
     fill_mode: str = "next_open"            # 回测撮合：next_open（防未来函数）
     start_cash: float = 1_000_000.0
@@ -40,11 +43,13 @@ class BacktestConfig:
 
 @dataclass
 class UIConfig:
+    """UI 配置：主题、默认周期等界面偏好。"""
     theme: str = "dark"                      # dark / light
 
 
 @dataclass
 class StorageConfig:
+    """存储配置：选择存储后端（SQLite / Postgres）及连接参数。"""
     backend: str = "sqlite"                 # sqlite（默认）| postgres
     sqlite_path: str = "data/futures_quant.db"
     # 生产 / 时序后端连接参数（backend=postgres 时生效）
@@ -58,6 +63,7 @@ class StorageConfig:
 
 @dataclass
 class Config:
+    """配置相关对象。"""
     account: AccountConfig = field(default_factory=AccountConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
@@ -66,10 +72,21 @@ class Config:
     data_path: str = "data"
 
     def to_dict(self) -> dict:
+        """处理todict。
+        
+            返回:
+                dict"""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
+        """处理fromdict。
+        
+            参数:
+                d: dict
+        
+            返回:
+                'Config'"""
         return cls(
             account=AccountConfig(**d.get("account", {})),
             risk=RiskConfig(**d.get("risk", {})),
@@ -80,11 +97,22 @@ class Config:
         )
 
     def save(self, path: str) -> None:
+        """保存相关对象。
+        
+            参数:
+                path: str"""
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
 
     @classmethod
     def load(cls, path: str) -> "Config":
+        """加载相关对象。
+        
+            参数:
+                path: str
+        
+            返回:
+                'Config'"""
         if not os.path.exists(path):
             cfg = cls()
             cfg.save(path)

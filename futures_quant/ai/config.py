@@ -51,6 +51,10 @@ class AIConfig:
     """
 
     def __init__(self, config: Optional[ConfigManager] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                config: Optional[ConfigManager]"""
         self._config = config
         self._api_key: str | None = None
         self._callbacks: list[callable] = []

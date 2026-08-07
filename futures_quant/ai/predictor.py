@@ -70,6 +70,7 @@ class FuturesPredictor:
     STEP_DAMPING = 0.92
 
     def __init__(self) -> None:
+        """初始化相关对象。"""
         self.lstm: LSTM | None = None
         self._ridge: _Ridge | None = None
         self.use_lstm = True
@@ -91,6 +92,10 @@ class FuturesPredictor:
 
     # ----------------------------- 特征 -----------------------------
     def _features(self, df: pd.DataFrame):
+        """处理特征。
+        
+            参数:
+                df: pd.DataFrame"""
         ind, F, names = build_features(df, self.extended_features)
         self._feat_names = names
         return ind, F
@@ -135,6 +140,13 @@ class FuturesPredictor:
             self._ridge.fit(Xs.reshape(len(Xs), -1), Ys)
 
     def _batch_pred(self, Xs: np.ndarray) -> np.ndarray:
+        """处理batchpred。
+        
+            参数:
+                Xs: np.ndarray
+        
+            返回:
+                np.ndarray"""
         if self.use_lstm and self.lstm is not None:
             return np.array([self.lstm.predict_last(Xs[i]) for i in range(len(Xs))])
         if self._ridge is not None:
@@ -186,6 +198,11 @@ class FuturesPredictor:
         has_2way = (c2 >= 20 and (m - c2 - embargo) >= 8)
 
         def _seg(a, b=None):
+            """处理seg。
+            
+                参数:
+                    a
+                    b"""
             X = Xn[a:b] if b is not None else Xn[a:]
             Y = Ys[a:b] if b is not None else Ys[a:]
             return X, Y
@@ -251,6 +268,13 @@ class FuturesPredictor:
                 "validated": self.validated}
 
     def _pred_one(self, Xseq: np.ndarray) -> float:
+        """处理predone。
+        
+            参数:
+                Xseq: np.ndarray
+        
+            返回:
+                float"""
         if self.use_lstm and self.lstm is not None:
             return float(self.lstm.predict_last(Xseq))
         if self._ridge is not None:
@@ -460,6 +484,13 @@ class FuturesPredictor:
         return v if math.isfinite(v) else default
 
     def _risk_score(self, ind: pd.DataFrame) -> dict:
+        """处理风险评分。
+        
+            参数:
+                ind: pd.DataFrame
+        
+            返回:
+                dict"""
         last = ind.iloc[-1]
         close = self._safe(last["close"])
         atr = self._safe(ind["ATR"].iloc[-1]) if "ATR" in ind else 0.0
@@ -483,6 +514,16 @@ class FuturesPredictor:
         return {"score": score, "label": label, "atr_pct": round(atr_pct * 100, 2)}
 
     def _long_short(self, forecast_price, last_close, res_score, risk_score) -> dict:
+        """处理longshort。
+        
+            参数:
+                forecast_price
+                last_close
+                res_score
+                risk_score
+        
+            返回:
+                dict"""
         last_close = self._safe(last_close)
         forecast_price = self._safe(forecast_price)
         exp = (forecast_price / last_close - 1) if last_close > 0 else 0.0
@@ -544,6 +585,14 @@ class FuturesPredictor:
         return importances
 
     def _regime(self, ind: pd.DataFrame, tr: dict) -> str:
+        """处理regime。
+        
+            参数:
+                ind: pd.DataFrame
+                tr: dict
+        
+            返回:
+                str"""
         last = ind.iloc[-1]
         adx = self._safe(last["ADX"]) if "ADX" in ind else 0.0
         # 布林带宽（BOLL_MID 可能为 0，需防除零）

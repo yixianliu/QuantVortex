@@ -18,6 +18,9 @@ from .base import StrategyBase
 
 
 class Martingale(StrategyBase):
+    """马丁格尔策略：亏损后加倍仓位以摊平成本，需配合严格止损。
+    
+        继承: StrategyBase"""
     name = "马丁策略"
     default_params = {
         "base_qty": 1,
@@ -31,15 +34,28 @@ class Martingale(StrategyBase):
     }
 
     def __init__(self, symbol, params=None):
+        """初始化相关对象。
+        
+            参数:
+                symbol
+                params"""
         super().__init__(symbol, params)
         self._layer = 0
         self._entry = None
         self._side = 0  # 1 多 / 0 空仓
 
     def _window_size(self) -> int:
+        """处理窗口大小。
+        
+            返回:
+                int"""
         return int(self.params["rsi_period"] + 5)
 
     def on_bar(self, bar: Bar) -> None:
+        """处理onK线。
+        
+            参数:
+                bar: Bar"""
         self._push(bar)
         p = self.params
         if len(self._closes) < p["rsi_period"] + 1:

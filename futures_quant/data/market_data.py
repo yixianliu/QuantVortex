@@ -132,6 +132,11 @@ class MarketDataManager(QObject):
     status_changed = pyqtSignal(str)      # 连接状态文本
 
     def __init__(self, feed=None, source: str | None = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                feed
+                source: str | None"""
         super().__init__()
         cfg = _load_config()
         data_path = cfg.get("data_path", "data")
@@ -162,6 +167,10 @@ class MarketDataManager(QObject):
 
     # ------------------------------------------------------------------
     def _default_symbol(self) -> str:
+        """处理default合约代码。
+        
+            返回:
+                str"""
         return default_symbol()
 
     def _period_real(self, period: str) -> bool:
@@ -243,12 +252,14 @@ class MarketDataManager(QObject):
         self.quote_updated.emit(sym)
 
     def _start_reconnect_watch(self) -> None:
+        """启动reconnectwatch。"""
         if not hasattr(self, "_reconnect_timer"):
             self._reconnect_timer = QTimer()
             self._reconnect_timer.timeout.connect(self._reconnect_tick)
         self._reconnect_timer.start(30000)   # 每 30s 检查 CTP 断线并重连
 
     def _reconnect_tick(self) -> None:
+        """处理reconnectTick 数据。"""
         if self.source != "ctp" or not hasattr(self, "_reconnect_timer"):
             if hasattr(self, "_reconnect_timer"):
                 self._reconnect_timer.stop()
@@ -258,6 +269,7 @@ class MarketDataManager(QObject):
             self.is_real = self.feed.connected
 
     def disconnect(self) -> None:
+        """断开连接相关对象。"""
         self._timer.stop()
         if hasattr(self, "_reconnect_timer"):
             self._reconnect_timer.stop()
@@ -272,10 +284,22 @@ class MarketDataManager(QObject):
 
     @property
     def source_label(self) -> str:
+        """处理source标签。
+        
+            返回:
+                str"""
         return getattr(self.feed, "source_label", "合成行情(模拟)")
 
     # ------------------------------------------------------------------
     def _ensure_full(self, symbol: str, period: str = "1m") -> pd.DataFrame:
+        """确保full。
+        
+            参数:
+                symbol: str
+                period: str
+        
+            返回:
+                pd.DataFrame"""
         key = (symbol, period)
         if key not in self._full:
             df = self.feed.get_history(
@@ -368,6 +392,12 @@ class MarketDataManager(QObject):
     # 模拟实时流
     # ------------------------------------------------------------------
     def start_live(self, symbol: str, period: str = "1m", interval_ms: int = 1000) -> None:
+        """启动live。
+        
+            参数:
+                symbol: str
+                period: str
+                interval_ms: int"""
         self._interval_ms = interval_ms
         # 使用目标周期的基准序列（避免 1 分钟重采样日线只剩几根）
         base = self.feed.get_recent(symbol, period, limit=2000)
@@ -380,12 +410,17 @@ class MarketDataManager(QObject):
             self._timer.start(self._interval_ms)
 
     def stop_live(self, symbol: str | None = None) -> None:
+        """停止live。
+        
+            参数:
+                symbol: str | None"""
         if symbol:
             self._live.pop(symbol, None)
         if not self._live:
             self._timer.stop()
 
     def _tick(self) -> None:
+        """处理Tick 数据。"""
         for sym, st in list(self._live.items()):
             df = st["df"]
             period = st["period"]

@@ -34,7 +34,14 @@ def _get_font() -> str:
 
 
 class BacktestPerfChart(QWidget):
+    """回测perf图表。
+    
+        继承: QWidget"""
     def __init__(self, parent: Optional[QWidget] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                parent: Optional[QWidget]"""
         super().__init__(parent)
         self.setMinimumHeight(260)
         self._equity: List[float] = []
@@ -49,22 +56,37 @@ class BacktestPerfChart(QWidget):
 
     # ---------- 公开接口 ----------
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         self._theme = t
         self.update()
 
     def set_title(self, title: str) -> None:
+        """设置title。
+        
+            参数:
+                title: str"""
         self._title = title
         self.update()
 
     def set_data(self, equity: Sequence[float],
                  dates: Optional[Sequence[str]] = None,
                  has_trades: bool = False) -> None:
+        """设置数据。
+        
+            参数:
+                equity: Sequence[float]
+                dates: Optional[Sequence[str]]
+                has_trades: bool"""
         self._equity = [float(x) for x in equity] if equity else []
         self._dates = [str(d) for d in (dates or [])]
         self._has_trades = has_trades or bool(self._equity)
         self.update()
 
     def clear(self) -> None:
+        """清空相关对象。"""
         self._equity = []
         self._dates = []
         self._has_trades = False
@@ -94,6 +116,10 @@ class BacktestPerfChart(QWidget):
         self.grab().save(path)
 
     def mouseMoveEvent(self, ev) -> None:  # noqa: N802
+        """处理mousemove事件。
+        
+            参数:
+                ev"""
         if len(self._equity) < 2:
             return
         idx = self.index_at(int(ev.position().x()))
@@ -109,10 +135,18 @@ class BacktestPerfChart(QWidget):
         QToolTip.showText(ev.globalPosition().toPoint(), tip, self)
 
     def leaveEvent(self, ev) -> None:  # noqa: N802
+        """处理leave事件。
+        
+            参数:
+                ev"""
         QToolTip.hideText()
 
     # ---------- 内部计算 ----------
     def _drawdown(self) -> List[float]:
+        """处理回撤。
+        
+            返回:
+                List[float]"""
         if not self._equity:
             return []
         eq = self._equity
@@ -126,6 +160,10 @@ class BacktestPerfChart(QWidget):
 
     # ---------- 绘制 ----------
     def paintEvent(self, event) -> None:  # noqa: N802
+        """绘制事件。
+        
+            参数:
+                event"""
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         pal = PALETTE[self._theme]
@@ -165,12 +203,33 @@ class BacktestPerfChart(QWidget):
         dd_top, dd_bot = split + 6, H - pad_b
 
         def ex(i: int) -> float:
+            """处理ex。
+            
+                参数:
+                    i: int
+            
+                返回:
+                    float"""
             return x0 + (i / (n - 1)) * (x1 - x0) if n > 1 else (x0 + x1) / 2
 
         def ey(v: float) -> float:
+            """处理ey。
+            
+                参数:
+                    v: float
+            
+                返回:
+                    float"""
             return eq_bot - (v - lo) / eq_span * (eq_bot - eq_top)
 
         def dy(d: float) -> float:
+            """处理dy。
+            
+                参数:
+                    d: float
+            
+                返回:
+                    float"""
             return dd_top + d / dd_span * (dd_bot - dd_top)
 
         up = QColor(pal["up"])      # 期货惯例：涨红

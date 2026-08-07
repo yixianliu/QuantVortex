@@ -12,6 +12,9 @@ from ..core.types import Order, Trade
 
 
 class BrokerBase(ABC):
+    """经纪商抽象基类：定义 submit/match 等撮合契约，子类实现回测下一根撮合或仿真/实盘即时撮合。
+    
+        继承: ABC"""
     @abstractmethod
     def submit(self, order: Order) -> None:
         """接收委托（回测中入队，实盘中发往接口）。"""

@@ -13,6 +13,15 @@ import pandas as pd
 
 
 def _pivots(high: float, low: float, close: float) -> list[dict]:
+    """处理pivots。
+    
+        参数:
+            high: float
+            low: float
+            close: float
+    
+        返回:
+            list[dict]"""
     pp = (high + low + close) / 3
     r1 = 2 * pp - low
     s1 = 2 * pp - high
@@ -32,6 +41,15 @@ def _pivots(high: float, low: float, close: float) -> list[dict]:
 
 
 def _swing_levels(df: pd.DataFrame, window: int = 5, lookback: int = 120) -> list[dict]:
+    """处理swing价位。
+    
+        参数:
+            df: pd.DataFrame
+            window: int
+            lookback: int
+    
+        返回:
+            list[dict]"""
     sub = df.tail(lookback)
     highs = sub["high"].values
     lows = sub["low"].values
@@ -54,6 +72,15 @@ def _swing_levels(df: pd.DataFrame, window: int = 5, lookback: int = 120) -> lis
 
 
 def _volume_clusters(df: pd.DataFrame, bins: int = 30, lookback: int = 240) -> list[dict]:
+    """处理成交量clusters。
+    
+        参数:
+            df: pd.DataFrame
+            bins: int
+            lookback: int
+    
+        返回:
+            list[dict]"""
     sub = df.tail(lookback)
     if len(sub) < bins:
         return []

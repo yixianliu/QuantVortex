@@ -34,6 +34,13 @@ class CTPMonitorPage(BasePage):
     """实盘监控（只读）。"""
 
     def __init__(self, mdm: MarketDataManager, store, config=None, session=None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                mdm: MarketDataManager
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "ctp"
         self._watch: list[str] = []
@@ -50,6 +57,7 @@ class CTPMonitorPage(BasePage):
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -135,6 +143,7 @@ class CTPMonitorPage(BasePage):
     # 数据
     # ------------------------------------------------------------------
     def _build_watch(self) -> None:
+        """构建watch。"""
         diag = ctp_diagnose()
         sub = diag.get("subscribe") or []
         # 仅保留行情中枢 universe 内存在的合约；为空则用前 5 个作为演示
@@ -152,6 +161,11 @@ class CTPMonitorPage(BasePage):
             self._set_row(sym, i)
 
     def _set_row(self, sym: str, row: int) -> None:
+        """设置行。
+        
+            参数:
+                sym: str
+                row: int"""
         q = self.mdm.get_quote(sym)
         if not q:
             return
@@ -167,6 +181,7 @@ class CTPMonitorPage(BasePage):
         self.qtable.setItem(row, 6, QTableWidgetItem(self.mdm.source_label))
 
     def _refresh_quotes(self) -> None:
+        """刷新quotes。"""
         for i, sym in enumerate(self._watch):
             self._set_row(sym, i)
 
@@ -174,6 +189,7 @@ class CTPMonitorPage(BasePage):
     # 状态 / 诊断
     # ------------------------------------------------------------------
     def _refresh_status(self) -> None:
+        """刷新状态。"""
         diag = ctp_diagnose()
         self.src_badge.set_text(f"数据源：{self.mdm.source_label}")
         self.mode_badge.set_text(f"模式：{diag.get('mode_label', '—')}")
@@ -187,6 +203,7 @@ class CTPMonitorPage(BasePage):
         self.status_lbl.setText(self.mdm.status)
 
     def _refresh_diag(self) -> None:
+        """刷新diag。"""
         d = ctp_diagnose()
         lines = []
         lib = "✅ 已安装" if d["lib_available"] else "❌ 未安装"
@@ -207,24 +224,38 @@ class CTPMonitorPage(BasePage):
     # 交互
     # ------------------------------------------------------------------
     def _on_connect(self) -> None:
+        """处理onconnect。"""
         self.mdm.connect()
         self._refresh_status()
         self._refresh_diag()
 
     def _on_disconnect(self) -> None:
+        """处理ondisconnect。"""
         self.mdm.disconnect()
         self._refresh_status()
 
     def _on_quote(self, sym: str) -> None:
+        """处理onquote。
+        
+            参数:
+                sym: str"""
         if sym in self._watch:
             self._set_row(sym, self._watch.index(sym))
 
     def _on_bar(self, bar) -> None:
+        """处理onK线。
+        
+            参数:
+                bar"""
         sym = bar.get("symbol") if isinstance(bar, dict) else None
         if sym and sym in self._watch:
             self._set_row(sym, self._watch.index(sym))
 
     def _on_status(self, text: str) -> None:
+        """处理on状态。
+        
+            参数:
+                text: str"""
         self.status_lbl.setText(text)
         self._refresh_status()
         self._toast(f"📡 连接状态：{text}", duration=3000)

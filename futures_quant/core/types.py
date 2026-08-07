@@ -37,6 +37,9 @@ class OrderType(str, Enum):
 
 
 class OrderStatus(str, Enum):
+    """处理订单状态。
+    
+        继承: str, Enum"""
     SUBMITTED = "SUBMITTED"   # 已提交，待撮合
     FILLED = "FILLED"         # 全部成交
     PARTIAL = "PARTIAL"       # 部分成交
@@ -112,6 +115,10 @@ class Position:
 
     @property
     def net_qty(self) -> int:
+        """处理netqty。
+        
+            返回:
+                int"""
         return self.long_qty - self.short_qty
 
     def update_on_trade(self, direction: Direction, offset: Offset, qty: int,

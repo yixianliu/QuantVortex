@@ -46,6 +46,11 @@ class AIConfigDialog(QDialog):
     config_applied = pyqtSignal()
 
     def __init__(self, config=None, parent=None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                config
+                parent"""
         super().__init__(parent)
         self._config = config
         self._theme = THEME
@@ -61,6 +66,7 @@ class AIConfigDialog(QDialog):
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -337,6 +343,10 @@ class AIConfigDialog(QDialog):
         """)
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         global THEME
         THEME = t
         self._theme = t

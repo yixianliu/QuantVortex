@@ -14,6 +14,7 @@ from .types import Direction, Offset, Position, Trade
 
 
 class Portfolio:
+    """回测投资组合：维护保证金、持仓与可用资金，按账户级参数计算手续费与已实现/未实现盈亏。"""
     def __init__(
         self,
         initial_capital: float = 1_000_000.0,
@@ -23,6 +24,15 @@ class Portfolio:
         multiplier: float = 10.0,
         close_today_ratio: float = 1.0,
     ) -> None:
+        """初始化相关对象。
+        
+            参数:
+                initial_capital: float
+                margin_rate: float
+                commission_per_lot: float
+                logger
+                multiplier: float
+                close_today_ratio: float"""
         self.initial_capital = float(initial_capital)
         self.margin_rate = float(margin_rate)
         self.commission_per_lot = float(commission_per_lot)
@@ -39,11 +49,23 @@ class Portfolio:
 
     # ---------- 持仓与价格 ----------
     def _get_position(self, symbol: str) -> Position:
+        """获取持仓。
+        
+            参数:
+                symbol: str
+        
+            返回:
+                Position"""
         if symbol not in self.positions:
             self.positions[symbol] = Position(symbol=symbol)
         return self.positions[symbol]
 
     def update_price(self, symbol: str, price: float) -> None:
+        """更新价格。
+        
+            参数:
+                symbol: str
+                price: float"""
         self._current_prices[symbol] = float(price)
 
     # ---------- 成交处理 ----------
@@ -75,6 +97,10 @@ class Portfolio:
 
     # ---------- 指标计算 ----------
     def used_margin(self) -> float:
+        """处理used保证金。
+        
+            返回:
+                float"""
         margin = 0.0
         for sym, pos in self.positions.items():
             price = self._current_prices.get(sym, 0.0)
@@ -85,6 +111,10 @@ class Portfolio:
         return margin
 
     def unrealized_pnl(self) -> float:
+        """处理unrealized盈亏。
+        
+            返回:
+                float"""
         upnl = 0.0
         for sym, pos in self.positions.items():
             price = self._current_prices.get(sym, 0.0)
@@ -99,9 +129,17 @@ class Portfolio:
         return self.initial_capital + self.realized_pnl + self.unrealized_pnl()
 
     def available(self) -> float:
+        """处理available。
+        
+            返回:
+                float"""
         return self.equity() - self.used_margin()
 
     def summary(self) -> dict:
+        """处理summary。
+        
+            返回:
+                dict"""
         return {
             "equity": round(self.equity(), 2),
             "available": round(self.available(), 2),

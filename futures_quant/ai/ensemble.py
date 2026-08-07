@@ -35,11 +35,20 @@ class _Ridge:
     ALPHA_GRID = (1e-3, 1e-2, 0.1, 1.0, 10.0, 100.0, 1000.0)
 
     def __init__(self, alpha: float = 1.0) -> None:
+        """初始化相关对象。
+        
+            参数:
+                alpha: float"""
         self.alpha = alpha
         self.w = None
         self.b = 0.0
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
+        """拟合相关对象。
+        
+            参数:
+                X: np.ndarray
+                y: np.ndarray"""
         X = np.asarray(X, float); y = np.asarray(y, float)
         XtX = X.T @ X + self.alpha * np.eye(X.shape[1])
         Xty = X.T @ y
@@ -50,6 +59,13 @@ class _Ridge:
         self.b = y.mean() - (X.mean(0) @ self.w)
 
     def predict(self, x: np.ndarray) -> float:
+        """预测相关对象。
+        
+            参数:
+                x: np.ndarray
+        
+            返回:
+                float"""
         if self.w is None:
             return 0.0
         return float(np.dot(self.w, np.asarray(x, float)) + self.b)
@@ -81,6 +97,12 @@ class _TreeModel:
     """
 
     def __init__(self, period: str, seed: int = 7, extended: bool = True) -> None:
+        """初始化相关对象。
+        
+            参数:
+                period: str
+                seed: int
+                extended: bool"""
         self.period = period
         self.seed = seed
         self.extended = extended
@@ -90,6 +112,15 @@ class _TreeModel:
         self.seq_len = 20
 
     def fit(self, df: pd.DataFrame, seq_len: int = 20, epochs: int = 25) -> bool:
+        """拟合相关对象。
+        
+            参数:
+                df: pd.DataFrame
+                seq_len: int
+                epochs: int
+        
+            返回:
+                bool"""
         if not _HAVE_GBM:
             return False
         self.seq_len = seq_len
@@ -125,6 +156,11 @@ class _TreeModel:
             return False
 
     def _window(self, df_upto: pd.DataFrame, seq_len: int):
+        """处理窗口。
+        
+            参数:
+                df_upto: pd.DataFrame
+                seq_len: int"""
         rdf = _resample(df_upto, self.period)
         ind, F, _ = build_features(rdf, extended=self.extended)
         arr = F.values.astype(float)
@@ -133,6 +169,14 @@ class _TreeModel:
         return arr[-seq_len:]   # (seq_len, n_feat)
 
     def predict_next(self, df_upto: pd.DataFrame, seq_len: int) -> float:
+        """预测next。
+        
+            参数:
+                df_upto: pd.DataFrame
+                seq_len: int
+        
+            返回:
+                float"""
         x = self._window(df_upto, seq_len)
         if x is None:
             return 0.0
@@ -142,6 +186,14 @@ class _TreeModel:
         return r
 
     def _daily_returns(self, df: pd.DataFrame, horizon: int) -> np.ndarray:
+        """处理daily收益率。
+        
+            参数:
+                df: pd.DataFrame
+                horizon: int
+        
+            返回:
+                np.ndarray"""
         x0 = self._window(df, self.seq_len)
         if x0 is None:
             return np.zeros(horizon)
@@ -222,6 +274,13 @@ class PeriodModel:
 
     def __init__(self, period: str, hidden: int = 32, seed: int = 7,
                  extended: bool = True) -> None:
+        """初始化相关对象。
+        
+            参数:
+                period: str
+                hidden: int
+                seed: int
+                extended: bool"""
         self.period = period
         self.hidden = hidden
         self.seed = seed
@@ -235,6 +294,15 @@ class PeriodModel:
         self.seq_len = 20
 
     def fit(self, df: pd.DataFrame, seq_len: int = 20, epochs: int = 25) -> bool:
+        """拟合相关对象。
+        
+            参数:
+                df: pd.DataFrame
+                seq_len: int
+                epochs: int
+        
+            返回:
+                bool"""
         self.seq_len = seq_len
         rdf = _resample(df, self.period)
         if len(rdf) < seq_len + 5:
@@ -268,6 +336,13 @@ class PeriodModel:
         return True
 
     def _pred(self, Xseq: np.ndarray) -> float:
+        """处理pred。
+        
+            参数:
+                Xseq: np.ndarray
+        
+            返回:
+                float"""
         if self.use_lstm and self.lstm is not None:
             return float(self.lstm.predict_last(Xseq))
         if self.ridge is not None:
@@ -324,6 +399,12 @@ class MultiPeriodEnsemble:
     """
 
     def __init__(self, periods=("D", "W"), hidden: int = 32, seed: int = 7) -> None:
+        """初始化相关对象。
+        
+            参数:
+                periods
+                hidden: int
+                seed: int"""
         self.periods = list(periods)
         self.models = []
         k = 0
@@ -342,6 +423,15 @@ class MultiPeriodEnsemble:
         self.ensemble_resid = 1e-4
 
     def fit(self, df: pd.DataFrame, seq_len: int = 20, epochs: int = 25) -> bool:
+        """拟合相关对象。
+        
+            参数:
+                df: pd.DataFrame
+                seq_len: int
+                epochs: int
+        
+            返回:
+                bool"""
         n = len(df)
         cut = int(n * 0.8)
         # 数据充足时严格分离：前 80% 训练，后 20% 验证估权重（避免统计泄露）
@@ -396,6 +486,14 @@ class MultiPeriodEnsemble:
         return errs
 
     def predict_daily_returns(self, df: pd.DataFrame, horizon: int) -> np.ndarray:
+        """预测daily收益率。
+        
+            参数:
+                df: pd.DataFrame
+                horizon: int
+        
+            返回:
+                np.ndarray"""
         rets, weights = [], []
         for m, w in zip(self.models, self.weights):
             if m.mean is None or w <= 0:
@@ -416,6 +514,14 @@ class MultiPeriodEnsemble:
         return out
 
     def predict_next(self, df_upto: pd.DataFrame, seq_len: int) -> float:
+        """预测next。
+        
+            参数:
+                df_upto: pd.DataFrame
+                seq_len: int
+        
+            返回:
+                float"""
         rets, weights = [], []
         for m, w in zip(self.models, self.weights):
             if m.mean is None or w <= 0:

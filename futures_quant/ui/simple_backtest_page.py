@@ -81,6 +81,13 @@ class SimpleBacktestPage(BasePage):
     """轻量级独立回测页（R10 原型）。"""
 
     def __init__(self, mdm, store=None, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "simple_backtest"
         self._running = False
@@ -92,6 +99,7 @@ class SimpleBacktestPage(BasePage):
     # 构建
     # ------------------------------------------------------------------
     def _build(self) -> None:
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -224,6 +232,7 @@ class SimpleBacktestPage(BasePage):
     # 回测执行
     # ------------------------------------------------------------------
     def _run_backtest(self) -> None:
+        """运行回测。"""
         if self._running:
             return
         sym = self.sym_cb.currentData()
@@ -242,6 +251,7 @@ class SimpleBacktestPage(BasePage):
         self.run_btn.setText("回测中…")
 
         def work():
+            """处理work。"""
             from ..strategy.trend_following import TrendFollowing
             from ..strategy.breakout import Breakout
             from ..strategy.grid import Grid
@@ -268,6 +278,10 @@ class SimpleBacktestPage(BasePage):
             return bt.run(sym, start, end, per, warmup=60)
 
         def done(res: dict) -> None:
+            """处理done。
+            
+                参数:
+                    res: dict"""
             self._running = False
             self.run_btn.setEnabled(True)
             self.run_btn.setText("🚀 开始回测")
@@ -275,6 +289,10 @@ class SimpleBacktestPage(BasePage):
             self._render_result(res)
 
         def err(e: str) -> None:
+            """处理err。
+            
+                参数:
+                    e: str"""
             self._running = False
             self.run_btn.setEnabled(True)
             self.run_btn.setText("🚀 开始回测")
@@ -337,6 +355,10 @@ class SimpleBacktestPage(BasePage):
     # 工具
     # ------------------------------------------------------------------
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         super().set_theme(t)
         # 刷新 KPI 颜色
         p = pal()

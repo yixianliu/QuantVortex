@@ -14,6 +14,9 @@ from .base import StrategyBase
 
 
 class TrendFollowing(StrategyBase):
+    """趋势跟随策略：依据均线 / 突破方向顺势开仓。
+    
+        继承: StrategyBase"""
     name = "趋势跟踪"
     default_params = {
         "fast": 10,
@@ -24,15 +27,28 @@ class TrendFollowing(StrategyBase):
     }
 
     def __init__(self, symbol, params=None):
+        """初始化相关对象。
+        
+            参数:
+                symbol
+                params"""
         super().__init__(symbol, params)
         self._stop = None
         self._side = 0  # 1 多 / -1 空 / 0 空仓
 
     def _window_size(self) -> int:
+        """处理窗口大小。
+        
+            返回:
+                int"""
         p = self.params
         return int(max(p["fast"], p["slow"], p["atr_period"]) + 5)
 
     def on_bar(self, bar: Bar) -> None:
+        """处理onK线。
+        
+            参数:
+                bar: Bar"""
         self._push(bar)
         p = self.params
         if len(self._closes) < p["slow"] + 1:

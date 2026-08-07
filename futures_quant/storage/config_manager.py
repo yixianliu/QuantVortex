@@ -28,6 +28,13 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def _read_json(path: str) -> dict:
+    """读取json。
+    
+        参数:
+            path: str
+    
+        返回:
+            dict"""
     try:
         with open(path, "r", encoding="utf-8") as f:
             d = json.load(f)
@@ -41,6 +48,12 @@ class ConfigManager:
 
     def __init__(self, defaults_path: Optional[str] = None,
                  user_path: Optional[str] = None, version: int = 2) -> None:
+        """初始化相关对象。
+        
+            参数:
+                defaults_path: Optional[str]
+                user_path: Optional[str]
+                version: int"""
         self.defaults_path = defaults_path or os.path.join(get_config_dir(), "settings.json")
         self.user_path = user_path or os.path.join(get_data_dir(), "user_settings.json")
         self._defaults = _read_json(self.defaults_path)
@@ -48,15 +61,36 @@ class ConfigManager:
 
     # ---------- 点分路径读写 ----------
     def get(self, path: str, default: Any = None) -> Any:
+        """获取相关对象。
+        
+            参数:
+                path: str
+                default: Any
+        
+            返回:
+                Any"""
         return self._user.get(path, default)
 
     def set(self, path: str, value: Any) -> None:
+        """设置相关对象。
+        
+            参数:
+                path: str
+                value: Any"""
         self._user.set(path, value)
 
     def as_dict(self) -> dict:
+        """处理asdict。
+        
+            返回:
+                dict"""
         return self._user.as_dict()
 
     def save(self) -> bool:
+        """保存相关对象。
+        
+            返回:
+                bool"""
         return self._user.save()
 
     def reset_user(self) -> bool:
@@ -83,30 +117,63 @@ class SessionState:
     }
 
     def __init__(self, path: Optional[str] = None, version: int = 1) -> None:
+        """初始化相关对象。
+        
+            参数:
+                path: Optional[str]
+                version: int"""
         self.path = path or os.path.join(get_data_dir(), "session_state.json")
         self._state = AtomicJSON(self.path, default=self._DEFAULTS, version=version)
         self._dirty = False
 
     def get(self, path: str, default: Any = None) -> Any:
+        """获取相关对象。
+        
+            参数:
+                path: str
+                default: Any
+        
+            返回:
+                Any"""
         return self._state.get(path, default)
 
     def set(self, path: str, value: Any) -> None:
+        """设置相关对象。
+        
+            参数:
+                path: str
+                value: Any"""
         self._state.set(path, value)
         self._dirty = True
 
     def mark_dirty(self) -> None:
+        """处理markdirty。"""
         self._dirty = True
 
     @property
     def is_dirty(self) -> bool:
+        """处理isdirty。
+        
+            返回:
+                bool"""
         return self._dirty
 
     def flush(self) -> bool:
+        """刷新相关对象。
+        
+            返回:
+                bool"""
         ok = self._state.save()
         self._dirty = not ok
         return ok
 
     def set_page_selection(self, page_key: str, symbol: str, period: str) -> None:
+        """设置页面selection。
+        
+            参数:
+                page_key: str
+                symbol: str
+                period: str"""
         pages = self._state.data.setdefault("pages", {})
         pages[page_key] = {"symbol": symbol, "period": period}
         self._dirty = True
@@ -114,6 +181,15 @@ class SessionState:
     def get_page_selection(self, page_key: str,
                            default_symbol: str = "rb.SHFE",
                            default_period: str = "D") -> tuple[str, str]:
+        """获取页面selection。
+        
+            参数:
+                page_key: str
+                default_symbol: str
+                default_period: str
+        
+            返回:
+                tuple[str, str]"""
         p = self._state.data.get("pages", {}).get(page_key, {})
         return (p.get("symbol") or default_symbol,
                 p.get("period") or default_period)

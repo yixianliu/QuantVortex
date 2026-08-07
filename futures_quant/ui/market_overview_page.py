@@ -97,6 +97,13 @@ class MarketOverviewPage(BasePage):
     """统一的期货市场全景视图。"""
 
     def __init__(self, mdm, store, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "market"
         dft = symbol_code(mdm.universe[0])
@@ -127,6 +134,7 @@ class MarketOverviewPage(BasePage):
     # 构建
     # ==================================================================
     def _build(self):
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -221,6 +229,10 @@ class MarketOverviewPage(BasePage):
     # 区块一：实时行情（盘口快照 + 市场状态 + 全市场速览）
     # ------------------------------------------------------------------
     def _build_realtime(self) -> QFrame:
+        """构建realtime。
+        
+            返回:
+                QFrame"""
         box = QFrame(); box.setObjectName("card")
         bl = QVBoxLayout(box); bl.setContentsMargins(10, 8, 10, 8); bl.setSpacing(10)
         bl.addWidget(self._section_header(
@@ -288,6 +300,10 @@ class MarketOverviewPage(BasePage):
     # 区块二：市场全局（KPI + 板块强度 + 涨跌分布 / 温度计）
     # ------------------------------------------------------------------
     def _mk_card(self, label):
+        """处理mkcard。
+        
+            参数:
+                label"""
         card = QFrame(); card.setObjectName("kpi-card")
         cv = QVBoxLayout(card); cv.setContentsMargins(10, 8, 10, 8); cv.setSpacing(2)
         v = QLabel("—"); v.setObjectName("kpi-val")
@@ -297,6 +313,12 @@ class MarketOverviewPage(BasePage):
         return card
 
     def _set_card(self, key, text, color=""):
+        """设置card。
+        
+            参数:
+                key
+                text
+                color"""
         c = self._kpi_cards.get(key)
         if not c:
             return
@@ -305,6 +327,7 @@ class MarketOverviewPage(BasePage):
                              (color or pal()["text"]))
 
     def _style_cards(self):
+        """处理stylecards。"""
         p = pal()
         for c in self._kpi_cards.values():
             c.setStyleSheet(
@@ -312,6 +335,10 @@ class MarketOverviewPage(BasePage):
                 % (p["card"], p["border"]))
 
     def _build_market_global(self) -> QFrame:
+        """构建marketglobal。
+        
+            返回:
+                QFrame"""
         self._kpi_cards = {}  # 确保在首次构建时初始化
         box = QFrame(); box.setObjectName("card")
         bl = QVBoxLayout(box); bl.setContentsMargins(10, 8, 10, 8); bl.setSpacing(10)
@@ -385,6 +412,10 @@ class MarketOverviewPage(BasePage):
     # 区块三：基本面关键指标（持仓异动 + 供需 / 库存信号）
     # ------------------------------------------------------------------
     def _build_fundamentals(self) -> QFrame:
+        """构建fundamentals。
+        
+            返回:
+                QFrame"""
         box = QFrame(); box.setObjectName("card")
         bl = QVBoxLayout(box); bl.setContentsMargins(10, 8, 10, 8); bl.setSpacing(8)
         bl.addWidget(self._section_header(
@@ -413,6 +444,10 @@ class MarketOverviewPage(BasePage):
     # 区块四：榜单（领涨 / 领跌 / 资金流 / 板块明细）
     # ------------------------------------------------------------------
     def _build_ranks(self) -> QFrame:
+        """构建ranks。
+        
+            返回:
+                QFrame"""
         box = QFrame(); box.setObjectName("card")
         bl = QVBoxLayout(box); bl.setContentsMargins(10, 8, 10, 8); bl.setSpacing(10)
         bl.addWidget(self._section_header(
@@ -455,6 +490,10 @@ class MarketOverviewPage(BasePage):
     # 区块四·五：自选预警（价格提醒）
     # ------------------------------------------------------------------
     def _build_watchlist(self) -> QFrame:
+        """构建watchlist。
+        
+            返回:
+                QFrame"""
         box = QFrame(); box.setObjectName("card")
         bl = QVBoxLayout(box); bl.setContentsMargins(10, 8, 10, 8); bl.setSpacing(8)
         self._wl_header = self._section_header("自选预警（价格提醒）", "#14b8a6", badge="0 自选")
@@ -485,6 +524,7 @@ class MarketOverviewPage(BasePage):
         return box
 
     def _wl_load(self):
+        """处理wlload。"""
         try:
             with open(self._wl_file, "r", encoding="utf-8") as f:
                 self._watchlist = json.load(f) or []
@@ -492,6 +532,7 @@ class MarketOverviewPage(BasePage):
             self._watchlist = []
 
     def _wl_save(self):
+        """处理wlsave。"""
         try:
             os.makedirs(os.path.dirname(self._wl_file), exist_ok=True)
             with open(self._wl_file, "w", encoding="utf-8") as f:
@@ -501,6 +542,10 @@ class MarketOverviewPage(BasePage):
 
     @staticmethod
     def _parse_price(s: str):
+        """解析价格。
+        
+            参数:
+                s: str"""
         s = (s or "").strip()
         if not s:
             return None
@@ -532,16 +577,22 @@ class MarketOverviewPage(BasePage):
         self._wl_save(); self._refresh_watchlist()
 
     def _remove_watch(self, row: int):
+        """移除watch。
+        
+            参数:
+                row: int"""
         if 0 <= row < len(self._watchlist):
             self._watchlist.pop(row)
             self._wl_save(); self._refresh_watchlist()
 
     def _clear_alerts(self):
+        """清空预警。"""
         for w in self._watchlist:
             w["triggered"], w["at"] = None, None
         self._wl_save(); self._refresh_watchlist()
 
     def _refresh_watchlist(self):
+        """刷新watchlist。"""
         items = self._watchlist
         self.wl_tbl.setRowCount(len(items))
         alerts = 0
@@ -595,6 +646,10 @@ class MarketOverviewPage(BasePage):
         self._wl_header.set_badge(f"{alerts} 预警" if alerts else f"{len(items)} 自选")
 
     def _on_wl_pick(self, item):
+        """处理onwlpick。
+        
+            参数:
+                item"""
         row = item.row()
         if 0 <= row < len(self._watchlist):
             sym = self._watchlist[row]["symbol"]
@@ -606,6 +661,10 @@ class MarketOverviewPage(BasePage):
     # 区块五：财经资讯 + AI 智能解读
     # ------------------------------------------------------------------
     def _build_news(self) -> QFrame:
+        """构建news。
+        
+            返回:
+                QFrame"""
         box = QFrame(); box.setObjectName("card")
         bl = QVBoxLayout(box); bl.setContentsMargins(10, 8, 10, 8); bl.setSpacing(8)
 
@@ -648,12 +707,20 @@ class MarketOverviewPage(BasePage):
     # 交互
     # ==================================================================
     def _on_symbol(self, i):
+        """处理on合约代码。
+        
+            参数:
+                i"""
         self.cur_symbol = self.sym_cb.itemData(i)
         self.selection_changed.emit(self.cur_symbol, self.cur_period)
         self._refresh_quote()
         self._refresh_tech()
 
     def _on_period(self, i):
+        """处理on周期。
+        
+            参数:
+                i"""
         self.cur_period = self.per_cb.itemData(i)
         self.selection_changed.emit(self.cur_symbol, self.cur_period)
         self._refresh_quote()
@@ -661,10 +728,15 @@ class MarketOverviewPage(BasePage):
         self._refresh_tech()
 
     def _on_cat(self, i):
+        """处理oncat。
+        
+            参数:
+                i"""
         self.cur_cat = self.cat_cb.currentText()
         self._refresh_pano()
 
     def _toggle_live(self):
+        """切换live。"""
         if not self._live:
             self.mdm.start_live(self.cur_symbol, self.cur_period, 1000)
             self.mdm.bar_arrived.connect(self._on_live)
@@ -683,10 +755,15 @@ class MarketOverviewPage(BasePage):
         self.live_btn.setStyleSheet("")
 
     def _on_live(self, bar):
+        """处理onlive。
+        
+            参数:
+                bar"""
         if bar.get("symbol") == self.cur_symbol:
             self._refresh_quote()
 
     def _refresh_all(self):
+        """刷新all。"""
         self._refresh_quote()
         self._refresh_watch()
         self._refresh_pano()
@@ -697,6 +774,10 @@ class MarketOverviewPage(BasePage):
     # 自动拉取一次多源财经资讯 + AI 研判 + 供需信号，无需手动点击。
     # ------------------------------------------------------------------
     def showEvent(self, event):
+        """显示事件。
+        
+            参数:
+                event"""
         super().showEvent(event)
         # 首次显示：延迟加载全景（行情 + 速览 + 自选列表），避免构造期间阻塞主线程
         if not self._pano_lazy:
@@ -817,6 +898,10 @@ class MarketOverviewPage(BasePage):
 
         # 涨跌分布（占比式三段条 + 明细）
         def pct(n):
+            """处理pct。
+            
+                参数:
+                    n"""
             return (n / total * 100) if total else 0.0
         p = pal()
         # 三段条：按家数比例分配水平 stretch，段内显示百分比
@@ -900,6 +985,7 @@ class MarketOverviewPage(BasePage):
 
     # ---- 资讯 + AI 解读 ----
     def _run_news(self):
+        """运行news。"""
         if getattr(self, "_news_running", False):
             return
         self._news_running = True
@@ -909,6 +995,7 @@ class MarketOverviewPage(BasePage):
                                   "华尔街见闻/金十/新浪财经/期货日报/中证网/证券时报/凤凰财经）…")
 
         def work():
+            """处理work。"""
             news = news_feed.fetch_all_news(limit=60)
             # 市场级 AI 研判
             bias = _news_overall_bias(news)
@@ -928,6 +1015,10 @@ class MarketOverviewPage(BasePage):
             return news, analysis, sd_rows, tech
 
         def done(payload):
+            """处理done。
+            
+                参数:
+                    payload"""
             news, analysis, sd_rows, tech = payload
             self._news = news
             self._fill_news(news, analysis, sd_rows, tech)
@@ -964,17 +1055,29 @@ class MarketOverviewPage(BasePage):
             self._restore_news_btn()
 
         def err(msg):
+            """处理err。
+            
+                参数:
+                    msg"""
             self.news_status.setText(f"资讯获取失败：{msg}（将使用已有缓存或稍后重试）")
             self._restore_news_btn()
 
         self._run_worker(work, done, err)
 
     def _restore_news_btn(self):
+        """处理restorenewsbtn。"""
         self._news_running = False
         self.news_btn.setEnabled(True)
         self.news_btn.setText("AI 资讯解读")
 
     def _fill_news(self, news, analysis, sd_rows, tech=None):
+        """处理fillnews。
+        
+            参数:
+                news
+                analysis
+                sd_rows
+                tech"""
         self._sd_rows = sd_rows
         # 资讯列表（逐条自定义：时间 / 来源 / 类别 + 标题 + 核心含义 + 情绪标签）
         self.news_list.clear()
@@ -1026,6 +1129,11 @@ class MarketOverviewPage(BasePage):
         return f"{title}（{cat}·{mood}）"
 
     def _add_news_row(self, it, p) -> None:
+        """添加news行。
+        
+            参数:
+                it
+                p"""
         s = float(it.get("sentiment", 0))
         col = p["up"] if s > 0.05 else (p["down"] if s < -0.05 else p["sub"])
         tag = "利好" if s > 0.05 else ("利空" if s < -0.05 else "中性")
@@ -1167,6 +1275,7 @@ class MarketOverviewPage(BasePage):
     # 全局市场认知框架（融合全景市场结构 + 资讯情绪，形成系统认知）
     # ------------------------------------------------------------------
     def _global_framework_html(self):
+        """处理globalframeworkhtml。"""
         p = pal()
         ctx = self._market_ctx
         if not ctx:
@@ -1209,6 +1318,12 @@ class MarketOverviewPage(BasePage):
     # 多空力量对比（技术面 + 资讯面综合评分，可视化条形）
     # ------------------------------------------------------------------
     def _bullbear_html(self, tech, consensus, wbias):
+        """处理bullbearhtml。
+        
+            参数:
+                tech
+                consensus
+                wbias"""
         p = pal()
         if not tech:
             # 无技术数据时退化为仅资讯偏置
@@ -1246,6 +1361,11 @@ class MarketOverviewPage(BasePage):
     # 趋势预测与综合研判依据（融合技术面形态 + 资讯面）
     # ------------------------------------------------------------------
     def _outlook_html(self, a, tech):
+        """处理outlookhtml。
+        
+            参数:
+                a
+                tech"""
         p = pal()
         # 提取 AI 综合研判给出的方向词
         tone = (a.get("trend") or "")
@@ -1292,6 +1412,12 @@ class MarketOverviewPage(BasePage):
     # 技术面研判计算（当前品种：均线 / MACD / 布林 / KDJ / RSI / OBV / 支撑阻力 / 多空力）
     # ------------------------------------------------------------------
     def _compute_technical(self, symbol, period, news_bias=0.0):
+        """计算technical。
+        
+            参数:
+                symbol
+                period
+                news_bias"""
         try:
             df = self.mdm.get_bars(symbol, period, 260)
             if df is None or len(df) < 30:
@@ -1371,6 +1497,10 @@ class MarketOverviewPage(BasePage):
     # 技术面解读 HTML（逐指标解读 + 支撑阻力）
     # ------------------------------------------------------------------
     def _render_tech(self, tech):
+        """渲染tech。
+        
+            参数:
+                tech"""
         p = pal()
         if not tech:
             return (f"<div style='font-size:13px;color:{p['sub']};line-height:1.5'>"
@@ -1487,6 +1617,7 @@ class MarketOverviewPage(BasePage):
     # 仅重算技术面（切换合约 / 周期时调用，避免重复抓取资讯）
     # ------------------------------------------------------------------
     def _refresh_tech(self):
+        """刷新tech。"""
         if self._ai_analysis is None:
             return
         nb = _news_overall_bias(self._news) if self._news else 0.0
@@ -1496,6 +1627,14 @@ class MarketOverviewPage(BasePage):
 
     # ---- 工具 ----
     def _set(self, table, r, c, text, color=None):
+        """设置相关对象。
+        
+            参数:
+                table
+                r
+                c
+                text
+                color"""
         it = QTableWidgetItem(str(text))
         fg = (QColor(color) if isinstance(color, str) else color) if color is not None \
             else QColor(pal()["text"])
@@ -1504,6 +1643,10 @@ class MarketOverviewPage(BasePage):
         return it
 
     def _on_pick(self, item):
+        """处理onpick。
+        
+            参数:
+                item"""
         name = self.watch.item(item.row(), 0).text()
         for r in self.mdm.universe:
             if r[1] == name:
@@ -1513,6 +1656,10 @@ class MarketOverviewPage(BasePage):
                 break
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         super().set_theme(t)
         self._style_cards()
         self.temp_lbl.setStyleSheet("color:%s;" % pal()["sub"])

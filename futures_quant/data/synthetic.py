@@ -72,6 +72,13 @@ FUTURES_UNIVERSE = [
 
 # 为行情生成挑选一个稳定的随机种子（按 symbol 哈希，保证可复现但各品种不同）
 def _seed_for(symbol: str) -> int:
+    """处理seedfor。
+    
+        参数:
+            symbol: str
+    
+        返回:
+            int"""
     h = 0
     for ch in symbol:
         h = (h * 31 + ord(ch)) & 0xFFFFFFFF
@@ -221,9 +228,20 @@ class SyntheticFeed(DataFeed):
     _FREQ = {"D": "1D", "W": "1W"}
 
     def __init__(self, cache: dict | None = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                cache: dict | None"""
         self._cache: dict = cache or {}
 
     def _mode_for(self, symbol: str) -> str:
+        """处理模式for。
+        
+            参数:
+                symbol: str
+        
+            返回:
+                str"""
         mode = "mixed"
         for row in FUTURES_UNIVERSE:
             if symbol.startswith(row[0]):
@@ -235,12 +253,27 @@ class SyntheticFeed(DataFeed):
         return mode
 
     def _base_1m(self, symbol: str) -> pd.DataFrame:
+        """处理base1m。
+        
+            参数:
+                symbol: str
+        
+            返回:
+                pd.DataFrame"""
         key = (symbol, "1m")
         if key not in self._cache:
             self._cache[key] = generate_bars(symbol=symbol, mode=self._mode_for(symbol), n=12000)
         return self._cache[key]
 
     def _base_period(self, symbol: str, period: str) -> pd.DataFrame:
+        """处理base周期。
+        
+            参数:
+                symbol: str
+                period: str
+        
+            返回:
+                pd.DataFrame"""
         key = (symbol, period)
         if key in self._cache:
             return self._cache[key]
@@ -261,6 +294,17 @@ class SyntheticFeed(DataFeed):
         self, symbol: str, start: str, end: str,
         period: str = "1m", limit: int = 0,
     ) -> pd.DataFrame:
+        """获取history。
+        
+            参数:
+                symbol: str
+                start: str
+                end: str
+                period: str
+                limit: int
+        
+            返回:
+                pd.DataFrame"""
         base = self._base_period(symbol, period).copy()
         df = base[(base["datetime"] >= start) & (base["datetime"] <= end)]
         if limit:
@@ -269,4 +313,13 @@ class SyntheticFeed(DataFeed):
 
     # 便捷：直接取最近 limit 根（用于 UI 实时拉取 / 分析）
     def get_recent(self, symbol: str, period: str = "1m", limit: int = 600) -> pd.DataFrame:
+        """获取recent。
+        
+            参数:
+                symbol: str
+                period: str
+                limit: int
+        
+            返回:
+                pd.DataFrame"""
         return self._base_period(symbol, period).tail(limit).reset_index(drop=True)

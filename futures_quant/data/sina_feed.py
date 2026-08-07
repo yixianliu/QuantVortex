@@ -39,6 +39,12 @@ class SinaFeed(DataFeed):
 
     def __init__(self, cache_dir: str = "data/sina_cache", timeout: float = 6.0,
                  max_age_hours: float = 6.0) -> None:
+        """初始化相关对象。
+        
+            参数:
+                cache_dir: str
+                timeout: float
+                max_age_hours: float"""
         self.cache_dir = cache_dir
         self.timeout = timeout
         self.max_age_hours = max_age_hours
@@ -53,6 +59,13 @@ class SinaFeed(DataFeed):
     # ------------------------------------------------------------------
     @staticmethod
     def _to_sina(symbol: str) -> str:
+        """处理tosina。
+        
+            参数:
+                symbol: str
+        
+            返回:
+                str"""
         s = symbol.split(".")[0] if "." in symbol else symbol
         if len(s) >= 2 and s.endswith("0"):
             return s
@@ -64,6 +77,13 @@ class SinaFeed(DataFeed):
     def _http(self, url: str) -> str:
         # ⚠️ SSL 验证已禁用以兼容部分内网/代理环境。
         # 生产环境若涉及敏感数据，建议启用 check_hostname=True 和 CERT_REQUIRED。
+        """处理http。
+        
+            参数:
+                url: str
+        
+            返回:
+                str"""
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -79,10 +99,24 @@ class SinaFeed(DataFeed):
             raise RuntimeError(f"IO 错误: {e}") from e
 
     def _cache_path(self, sina_sym: str) -> str:
+        """处理缓存路径。
+        
+            参数:
+                sina_sym: str
+        
+            返回:
+                str"""
         safe = sina_sym.replace("/", "_")
         return os.path.join(self.cache_dir, f"{safe}.csv")
 
     def _load_cache(self, sina_sym: str) -> pd.DataFrame | None:
+        """加载缓存。
+        
+            参数:
+                sina_sym: str
+        
+            返回:
+                pd.DataFrame | None"""
         p = self._cache_path(sina_sym)
         try:
             if os.path.exists(p) and (time.time() - os.path.getmtime(p)) < self.max_age_hours * 3600:
@@ -92,6 +126,11 @@ class SinaFeed(DataFeed):
         return None
 
     def _save_cache(self, sina_sym: str, df: pd.DataFrame) -> None:
+        """保存缓存。
+        
+            参数:
+                sina_sym: str
+                df: pd.DataFrame"""
         try:
             df.to_csv(self._cache_path(sina_sym), index=False)
         except Exception:
@@ -101,6 +140,13 @@ class SinaFeed(DataFeed):
     # 取真实日线（内存 -> 磁盘 -> 网络）
     # ------------------------------------------------------------------
     def _fetch_daily(self, symbol: str) -> pd.DataFrame:
+        """获取daily。
+        
+            参数:
+                symbol: str
+        
+            返回:
+                pd.DataFrame"""
         sina = self._to_sina(symbol)
         if sina in self._mem:
             return self._mem[sina]
@@ -160,6 +206,15 @@ class SinaFeed(DataFeed):
         return df.reset_index(drop=True)
 
     def get_recent(self, symbol: str, period: str = "D", limit: int = 600) -> pd.DataFrame:
+        """获取recent。
+        
+            参数:
+                symbol: str
+                period: str
+                limit: int
+        
+            返回:
+                pd.DataFrame"""
         df = self.get_history(symbol, "2000-01-01", "2100-01-01", period=period, limit=limit)
         if df is None or (isinstance(df, pd.DataFrame) and df.empty):
             return pd.DataFrame(columns=_COLS)

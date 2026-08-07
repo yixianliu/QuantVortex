@@ -13,6 +13,9 @@ from .base import StrategyBase
 
 
 class Grid(StrategyBase):
+    """网格策略：在价格区间内挂双向网格单，低买高卖赚取波动收益。
+    
+        继承: StrategyBase"""
     name = "网格交易"
     default_params = {
         "center_price": None,   # None 时用首根收盘价作为中枢
@@ -22,10 +25,19 @@ class Grid(StrategyBase):
     }
 
     def __init__(self, symbol, params=None):
+        """初始化相关对象。
+        
+            参数:
+                symbol
+                params"""
         super().__init__(symbol, params)
         self._center = None
 
     def on_bar(self, bar: Bar) -> None:
+        """处理onK线。
+        
+            参数:
+                bar: Bar"""
         self._push(bar)
         p = self.params
         if self._center is None:

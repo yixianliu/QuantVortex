@@ -30,7 +30,13 @@ def _in_trading_hours(hours: list, dt: datetime) -> bool:
 
 
 class RiskManager:
+    """风险管理器：在下单前校验仓位、回撤与品种约束，拦截超阈值委托。"""
     def __init__(self, cfg: RiskConfig, logger=None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                cfg: RiskConfig
+                logger"""
         self.cfg = cfg
         self.logger = logger
         self.halted = False
@@ -43,6 +49,10 @@ class RiskManager:
 
     # ---------- 生命周期 ----------
     def start(self, portfolio) -> None:
+        """启动相关对象。
+        
+            参数:
+                portfolio"""
         self.max_equity = portfolio.equity()
         self.daily_start_equity = portfolio.equity()
 
@@ -66,6 +76,16 @@ class RiskManager:
         contract=None,
         dt=None,
     ) -> Tuple[bool, str]:
+        """检查订单。
+        
+            参数:
+                order: Order
+                portfolio
+                contract
+                dt
+        
+            返回:
+                Tuple[bool, str]"""
         if self.halted:
             # 暂停后禁止「开仓」，但允许「平仓」以便锁仓退出
             if order.offset == Offset.OPEN:
@@ -103,6 +123,14 @@ class RiskManager:
 
     # ---------- 每根 bar 后检查（回撤 / 单日亏损） ----------
     def on_new_bar(self, portfolio, dt) -> List[str]:
+        """处理onnewK线。
+        
+            参数:
+                portfolio
+                dt
+        
+            返回:
+                List[str]"""
         triggered: List[str] = []
         d = dt.date() if isinstance(dt, datetime) else None
         if d is not None and d != self.day:

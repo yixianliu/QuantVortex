@@ -193,6 +193,10 @@ def reliability_calibration(store, regime: str | None = None,
     rows = store.query_closed_for_calibration(limit=4000)
 
     def _pts(subset):
+        """处理pts。
+        
+            参数:
+                subset"""
         out = []
         for r in subset:
             p = r.get("p_up")

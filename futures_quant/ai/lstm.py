@@ -13,6 +13,10 @@ import numpy as np
 
 
 def _sigmoid(x):
+    """处理sigmoid。
+    
+        参数:
+            x"""
     return 1.0 / (1.0 + np.exp(-np.clip(x, -30, 30)))
 
 
@@ -21,6 +25,13 @@ class LSTM:
 
     def __init__(self, input_size: int, hidden_size: int = 16, output_size: int = 1,
                  seed: int = 7) -> None:
+        """初始化相关对象。
+        
+            参数:
+                input_size: int
+                hidden_size: int
+                output_size: int
+                seed: int"""
         self.in_sz = input_size
         self.hid = hidden_size
         self.out_sz = output_size
@@ -69,6 +80,12 @@ class LSTM:
 
     # ----------------------------- 批量化 BPTT -----------------------------
     def _backward(self, X, y_true, cache):
+        """处理backward。
+        
+            参数:
+                X
+                y_true
+                cache"""
         B, T, _ = X.shape
         H = self.hid
         grads = {k: np.zeros_like(getattr(self, k)) for k in self._P}
@@ -107,6 +124,15 @@ class LSTM:
         return grads
 
     def _adam(self, grads, lr=0.01, b1=0.9, b2=0.999, eps=1e-8, clip=5.0):
+        """处理adam。
+        
+            参数:
+                grads
+                lr
+                b1
+                b2
+                eps
+                clip"""
         for name in self._P:
             g = np.clip(grads[name], -clip, clip)
             self._m[name] = b1 * self._m[name] + (1 - b1) * g
@@ -118,6 +144,15 @@ class LSTM:
 
     # ----------------------------- 训练 -----------------------------
     def fit(self, sequences, targets, epochs=50, lr=0.005, batch=32, verbose=False):
+        """拟合相关对象。
+        
+            参数:
+                sequences
+                targets
+                epochs
+                lr
+                batch
+                verbose"""
         X3 = np.array(sequences, dtype=float)      # (N,T,F)
         Y = np.array(targets, dtype=float)         # (N,) or (N,out)
         if Y.ndim == 1:

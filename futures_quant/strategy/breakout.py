@@ -13,6 +13,9 @@ from .base import StrategyBase
 
 
 class Breakout(StrategyBase):
+    """突破策略：价格突破区间上/下沿时触发开仓。
+    
+        继承: StrategyBase"""
     name = "突破交易"
     default_params = {
         "period": 20,
@@ -22,14 +25,27 @@ class Breakout(StrategyBase):
     }
 
     def __init__(self, symbol, params=None):
+        """初始化相关对象。
+        
+            参数:
+                symbol
+                params"""
         super().__init__(symbol, params)
         self._stop = None
 
     def _window_size(self) -> int:
+        """处理窗口大小。
+        
+            返回:
+                int"""
         p = self.params
         return int(max(p["period"], p["atr_period"]) + 5)
 
     def on_bar(self, bar: Bar) -> None:
+        """处理onK线。
+        
+            参数:
+                bar: Bar"""
         self._push(bar)
         p = self.params
         if len(self._closes) < p["period"] + 1:

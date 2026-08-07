@@ -17,9 +17,22 @@ from .base import StorageBackend
 
 
 class PostgresBackend(StorageBackend):
+    """PostgreSQL + TimescaleDB 存储后端：面向生产 / 多账户 / 时序场景。
+    
+        继承: StorageBackend"""
     def __init__(self, host: str = "127.0.0.1", port: int = 5432, dbname: str = "futures",
                  user: str = "postgres", password: str = "", timescale: bool = True,
                  dsn: Optional[str] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                host: str
+                port: int
+                dbname: str
+                user: str
+                password: str
+                timescale: bool
+                dsn: Optional[str]"""
         self._pg = self._load_driver()
         self._timescale = timescale
         self.conn = self._connect(dsn, host, port, dbname, user, password)
@@ -27,6 +40,7 @@ class PostgresBackend(StorageBackend):
 
     @staticmethod
     def _load_driver():
+        """加载driver。"""
         try:
             import psycopg  # psycopg3
             return psycopg
@@ -40,15 +54,26 @@ class PostgresBackend(StorageBackend):
                 ) from exc
 
     def _connect(self, dsn, host, port, dbname, user, password):
+        """连接相关对象。
+        
+            参数:
+                dsn
+                host
+                port
+                dbname
+                user
+                password"""
         if dsn:
             return self._pg.connect(dsn)
         return self._pg.connect(host=host, port=port, dbname=dbname, user=user, password=password)
 
     def _cursor(self):
+        """处理cursor。"""
         return self.conn.cursor()
 
     # ---------- schema ----------
     def _init_schema(self) -> None:
+        """初始化表结构。"""
         cur = self._cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS params (key TEXT PRIMARY KEY, value TEXT)")
         cur.execute("""CREATE TABLE IF NOT EXISTS orders (
@@ -79,6 +104,11 @@ class PostgresBackend(StorageBackend):
 
     # ---------- 参数 ----------
     def save_param(self, key: str, value: Any) -> None:
+        """保存参数。
+        
+            参数:
+                key: str
+                value: Any"""
         cur = self._cursor()
         cur.execute(
             "INSERT INTO params (key,value) VALUES (%s,%s) "
@@ -86,6 +116,14 @@ class PostgresBackend(StorageBackend):
         self.conn.commit()
 
     def load_param(self, key: str, default: Any = None) -> Any:
+        """加载参数。
+        
+            参数:
+                key: str
+                default: Any
+        
+            返回:
+                Any"""
         cur = self._cursor()
         cur.execute("SELECT value FROM params WHERE key=%s", (key,))
         row = cur.fetchone()
@@ -93,6 +131,10 @@ class PostgresBackend(StorageBackend):
 
     # ---------- 委托 ----------
     def insert_order(self, order: Order) -> None:
+        """处理insert订单。
+        
+            参数:
+                order: Order"""
         cur = self._cursor()
         cur.execute(
             "INSERT INTO orders VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
@@ -105,6 +147,13 @@ class PostgresBackend(StorageBackend):
         self.conn.commit()
 
     def query_orders(self, symbol: Optional[str] = None) -> List[dict]:
+        """处理query订单。
+        
+            参数:
+                symbol: Optional[str]
+        
+            返回:
+                List[dict]"""
         cur = self._cursor()
         if symbol:
             cur.execute("SELECT * FROM orders WHERE symbol=%s", (symbol,))
@@ -115,6 +164,10 @@ class PostgresBackend(StorageBackend):
 
     # ---------- 成交 ----------
     def insert_trade(self, trade: Trade) -> None:
+        """处理insert交易。
+        
+            参数:
+                trade: Trade"""
         cur = self._cursor()
         cur.execute(
             "INSERT INTO trades (order_id,symbol,direction,offset,quantity,price,commission,pnl,datetime)"
@@ -124,6 +177,13 @@ class PostgresBackend(StorageBackend):
         self.conn.commit()
 
     def query_trades(self, symbol: Optional[str] = None) -> List[dict]:
+        """处理query交易记录。
+        
+            参数:
+                symbol: Optional[str]
+        
+            返回:
+                List[dict]"""
         cur = self._cursor()
         if symbol:
             cur.execute("SELECT * FROM trades WHERE symbol=%s", (symbol,))
@@ -134,6 +194,10 @@ class PostgresBackend(StorageBackend):
 
     # ---------- 行情 ----------
     def insert_bars(self, bars: Iterable[Bar]) -> None:
+        """处理insertK线。
+        
+            参数:
+                bars: Iterable[Bar]"""
         rows = [(b.symbol, str(b.datetime), b.open, b.high, b.low, b.close,
                  b.volume, b.open_interest) for b in bars]
         if not rows:
@@ -146,6 +210,16 @@ class PostgresBackend(StorageBackend):
 
     def query_bars(self, symbol: str, start: Optional[str] = None,
                    end: Optional[str] = None, limit: Optional[int] = None) -> List[Bar]:
+        """处理queryK线。
+        
+            参数:
+                symbol: str
+                start: Optional[str]
+                end: Optional[str]
+                limit: Optional[int]
+        
+            返回:
+                List[Bar]"""
         sql = "SELECT * FROM bars WHERE symbol=%s"
         args: list = [symbol]
         if start:
@@ -164,11 +238,24 @@ class PostgresBackend(StorageBackend):
 
     # ---------- 日志 ----------
     def insert_log(self, level: str, message: str, ts: Optional[str] = None) -> None:
+        """处理insertlog。
+        
+            参数:
+                level: str
+                message: str
+                ts: Optional[str]"""
         cur = self._cursor()
         cur.execute("INSERT INTO logs (level,message,ts) VALUES (%s,%s,%s)", (level, message, ts))
         self.conn.commit()
 
     def query_logs(self, limit: int = 200) -> List[dict]:
+        """处理querylogs。
+        
+            参数:
+                limit: int
+        
+            返回:
+                List[dict]"""
         cur = self._cursor()
         cur.execute("SELECT * FROM logs ORDER BY id DESC LIMIT %s", (limit,))
         cols = [d[0] for d in cur.description]
@@ -176,6 +263,13 @@ class PostgresBackend(StorageBackend):
 
     # ---------- 资金曲线 ----------
     def save_equity_point(self, dt: Any, equity: float, available: float, drawdown: float = 0.0) -> None:
+        """保存权益point。
+        
+            参数:
+                dt: Any
+                equity: float
+                available: float
+                drawdown: float"""
         cur = self._cursor()
         cur.execute(
             "INSERT INTO equity (dt,equity,available,drawdown) VALUES (%s,%s,%s,%s)",
@@ -183,10 +277,15 @@ class PostgresBackend(StorageBackend):
         self.conn.commit()
 
     def query_equity(self) -> List[dict]:
+        """处理query权益。
+        
+            返回:
+                List[dict]"""
         cur = self._cursor()
         cur.execute("SELECT * FROM equity ORDER BY dt")
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
     def close(self) -> None:
+        """关闭相关对象。"""
         self.conn.close()

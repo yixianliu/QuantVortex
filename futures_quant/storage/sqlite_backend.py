@@ -19,7 +19,14 @@ from ..runtime import normalize_data_path
 
 
 class SQLiteBackend(StorageBackend):
+    """SQLite 存储后端：零配置单文件，适合桌面 exe / 仿真 / 回测落地。
+    
+        继承: StorageBackend"""
     def __init__(self, path: str = "data/futures_quant.db") -> None:
+        """初始化相关对象。
+        
+            参数:
+                path: str"""
         self.path = normalize_data_path(path, "futures_quant.db")
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         # check_same_thread=False：引擎在单线程事件循环内调用，允许回测/UI 线程读取
@@ -32,6 +39,7 @@ class SQLiteBackend(StorageBackend):
 
     # ---------- schema ----------
     def _init_schema(self) -> None:
+        """初始化表结构。"""
         cur = self.conn.cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS params (key TEXT PRIMARY KEY, value TEXT)")
         cur.execute("""CREATE TABLE IF NOT EXISTS orders (
@@ -55,15 +63,32 @@ class SQLiteBackend(StorageBackend):
 
     # ---------- 参数 ----------
     def save_param(self, key: str, value: Any) -> None:
+        """保存参数。
+        
+            参数:
+                key: str
+                value: Any"""
         self.conn.execute("INSERT OR REPLACE INTO params VALUES (?,?)", (key, str(value)))
         self.conn.commit()
 
     def load_param(self, key: str, default: Any = None) -> Any:
+        """加载参数。
+        
+            参数:
+                key: str
+                default: Any
+        
+            返回:
+                Any"""
         row = self.conn.execute("SELECT value FROM params WHERE key=?", (key,)).fetchone()
         return row["value"] if row else default
 
     # ---------- 委托 ----------
     def insert_order(self, order: Order) -> None:
+        """处理insert订单。
+        
+            参数:
+                order: Order"""
         self.conn.execute(
             "INSERT OR REPLACE INTO orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (order.order_id, order.symbol, order.direction.value, order.offset.value,
@@ -73,6 +98,13 @@ class SQLiteBackend(StorageBackend):
         self.conn.commit()
 
     def query_orders(self, symbol: Optional[str] = None) -> List[dict]:
+        """处理query订单。
+        
+            参数:
+                symbol: Optional[str]
+        
+            返回:
+                List[dict]"""
         if symbol:
             cur = self.conn.execute("SELECT * FROM orders WHERE symbol=?", (symbol,))
         else:
@@ -81,6 +113,10 @@ class SQLiteBackend(StorageBackend):
 
     # ---------- 成交 ----------
     def insert_trade(self, trade: Trade) -> None:
+        """处理insert交易。
+        
+            参数:
+                trade: Trade"""
         self.conn.execute(
             "INSERT INTO trades (order_id,symbol,direction,offset,quantity,price,commission,pnl,datetime)"
             " VALUES (?,?,?,?,?,?,?,?,?)",
@@ -90,6 +126,13 @@ class SQLiteBackend(StorageBackend):
         self.conn.commit()
 
     def query_trades(self, symbol: Optional[str] = None) -> List[dict]:
+        """处理query交易记录。
+        
+            参数:
+                symbol: Optional[str]
+        
+            返回:
+                List[dict]"""
         if symbol:
             cur = self.conn.execute("SELECT * FROM trades WHERE symbol=?", (symbol,))
         else:
@@ -98,6 +141,10 @@ class SQLiteBackend(StorageBackend):
 
     # ---------- 行情 ----------
     def insert_bars(self, bars: Iterable[Bar]) -> None:
+        """处理insertK线。
+        
+            参数:
+                bars: Iterable[Bar]"""
         rows = [(b.symbol, str(b.datetime), b.open, b.high, b.low, b.close,
                  b.volume, b.open_interest) for b in bars]
         if not rows:
@@ -109,6 +156,16 @@ class SQLiteBackend(StorageBackend):
 
     def query_bars(self, symbol: str, start: Optional[str] = None,
                    end: Optional[str] = None, limit: Optional[int] = None) -> List[Bar]:
+        """处理queryK线。
+        
+            参数:
+                symbol: str
+                start: Optional[str]
+                end: Optional[str]
+                limit: Optional[int]
+        
+            返回:
+                List[Bar]"""
         sql = "SELECT * FROM bars WHERE symbol=?"
         args: list = [symbol]
         if start:
@@ -124,15 +181,35 @@ class SQLiteBackend(StorageBackend):
 
     # ---------- 日志 ----------
     def insert_log(self, level: str, message: str, ts: Optional[str] = None) -> None:
+        """处理insertlog。
+        
+            参数:
+                level: str
+                message: str
+                ts: Optional[str]"""
         self.conn.execute("INSERT INTO logs (level,message,ts) VALUES (?,?,?)", (level, message, ts))
         self.conn.commit()
 
     def query_logs(self, limit: int = 200) -> List[dict]:
+        """处理querylogs。
+        
+            参数:
+                limit: int
+        
+            返回:
+                List[dict]"""
         cur = self.conn.execute("SELECT * FROM logs ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in cur.fetchall()]
 
     # ---------- 资金曲线 ----------
     def save_equity_point(self, dt: Any, equity: float, available: float, drawdown: float = 0.0) -> None:
+        """保存权益point。
+        
+            参数:
+                dt: Any
+                equity: float
+                available: float
+                drawdown: float"""
         self.conn.execute(
             "INSERT INTO equity (dt,equity,available,drawdown) VALUES (?,?,?,?)",
             (str(dt), float(equity), float(available), float(drawdown)),
@@ -140,8 +217,13 @@ class SQLiteBackend(StorageBackend):
         self.conn.commit()
 
     def query_equity(self) -> List[dict]:
+        """处理query权益。
+        
+            返回:
+                List[dict]"""
         cur = self.conn.execute("SELECT * FROM equity ORDER BY dt")
         return [dict(r) for r in cur.fetchall()]
 
     def close(self) -> None:
+        """关闭相关对象。"""
         self.conn.close()

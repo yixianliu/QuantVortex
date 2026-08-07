@@ -36,8 +36,17 @@ def _parse_delivery(value) -> Optional[object]:
 
 
 class TradingEngine:
+    """交易引擎：逐根 K 线驱动策略信号、撮合委托、维护账户与成交日志，并保证无未来函数。"""
     def __init__(self, config: Config, logger=None, mode: str = "backtest", db: Optional[StorageBackend] = None,
                  multiplier: Optional[float] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                config: Config
+                logger
+                mode: str
+                db: Optional[StorageBackend]
+                multiplier: Optional[float]"""
         self.config = config
         self.mode = mode
         self.logger = logger
@@ -70,13 +79,28 @@ class TradingEngine:
 
     # ---------- 注册 ----------
     def add_contract(self, contract) -> None:
+        """添加合约。
+        
+            参数:
+                contract"""
         self.contracts[contract.symbol] = contract
 
     def register_strategy(self, strategy) -> None:
+        """注册策略。
+        
+            参数:
+                strategy"""
         strategy.engine = self
         self.strategies.append(strategy)
 
     def get_position(self, symbol: str) -> tuple:
+        """获取持仓。
+        
+            参数:
+                symbol: str
+        
+            返回:
+                tuple"""
         pos = self.portfolio.positions.get(symbol)
         return (pos.long_qty, pos.short_qty) if pos else (0, 0)
 
@@ -85,6 +109,18 @@ class TradingEngine:
         self, symbol, direction: Direction, offset: Offset, quantity: int,
         order_type=None, limit_price=None,
     ) -> Optional[Order]:
+        """发送订单。
+        
+            参数:
+                symbol
+                direction: Direction
+                offset: Offset
+                quantity: int
+                order_type
+                limit_price
+        
+            返回:
+                Optional[Order]"""
         from ..core.types import OrderType
         order_type = order_type or OrderType.MARKET
         self._order_seq += 1
@@ -117,6 +153,10 @@ class TradingEngine:
         return order
 
     def _accept_trade(self, trade: Trade) -> None:
+        """处理accept交易。
+        
+            参数:
+                trade: Trade"""
         self.portfolio.process_trade(trade)
         self.trades_log.append(trade)
         if self.db:
@@ -124,6 +164,10 @@ class TradingEngine:
 
     # ---------- 主循环（按 bar 驱动） ----------
     def process_bar(self, bar: Bar) -> None:
+        """处理K线。
+        
+            参数:
+                bar: Bar"""
         self._current_dt = bar.datetime
         self.portfolio.update_price(bar.symbol, bar.close)
 
@@ -182,4 +226,5 @@ class TradingEngine:
                 self.send_order(sym, Direction.LONG, Offset.CLOSE, pos.short_qty)
 
     def start(self) -> None:
+        """启动相关对象。"""
         self.risk.start(self.portfolio)

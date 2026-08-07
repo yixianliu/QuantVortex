@@ -52,6 +52,14 @@ def _fmt_pct(v) -> str:
 
 
 def _fmt_num(v, digits: int = 2) -> str:
+    """处理fmtnum。
+    
+        参数:
+            v
+            digits: int
+    
+        返回:
+            str"""
     if v is None or not isinstance(v, (int, float)) or math.isnan(float(v)):
         return "—"
     return f"{float(v):,.{digits}f}"
@@ -142,6 +150,10 @@ class _SummaryCard(QFrame):
     """顶部关键指标卡：等宽排列 6 个标签。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                parent: Optional[QWidget]"""
         super().__init__(parent)
         self.setObjectName("AttributionSummaryCard")
         self.setStyleSheet(
@@ -171,6 +183,12 @@ class _SummaryCard(QFrame):
         layout.addStretch(1)
 
     def set_metric(self, key: str, text: str, color: str = "#e5e7eb") -> None:
+        """设置metric。
+        
+            参数:
+                key: str
+                text: str
+                color: str"""
         if key not in self._cells:
             return
         self._cells[key].setText(text)
@@ -185,6 +203,11 @@ class AttributionDialog(QDialog):
     """
 
     def __init__(self, detail: dict, parent: Optional[QWidget] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                detail: dict
+                parent: Optional[QWidget]"""
         super().__init__(parent)
         self._detail = detail
         self.setWindowTitle("回测详情 · 绩效归因")
@@ -251,6 +274,10 @@ class AttributionDialog(QDialog):
 
     # ------------------------------------------------------------------
     def _fill_summary(self, d: dict) -> None:
+        """处理fillsummary。
+        
+            参数:
+                d: dict"""
         m = d.get("metrics") or {}
         sym = d.get("symbol", "—")
         gen = d.get("generation", "—")
@@ -276,6 +303,10 @@ class AttributionDialog(QDialog):
 
     # ------------------------------------------------------------------
     def _populate(self, d: dict) -> None:
+        """处理populate。
+        
+            参数:
+                d: dict"""
         trades = d.get("trades") or []
         rounds = _pair_round_trips(trades)
 
@@ -353,6 +384,12 @@ class AttributionDialog(QDialog):
             self._set_cell(r, 6, _fmt_num(rd["commission"], 2))
 
     def _set_cell(self, row: int, col: int, text: str) -> None:
+        """设置cell。
+        
+            参数:
+                row: int
+                col: int
+                text: str"""
         item = QTableWidgetItem(text)
         item.setForeground(QColor("#e5e7eb"))
         self._trade_tbl.setItem(row, col, item)

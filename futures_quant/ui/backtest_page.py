@@ -44,21 +44,43 @@ class _BufLogger:
     """极简内存日志器：捕获引擎/经纪商的运行日志，便于测试断言（如交割强平告警）。"""
 
     def __init__(self) -> None:
+        """初始化相关对象。"""
         self.msgs: list = []
 
     def _a(self, lvl: str, msg: str) -> None:
+        """处理a。
+        
+            参数:
+                lvl: str
+                msg: str"""
         self.msgs.append((lvl, str(msg)))
 
     def warning(self, m) -> None:
+        """处理警告。
+        
+            参数:
+                m"""
         self._a("W", m)
 
     def info(self, m) -> None:
+        """处理信息。
+        
+            参数:
+                m"""
         self._a("I", m)
 
     def error(self, m) -> None:
+        """处理错误。
+        
+            参数:
+                m"""
         self._a("E", m)
 
     def debug(self, m) -> None:
+        """处理debug。
+        
+            参数:
+                m"""
         self._a("D", m)
 
 from ..strategy.trend_following import TrendFollowing
@@ -147,13 +169,31 @@ def _opt_combos(strat_name: str):
 
 
 def _pct(v: Optional[float]) -> str:
+    """处理pct。
+    
+        参数:
+            v: Optional[float]
+    
+        返回:
+            str"""
     if v is None:
         return "--"
     return f"{v * 100:,.2f}%"
 
 
 class BacktestPage(BasePage):
+    """回测页面。
+    
+        继承: BasePage"""
     def __init__(self, mdm, store=None, config=None, session=None, header: bool = True):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session
+                header: bool"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "backtest"
         self._show_header = header
@@ -174,6 +214,7 @@ class BacktestPage(BasePage):
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -323,6 +364,14 @@ class BacktestPage(BasePage):
 
     # ------------------------------------------------------------------
     def _make_kpi(self, key: str, title: str) -> QFrame:
+        """生成kpi。
+        
+            参数:
+                key: str
+                title: str
+        
+            返回:
+                QFrame"""
         frame = QFrame(); frame.setObjectName("kpi"); frame.setFixedHeight(62)
         v = QVBoxLayout(frame); v.setContentsMargins(10, 6, 10, 6); v.setSpacing(2)
         lab = QLabel(title); lab.setObjectName("sub")
@@ -334,6 +383,7 @@ class BacktestPage(BasePage):
         return frame
 
     def _style_kpis(self) -> None:
+        """处理stylekpis。"""
         p = PALETTE[self._theme]
         for frame in self._kpi_frames.values():
             frame.setStyleSheet(
@@ -342,16 +392,28 @@ class BacktestPage(BasePage):
             lab.setStyleSheet(f"color:{p['sub']};font-size:12px;")
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         super().set_theme(t)
         self._style_kpis()
 
     # ------------------------------------------------------------------
     def _on_sel(self, *_):
+        """处理onsel。
+        
+            参数:
+                *_: 可变位置参数"""
         self.cur_symbol = self.sym_cb.currentData()
         self.cur_period = self.per_cb.currentData()
         self.selection_changed.emit(self.cur_symbol, self.cur_period)
 
     def _on_strat(self, *_):
+        """处理onstrat。
+        
+            参数:
+                *_: 可变位置参数"""
         if self.session is not None:
             self.session.set("backtest_strategy", self.strat_cb.currentData())
         if getattr(self, "sec_equity", None) is not None:
@@ -367,6 +429,7 @@ class BacktestPage(BasePage):
 
     # ------------------------------------------------------------------
     def _run(self) -> None:
+        """运行相关对象。"""
         sym = self.sym_cb.currentData()
         strat_name = self.strat_cb.currentData()
         per = self.per_cb.currentData()
@@ -388,6 +451,7 @@ class BacktestPage(BasePage):
                           + ("（应用优化最优参数确认）" if override else ""))
 
         def work():
+            """处理work。"""
             from futures_quant.config.settings import Config
             from futures_quant.backtest.backtester import Backtester
             from futures_quant.data.base import Contract
@@ -401,6 +465,10 @@ class BacktestPage(BasePage):
             strat_cls = dict((n, c) for n, c in STRATEGIES)[strat_name]
 
             def make_cfg(cap):
+                """生成cfg。
+                
+                    参数:
+                        cap"""
                 cfg = Config()
                 if not self.risk_chk.isChecked():
                     # 放松风控，展示策略原始表现
@@ -522,6 +590,10 @@ class BacktestPage(BasePage):
 
     # ------------------------------------------------------------------
     def _on_done(self, r: dict) -> None:
+        """处理ondone。
+        
+            参数:
+                r: dict"""
         self.run_btn.setEnabled(True); self.run_btn.setText("开始回测")
 
         if r.get("opt"):
@@ -610,6 +682,10 @@ class BacktestPage(BasePage):
         self._applied_params = None
 
     def _on_err(self, msg: str) -> None:
+        """处理onerr。
+        
+            参数:
+                msg: str"""
         self.run_btn.setEnabled(True); self.run_btn.setText("开始回测")
         self.export_btn.setEnabled(False)
         self.info.setStyleSheet(f"color:{p['down']};")
@@ -617,6 +693,10 @@ class BacktestPage(BasePage):
 
     # ------------------------------------------------------------------
     def _update_kpis(self, m: dict) -> None:
+        """更新kpis。
+        
+            参数:
+                m: dict"""
         p = PALETTE[self._theme]
         mapping = {
             "total_return": m.get("total_return"),
@@ -643,6 +723,12 @@ class BacktestPage(BasePage):
                 vlab.setStyleSheet(f"color:{p['text']};font-size:18px;font-weight:bold;")
 
     def _update_chart(self, curve: list, sym: str, per: str) -> None:
+        """更新图表。
+        
+            参数:
+                curve: list
+                sym: str
+                per: str"""
         if not curve:
             return
         n = len(curve)
@@ -713,6 +799,10 @@ class BacktestPage(BasePage):
                     abs(min(vals)) if vals else 1.0, 1e-9)
 
         def bg(v):
+            """处理bg。
+            
+                参数:
+                    v"""
             if v is None:
                 return None
             scale = min(abs(v) / denom, 1.0)
@@ -867,6 +957,10 @@ class BacktestPage(BasePage):
                         it.setBackground(_qcolor_bg("#10b981", alpha=40))
 
     def _fill_trades(self, trades: list) -> None:
+        """处理fill交易记录。
+        
+            参数:
+                trades: list"""
         self.trade_tbl.setRowCount(0)
         prepare_table(self.trade_tbl)
         rows = trades[:500]
@@ -889,6 +983,10 @@ class BacktestPage(BasePage):
             self.trade_tbl.setItem(i, 7, pnl_item)
 
     def _fill_metrics(self, m: dict) -> None:
+        """处理fillmetrics。
+        
+            参数:
+                m: dict"""
         self.metric_tbl.setRowCount(0)
         prepare_table(self.metric_tbl)
         items = [(METRIC_LABELS.get(k, k), v) for k, v in m.items()]
@@ -905,6 +1003,7 @@ class BacktestPage(BasePage):
 
     # ------------------------------------------------------------------
     def _open_report(self) -> None:
+        """打开report。"""
         if self._report_path and os.path.exists(self._report_path):
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._report_path))
 
@@ -920,6 +1019,10 @@ class BacktestPage(BasePage):
 
 
 def _qcolor(key: str):
+    """处理qcolor。
+    
+        参数:
+            key: str"""
     from PyQt6.QtGui import QColor
     return QColor(PALETTE[THEME][key])
 
@@ -966,6 +1069,13 @@ class BacktestCenterPage(BasePage):
     """
 
     def __init__(self, mdm, store=None, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "backtest"
         self._engine = None            # EvolutionEngine（懒创建）
@@ -1017,6 +1127,7 @@ class BacktestCenterPage(BasePage):
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
+        """构建相关对象。"""
         from .widgets import StatusTile, MetricChip
 
         root = QVBoxLayout(self)
@@ -1140,6 +1251,7 @@ class BacktestCenterPage(BasePage):
     # 期货特有参数控制条（杠杆 / 保证金 / 乘数 / 交割日）
     # ------------------------------------------------------------------
     def _build_futures_params_bar(self) -> None:
+        """构建期货参数K线。"""
         from .widgets import ToolBar
         from PyQt6.QtCore import QDate
 
@@ -1300,6 +1412,12 @@ class BacktestCenterPage(BasePage):
         p = PALETTE[self._theme]
 
         def setk(key, val, color=""):
+            """处理setk。
+            
+                参数:
+                    key
+                    val
+                    color"""
             c = self._perf_chips.get(key)
             if c:
                 c.set_value(val, color)
@@ -1322,6 +1440,10 @@ class BacktestCenterPage(BasePage):
     # 自动驱动：页面显示即启动，无任何用户操作
     # ------------------------------------------------------------------
     def showEvent(self, event) -> None:  # noqa: N802
+        """显示事件。
+        
+            参数:
+                event"""
         super().showEvent(event)
         if not self._auto_started:
             self._auto_started = True
@@ -1329,6 +1451,7 @@ class BacktestCenterPage(BasePage):
             QTimer.singleShot(600, self._start_auto)
 
     def _start_auto(self) -> None:
+        """启动auto。"""
         if self._closed:
             return
         try:
@@ -1455,6 +1578,7 @@ class BacktestCenterPage(BasePage):
     # 模式切换：自动进化 / 手动回测（互斥）
     # ------------------------------------------------------------------
     def _build_mode_switch(self) -> None:
+        """构建模式switch。"""
         self._mode_row = QHBoxLayout()
         self._mode_row.setSpacing(10)
         self._mode_row.addWidget(QLabel("运行模式"))
@@ -1471,6 +1595,7 @@ class BacktestCenterPage(BasePage):
         self._mode_row.addStretch(1)
 
     def _build_manual_panel(self) -> None:
+        """构建manual面板。"""
         self._manual_group = QGroupBox("🧪 手动回测 · 自定义期货策略")
         g = QVBoxLayout(self._manual_group)
         g.setSpacing(8)
@@ -1502,6 +1627,10 @@ class BacktestCenterPage(BasePage):
         g.addLayout(row2)
 
     def _on_mode_toggle(self, *_args) -> None:
+        """处理on模式toggle。
+        
+            参数:
+                *_args: 可变位置参数"""
         auto = self._rb_auto.isChecked()
         # 互斥单选按钮切换会触发两次 toggled（自动取消 + 手动选中各一次），
         # 用 entering_manual 确保「品种下拉刷新 + 配置预填」只在真正切入手动模式
@@ -1526,6 +1655,7 @@ class BacktestCenterPage(BasePage):
                 self._maybe_restore_manual_config()
 
     def _populate_manual_symbols(self) -> None:
+        """处理populatemanual合约代码。"""
         cb = self._manual_sym_cb
         if cb is None:
             return
@@ -1556,6 +1686,7 @@ class BacktestCenterPage(BasePage):
         cb.currentIndexChanged.connect(self._populate_manual_strategies)
 
     def _populate_manual_strategies(self) -> None:
+        """处理populatemanual策略。"""
         cb = self._manual_strat_cb
         if cb is None:
             return
@@ -1709,6 +1840,7 @@ class BacktestCenterPage(BasePage):
                           f"{' · 交割日 ' + str(delivery_date) if delivery_date else ''} …")
 
         def work():
+            """处理work。"""
             from ..config.settings import Config
             from ..data.base import Contract
             from ..data.contract_specs import get_contract_spec
@@ -1749,6 +1881,10 @@ class BacktestCenterPage(BasePage):
         self._run_worker(work, self._on_manual_done, on_err=self._on_manual_err)
 
     def _on_manual_done(self, result: dict) -> None:
+        """处理onmanualdone。
+        
+            参数:
+                result: dict"""
         self._manual_running = False
         if self._manual_run_btn is not None:
             self._manual_run_btn.setEnabled(True)
@@ -1814,6 +1950,10 @@ class BacktestCenterPage(BasePage):
             duration=4000)
 
     def _on_manual_err(self, msg: str) -> None:
+        """处理onmanualerr。
+        
+            参数:
+                msg: str"""
         self._manual_running = False
         if self._manual_run_btn is not None:
             self._manual_run_btn.setEnabled(True)
@@ -1847,6 +1987,7 @@ class BacktestCenterPage(BasePage):
         bt_store = self._bt_store
 
         def work():
+            """处理work。"""
             snap = eng.step()
             # 自动持久化（在后台线程内完成，零 GUI 阻塞）：
             #   引擎断点 + 最新快照 + 本代历史记录
@@ -1864,6 +2005,10 @@ class BacktestCenterPage(BasePage):
         self._run_worker(work, self._on_gen_done, on_err=self._on_gen_err)
 
     def _on_gen_done(self, snap: dict) -> None:
+        """处理ongendone。
+        
+            参数:
+                snap: dict"""
         self._gen_running = False
         if self._closed:
             return
@@ -1940,6 +2085,10 @@ class BacktestCenterPage(BasePage):
         self._schedule_next()
 
     def _on_gen_err(self, msg: str) -> None:
+        """处理ongenerr。
+        
+            参数:
+                msg: str"""
         self._gen_running = False
         if self._closed:
             return
@@ -1948,6 +2097,10 @@ class BacktestCenterPage(BasePage):
         self._schedule_next(ERR_RETRY_MS)
 
     def _schedule_next(self, delay: int | None = None) -> None:
+        """处理schedulenext。
+        
+            参数:
+                delay: int | None"""
         from PyQt6.QtCore import QTimer
         if delay is None:
             delay = GEN_INTERVAL_MS if self.isVisible() else GEN_INTERVAL_HIDDEN_MS
@@ -1957,12 +2110,23 @@ class BacktestCenterPage(BasePage):
     # 渲染辅助
     # ------------------------------------------------------------------
     def _set_stage(self, idx: int, level: str, value: str, tip: str = "") -> None:
+        """设置stage。
+        
+            参数:
+                idx: int
+                level: str
+                value: str
+                tip: str"""
         try:
             self._stage_tiles[idx].set_status(level, value, tip)
         except Exception:  # noqa: BLE001
             pass
 
     def _log(self, text: str) -> None:
+        """记录日志相关对象。
+        
+            参数:
+                text: str"""
         from PyQt6.QtWidgets import QListWidgetItem
         from datetime import datetime
         item = QListWidgetItem(f"[{datetime.now().strftime('%H:%M:%S')}] {text}")
@@ -1974,6 +2138,10 @@ class BacktestCenterPage(BasePage):
             self._bt_store.add_log(text)
 
     def _update_curves(self, snap: dict) -> None:
+        """更新curves。
+        
+            参数:
+                snap: dict"""
         bo = snap.get("best_overall") or {}
         bo_curve = bo.get("equity_curve") or []
         gen_curve = snap.get("gen_best_curve") or []
@@ -1988,6 +2156,10 @@ class BacktestCenterPage(BasePage):
         self._fill_perf_chips(metrics)
 
     def _fill_population(self, ranked: list) -> None:
+        """处理fillpopulation。
+        
+            参数:
+                ranked: list"""
         self.pop_tbl.setRowCount(0)
         prepare_table(self.pop_tbl, self._theme)
         rows = ranked[:12]
@@ -2027,6 +2199,10 @@ class BacktestCenterPage(BasePage):
                         it.setBackground(_qcolor_bg("#10b981", alpha=36))
 
     def _fill_library(self, lib: list) -> None:
+        """处理filllibrary。
+        
+            参数:
+                lib: list"""
         self.lib_tbl.setRowCount(0)
         prepare_table(self.lib_tbl, self._theme)
         rows = lib[:60]
@@ -2089,6 +2265,11 @@ class BacktestCenterPage(BasePage):
         ]
 
     def _set_hist_row(self, i: int, rec: dict) -> None:
+        """设置hist行。
+        
+            参数:
+                i: int
+                rec: dict"""
         vals = self._hist_row_values(rec)
         for c, v in enumerate(vals):
             it = QTableWidgetItem(v)
@@ -2210,6 +2391,10 @@ class BacktestCenterPage(BasePage):
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802
         # 退出前合并 WAL，保证断点/历史完整落盘
+        """关闭事件。
+        
+            参数:
+                event"""
         if self._bt_store is not None:
             try:
                 self._bt_store.checkpoint()
@@ -2219,6 +2404,10 @@ class BacktestCenterPage(BasePage):
 
     # ------------------------------------------------------------------
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         super().set_theme(t)
         for tile in self._stage_tiles:
             tile.set_theme(t)

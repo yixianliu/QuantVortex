@@ -31,6 +31,20 @@ class Contract:
         leverage: Optional[float] = None,
         close_today_commission_ratio: float = 0.5,
     ) -> None:
+        """初始化相关对象。
+        
+            参数:
+                symbol: str
+                exchange: str
+                multiplier: float
+                min_price_tick: float
+                lot_size: int
+                margin_rate: float
+                commission_per_lot: float
+                trading_hours: Optional[list]
+                delivery_date: Optional[str]
+                leverage: Optional[float]
+                close_today_commission_ratio: float"""
         self.symbol = symbol
         self.exchange = exchange
         self.multiplier = multiplier
@@ -72,18 +86,28 @@ class Gateway(ABC):
     """实时行情 / 交易网关（仿真或 CTP）。"""
 
     def __init__(self) -> None:
+        """初始化相关对象。"""
         self.on_bar: Optional[Callable[[Bar], None]] = None
         self.on_trade: Optional[Callable] = None
         self.on_log: Optional[Callable[[str], None]] = None
 
     @abstractmethod
     def connect(self) -> bool:
+        """连接相关对象。
+        
+            返回:
+                bool"""
         ...
 
     @abstractmethod
     def subscribe(self, symbol: str) -> None:
+        """处理subscribe。
+        
+            参数:
+                symbol: str"""
         ...
 
     @abstractmethod
     def disconnect(self) -> None:
+        """断开连接相关对象。"""
         ...

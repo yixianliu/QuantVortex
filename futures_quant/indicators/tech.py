@@ -16,14 +16,39 @@ import pandas as pd
 
 # ----------------------------- 趋势类 -----------------------------
 def sma(series: pd.Series, n: int) -> pd.Series:
+    """处理sma。
+    
+        参数:
+            series: pd.Series
+            n: int
+    
+        返回:
+            pd.Series"""
     return series.rolling(n, min_periods=1).mean()
 
 
 def ema(series: pd.Series, n: int) -> pd.Series:
+    """处理EMA。
+    
+        参数:
+            series: pd.Series
+            n: int
+    
+        返回:
+            pd.Series"""
     return series.ewm(span=n, adjust=False, min_periods=1).mean()
 
 
 def boll(close: pd.Series, n: int = 20, k: float = 2.0) -> pd.DataFrame:
+    """处理布林带。
+    
+        参数:
+            close: pd.Series
+            n: int
+            k: float
+    
+        返回:
+            pd.DataFrame"""
     mid = sma(close, n)
     sd = close.rolling(n, min_periods=1).std(ddof=0)
     return pd.DataFrame({
@@ -32,6 +57,16 @@ def boll(close: pd.Series, n: int = 20, k: float = 2.0) -> pd.DataFrame:
 
 
 def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+    """处理MACD。
+    
+        参数:
+            close: pd.Series
+            fast: int
+            slow: int
+            signal: int
+    
+        返回:
+            pd.DataFrame"""
     dif = ema(close, fast) - ema(close, slow)
     dea = ema(dif, signal)
     hist = (dif - dea) * 2  # 期货软件常用 2 倍柱
@@ -102,6 +137,14 @@ def sar(high: pd.Series, low: pd.Series, accel: float = 0.02,
 
 # ----------------------------- 摆动类 -----------------------------
 def rsi(close: pd.Series, n: int = 14) -> pd.Series:
+    """处理RSI。
+    
+        参数:
+            close: pd.Series
+            n: int
+    
+        返回:
+            pd.Series"""
     delta = close.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -113,6 +156,18 @@ def rsi(close: pd.Series, n: int = 14) -> pd.Series:
 
 def kdj(close: pd.Series, high: pd.Series, low: pd.Series,
         n: int = 9, m1: int = 3, m2: int = 3) -> pd.DataFrame:
+    """处理KDJ。
+    
+        参数:
+            close: pd.Series
+            high: pd.Series
+            low: pd.Series
+            n: int
+            m1: int
+            m2: int
+    
+        返回:
+            pd.DataFrame"""
     llv = low.rolling(n, min_periods=1).min()
     hhv = high.rolling(n, min_periods=1).max()
     rsv = (close - llv) / (hhv - llv).replace(0, np.nan) * 100
@@ -124,6 +179,16 @@ def kdj(close: pd.Series, high: pd.Series, low: pd.Series,
 
 
 def cci(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+    """处理CCI。
+    
+        参数:
+            high: pd.Series
+            low: pd.Series
+            close: pd.Series
+            n: int
+    
+        返回:
+            pd.Series"""
     tp = (high + low + close) / 3
     ma = tp.rolling(n, min_periods=1).mean()
     md = (tp - ma).abs().rolling(n, min_periods=1).mean()
@@ -131,25 +196,65 @@ def cci(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Se
 
 
 def roc(close: pd.Series, n: int = 12) -> pd.Series:
+    """处理roc。
+    
+        参数:
+            close: pd.Series
+            n: int
+    
+        返回:
+            pd.Series"""
     return close.pct_change(n) * 100
 
 
 def bias(close: pd.Series, n: int = 6) -> pd.Series:
+    """处理bias。
+    
+        参数:
+            close: pd.Series
+            n: int
+    
+        返回:
+            pd.Series"""
     ma = sma(close, n)
     return (close - ma) / ma * 100
 
 
 def momentum(close: pd.Series, n: int = 10) -> pd.Series:
+    """处理momentum。
+    
+        参数:
+            close: pd.Series
+            n: int
+    
+        返回:
+            pd.Series"""
     return close.diff(n)
 
 
 # ----------------------------- 量能类 -----------------------------
 def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """处理obv。
+    
+        参数:
+            close: pd.Series
+            volume: pd.Series
+    
+        返回:
+            pd.Series"""
     sign = np.sign(close.diff().fillna(0))
     return (sign * volume).cumsum()
 
 
 def vol_ma(volume: pd.Series, n: int = 5) -> pd.Series:
+    """处理成交量均线。
+    
+        参数:
+            volume: pd.Series
+            n: int
+    
+        返回:
+            pd.Series"""
     return volume.rolling(n, min_periods=1).mean()
 
 

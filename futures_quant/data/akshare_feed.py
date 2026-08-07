@@ -45,6 +45,10 @@ class AkshareFeed(DataFeed):
     source_label = "AkShare 实盘日线"
 
     def __init__(self, cache_dir: str | None = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                cache_dir: str | None"""
         self.cache_dir = cache_dir or os.path.join(get_data_dir(), "akshare_cache")
         os.makedirs(self.cache_dir, exist_ok=True)
         self._mem: dict = {}
@@ -78,9 +82,23 @@ class AkshareFeed(DataFeed):
         return df
 
     def _cache_path(self, symbol: str) -> str:
+        """处理缓存路径。
+        
+            参数:
+                symbol: str
+        
+            返回:
+                str"""
         return os.path.join(self.cache_dir, f"{symbol.replace('.', '_')}_D.csv")
 
     def _load(self, symbol: str) -> pd.DataFrame:
+        """加载相关对象。
+        
+            参数:
+                symbol: str
+        
+            返回:
+                pd.DataFrame"""
         key = (symbol, "D")
         if key not in self._mem:
             df = self._fetch_daily(symbol)
@@ -96,6 +114,17 @@ class AkshareFeed(DataFeed):
         self, symbol: str, start: str, end: str,
         period: str = "1m", limit: int = 0,
     ) -> pd.DataFrame:
+        """获取history。
+        
+            参数:
+                symbol: str
+                start: str
+                end: str
+                period: str
+                limit: int
+        
+            返回:
+                pd.DataFrame"""
         if period not in ("D", "1D", "W", "1W"):
             # 免费接口无分钟线，回退合成（标注非真实）
             from .synthetic import SyntheticFeed
@@ -109,6 +138,15 @@ class AkshareFeed(DataFeed):
         return out.reset_index(drop=True)
 
     def get_recent(self, symbol: str, period: str = "D", limit: int = 600) -> pd.DataFrame:
+        """获取recent。
+        
+            参数:
+                symbol: str
+                period: str
+                limit: int
+        
+            返回:
+                pd.DataFrame"""
         if period not in ("D", "1D", "W", "1W"):
             from .synthetic import SyntheticFeed
             logger.warning("akshare 不支持周期 %s，回退合成行情", period)

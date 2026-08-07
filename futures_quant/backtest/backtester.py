@@ -94,7 +94,15 @@ def compute_metrics(equity_curve: list, trades: list) -> dict:
 
 
 class Backtester:
+    """期货回测入口：串联行情源、交易引擎与经纪商，按 K 线逐根驱动策略并产出回测指标与报告。"""
     def __init__(self, config: Config, feed, logger=None, db=None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                config: Config
+                feed
+                logger
+                db"""
         self.config = config
         self.feed = feed
         self.logger = logger
@@ -102,12 +110,31 @@ class Backtester:
         self.engine = TradingEngine(config, logger=logger, mode="backtest", db=db)
 
     def add_contract(self, contract) -> None:
+        """添加合约。
+        
+            参数:
+                contract"""
         self.engine.add_contract(contract)
 
     def add_strategy(self, strategy) -> None:
+        """添加策略。
+        
+            参数:
+                strategy"""
         self.engine.register_strategy(strategy)
 
     def run(self, symbol: str, start: str, end: str, period: str = "1m", warmup: int = 0) -> dict:
+        """运行相关对象。
+        
+            参数:
+                symbol: str
+                start: str
+                end: str
+                period: str
+                warmup: int
+        
+            返回:
+                dict"""
         df = self.feed.get_history(symbol, start, end, period)
         # 日内周期（如 1m/5m）SinaFeed 等真实源返回 None，自动回退合成数据
         if df is None:
@@ -140,6 +167,14 @@ class Backtester:
 
     # ---------- 导出 ----------
     def export(self, outdir: str = ".", prefix: str = "backtest") -> dict:
+        """导出相关对象。
+        
+            参数:
+                outdir: str
+                prefix: str
+        
+            返回:
+                dict"""
         os.makedirs(outdir, exist_ok=True)
         eq_path = os.path.join(outdir, f"{prefix}_equity.csv")
         tr_path = os.path.join(outdir, f"{prefix}_trades.csv")
@@ -175,6 +210,11 @@ class Backtester:
         return {"equity": eq_path, "trades": tr_path, "summary": sum_path, "html": html_path}
 
     def _write_html(self, path: str, metrics: dict) -> None:
+        """写入html。
+        
+            参数:
+                path: str
+                metrics: dict"""
         curve = self.engine.equity_curve
         svg_equity = self._equity_svg(curve)
         svg_pnl = self._pnl_bars_svg(self.engine.trades_log)
@@ -232,6 +272,16 @@ th{{background:#1a1d27;color:#8b93a7}} .warn{{color:#ff7b72}}
     # ---------- 图表辅助（内联 SVG，无第三方依赖） ----------
     @staticmethod
     def _pnl_bars_svg(trades, w: int = 600, h: int = 220, max_bars: int = 150) -> str:
+        """处理盈亏K线svg。
+        
+            参数:
+                trades
+                w: int
+                h: int
+                max_bars: int
+        
+            返回:
+                str"""
         closes = [t for t in trades
                   if t.offset in (Offset.CLOSE, Offset.CLOSE_TODAY, Offset.CLOSE_YESTERDAY) and t.pnl != 0]
         if not closes:
@@ -259,6 +309,13 @@ th{{background:#1a1d27;color:#8b93a7}} .warn{{color:#ff7b72}}
 
     @staticmethod
     def _daily_pnl(curve: list) -> list:
+        """处理daily盈亏。
+        
+            参数:
+                curve: list
+        
+            返回:
+                list"""
         if not curve:
             return []
         s = pd.Series([e[1] for e in curve], index=pd.to_datetime([e[0] for e in curve]))
@@ -268,6 +325,16 @@ th{{background:#1a1d27;color:#8b93a7}} .warn{{color:#ff7b72}}
 
     @staticmethod
     def _daily_pnl_svg(daily, w: int = 900, h: int = 200, max_bars: int = 250) -> str:
+        """处理daily盈亏svg。
+        
+            参数:
+                daily
+                w: int
+                h: int
+                max_bars: int
+        
+            返回:
+                str"""
         if not daily:
             return "<p style='color:#8b93a7'>无每日数据</p>"
         if len(daily) > max_bars:
@@ -293,6 +360,15 @@ th{{background:#1a1d27;color:#8b93a7}} .warn{{color:#ff7b72}}
 
     @staticmethod
     def _pos_dist_svg(long_n: int, short_n: int, size: int = 180) -> str:
+        """处理posdistsvg。
+        
+            参数:
+                long_n: int
+                short_n: int
+                size: int
+        
+            返回:
+                str"""
         total = long_n + short_n
         if total == 0:
             return "<p style='color:#8b93a7'>无开仓</p>"
@@ -301,6 +377,15 @@ th{{background:#1a1d27;color:#8b93a7}} .warn{{color:#ff7b72}}
         lw = 26
 
         def arc(frac_start: float, frac_end: float, color: str) -> str:
+            """处理arc。
+            
+                参数:
+                    frac_start: float
+                    frac_end: float
+                    color: str
+            
+                返回:
+                    str"""
             a0 = frac_start * 2 * math.pi - math.pi / 2
             a1 = frac_end * 2 * math.pi - math.pi / 2
             x0 = cx + r * math.cos(a0)
@@ -325,6 +410,13 @@ th{{background:#1a1d27;color:#8b93a7}} .warn{{color:#ff7b72}}
 
     @staticmethod
     def _daily_summary_html(daily: list) -> str:
+        """处理dailysummaryhtml。
+        
+            参数:
+                daily: list
+        
+            返回:
+                str"""
         if not daily:
             return "无每日数据"
         pnls = [v for _, v in daily]
@@ -340,14 +432,27 @@ th{{background:#1a1d27;color:#8b93a7}} .warn{{color:#ff7b72}}
 
     @staticmethod
     def _equity_svg(curve: list, w: int = 900, h: int = 280) -> str:
+        """处理权益svg。
+        
+            参数:
+                curve: list
+                w: int
+                h: int
+        
+            返回:
+                str"""
         if not curve:
             return "<p>无数据</p>"
         ys = [e[1] for e in curve]
         lo, hi = min(ys), max(ys)
         n = len(ys)
         pad = 10
-        def x(i): return pad + i * (w - 2 * pad) / max(1, n - 1)
-        def y(v): return pad + (hi - v) / (hi - lo or 1) * (h - 2 * pad)
+        def x(i):
+            """把索引 i 映射到 SVG 画布上的横向像素坐标。"""
+            return pad + i * (w - 2 * pad) / max(1, n - 1)
+        def y(v):
+            """把数值 v 映射到 SVG 画布上的纵向像素坐标（值越大越靠上）。"""
+            return pad + (hi - v) / (hi - lo or 1) * (h - 2 * pad)
         pts = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(ys))
         area = f"{pad},{h-pad} " + pts + f" {w-pad},{h-pad}"
         return (f'<svg viewBox="0 0 {w} {h}" width="100%" style="background:#11141c;border-radius:8px">'

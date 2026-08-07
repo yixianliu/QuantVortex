@@ -26,6 +26,7 @@ DEFAULT_SYMS = ["rb.SHFE", "i.DCE", "au.SHFE", "IF.CFFEX"]
 
 
 def main() -> None:
+    """处理main。"""
     syms = sys.argv[1:] or DEFAULT_SYMS
     base = os.path.join(get_data_dir(), "real_samples")
     os.makedirs(base, exist_ok=True)

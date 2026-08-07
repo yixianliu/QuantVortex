@@ -36,6 +36,13 @@ def app_base_dir() -> str:
 
 
 def _is_writable(path: str) -> bool:
+    """处理iswritable。
+    
+        参数:
+            path: str
+    
+        返回:
+            bool"""
     try:
         os.makedirs(path, exist_ok=True)
         probe = os.path.join(path, ".write_test")

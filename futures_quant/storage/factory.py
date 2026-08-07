@@ -13,6 +13,13 @@ from .sqlite_backend import SQLiteBackend
 
 
 def get_storage(config) -> StorageBackend:
+    """获取storage。
+    
+        参数:
+            config
+    
+        返回:
+            StorageBackend"""
     sc = getattr(config, "storage", None)
     if sc is None:
         return SQLiteBackend()

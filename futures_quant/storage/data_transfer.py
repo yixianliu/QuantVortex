@@ -55,6 +55,7 @@ TABLE_LABELS = {
 # 内部工具
 # ============================================================================
 def _require_pymysql():
+    """处理requirepymysql。"""
     try:
         import pymysql  # noqa: PLC0415
         return pymysql
@@ -66,6 +67,15 @@ def _require_pymysql():
 
 def _mysql_connect(host: str, port: int, db: str, user: str, password: str,
                    create_db: bool = False):
+    """处理mysqlconnect。
+    
+        参数:
+            host: str
+            port: int
+            db: str
+            user: str
+            password: str
+            create_db: bool"""
     pymysql = _require_pymysql()
     if create_db:
         conn = pymysql.connect(host=host, port=int(port), user=user,
@@ -83,6 +93,13 @@ def _mysql_connect(host: str, port: int, db: str, user: str, password: str,
 
 
 def _sqlite_tables(conn: sqlite3.Connection) -> list[str]:
+    """处理sqlitetables。
+    
+        参数:
+            conn: sqlite3.Connection
+    
+        返回:
+            list[str]"""
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' "
         "AND name NOT LIKE 'sqlite_%'").fetchall()
@@ -97,6 +114,13 @@ def _sqlite_columns(conn: sqlite3.Connection, table: str) -> list[dict]:
 
 
 def _map_sqlite_to_mysql(sqlite_type: str) -> str:
+    """处理mapsqlitetomysql。
+    
+        参数:
+            sqlite_type: str
+    
+        返回:
+            str"""
     t = sqlite_type.upper()
     if "INT" in t:
         return "BIGINT"
@@ -108,6 +132,13 @@ def _map_sqlite_to_mysql(sqlite_type: str) -> str:
 
 
 def _map_mysql_to_sqlite(mysql_type: str) -> str:
+    """处理mapmysqltosqlite。
+    
+        参数:
+            mysql_type: str
+    
+        返回:
+            str"""
     t = mysql_type.upper()
     if any(k in t for k in ("INT", "BIT", "BOOL")):
         return "INTEGER"

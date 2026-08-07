@@ -17,6 +17,9 @@ from ..core.types import Bar, Order, Trade
 
 class StorageBackend(ABC):
     # ---------------- 参数 (KV) ----------------
+    """存储后端抽象基类：定义参数 / 行情 / 结果的统一读写契约，屏蔽具体数据库差异。
+    
+        继承: ABC"""
     @abstractmethod
     def save_param(self, key: str, value: Any) -> None:
         """保存一个策略 / 系统参数（覆盖写）。"""

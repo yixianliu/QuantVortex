@@ -13,6 +13,9 @@ from .base import StrategyBase
 
 
 class MeanReversion(StrategyBase):
+    """求平均reversion。
+    
+        继承: StrategyBase"""
     name = "均值回归"
     default_params = {
         "period": 20,
@@ -21,9 +24,17 @@ class MeanReversion(StrategyBase):
     }
 
     def _window_size(self) -> int:
+        """处理窗口大小。
+        
+            返回:
+                int"""
         return int(self.params["period"] + 5)
 
     def on_bar(self, bar: Bar) -> None:
+        """处理onK线。
+        
+            参数:
+                bar: Bar"""
         self._push(bar)
         p = self.params
         if len(self._closes) < p["period"] + 1:

@@ -31,6 +31,10 @@ class BacktestStore:
     _PRUNE = {"evolve_history": 1000, "evolve_log": 500}
 
     def __init__(self, path: str = "data/quant_backtest.db") -> None:
+        """初始化相关对象。
+        
+            参数:
+                path: str"""
         self.path = normalize_data_path(path, "quant_backtest.db")
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         self._lock = threading.Lock()
@@ -43,6 +47,7 @@ class BacktestStore:
         self._migrate_schema()
 
     def _init_schema(self) -> None:
+        """初始化表结构。"""
         with self._lock:
             self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS evolve_state (
@@ -94,6 +99,11 @@ class BacktestStore:
     # KV 状态（引擎断点 / 最新快照）
     # ------------------------------------------------------------------
     def save_state(self, key: str, obj: Any) -> None:
+        """保存状态。
+        
+            参数:
+                key: str
+                obj: Any"""
         try:
             payload = json.dumps(obj, ensure_ascii=False, default=str)
         except (TypeError, ValueError):
@@ -107,6 +117,13 @@ class BacktestStore:
             self.conn.commit()
 
     def load_state(self, key: str) -> Optional[Any]:
+        """加载状态。
+        
+            参数:
+                key: str
+        
+            返回:
+                Optional[Any]"""
         try:
             with self._lock:
                 row = self.conn.execute(
@@ -120,6 +137,13 @@ class BacktestStore:
     # 历史回测记录（每代一条）
     # ------------------------------------------------------------------
     def add_history(self, snap: dict) -> Optional[int]:
+        """添加history。
+        
+            参数:
+                snap: dict
+        
+            返回:
+                Optional[int]"""
         ranked = snap.get("ranked") or []
         best = ranked[0] if ranked else {}
         m = best.get("metrics") or {}
@@ -127,6 +151,13 @@ class BacktestStore:
         trades = snap.get("gen_best_trades") or []
         curve = snap.get("gen_best_curve") or []
         def _ser_trades(items) -> Optional[str]:
+            """处理ser交易记录。
+            
+                参数:
+                    items
+            
+                返回:
+                    Optional[str]"""
             if not items:
                 return None
             try:
@@ -145,6 +176,13 @@ class BacktestStore:
             except Exception:  # noqa: BLE001
                 return None
         def _ser_curve(points) -> Optional[str]:
+            """处理sercurve。
+            
+                参数:
+                    points
+            
+                返回:
+                    Optional[str]"""
             if not points:
                 return None
             try:
@@ -182,6 +220,13 @@ class BacktestStore:
             return cur.lastrowid
 
     def recent_history(self, limit: int = 300) -> list:
+        """处理recenthistory。
+        
+            参数:
+                limit: int
+        
+            返回:
+                list"""
         try:
             with self._lock:
                 rows = self.conn.execute(
@@ -228,6 +273,10 @@ class BacktestStore:
     # 学习日志
     # ------------------------------------------------------------------
     def add_log(self, text: str) -> None:
+        """添加log。
+        
+            参数:
+                text: str"""
         try:
             with self._lock:
                 self.conn.execute(
@@ -238,6 +287,13 @@ class BacktestStore:
             pass
 
     def recent_logs(self, limit: int = 200) -> list:
+        """处理recentlogs。
+        
+            参数:
+                limit: int
+        
+            返回:
+                list"""
         try:
             with self._lock:
                 rows = self.conn.execute(
@@ -251,6 +307,7 @@ class BacktestStore:
     # 维护
     # ------------------------------------------------------------------
     def prune(self) -> None:
+        """处理prune。"""
         with self._lock:
             for table, n in self._PRUNE.items():
                 try:
@@ -263,6 +320,7 @@ class BacktestStore:
             self.conn.commit()
 
     def checkpoint(self) -> None:
+        """处理checkpoint。"""
         try:
             with self._lock:
                 self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -271,6 +329,7 @@ class BacktestStore:
             pass
 
     def close(self) -> None:
+        """关闭相关对象。"""
         try:
             self.checkpoint()
             self.conn.close()
@@ -284,6 +343,10 @@ _STORE_LOCK = threading.Lock()
 
 
 def get_backtest_store() -> BacktestStore:
+    """获取回测store。
+    
+        返回:
+            BacktestStore"""
     global _STORE
     with _STORE_LOCK:
         if _STORE is None:

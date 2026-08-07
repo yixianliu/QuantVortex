@@ -25,13 +25,33 @@ class CsvFeed(DataFeed):
     """从本地 CSV 读取真实行情回放（封闭、可复现）。"""
 
     def __init__(self, base_dir: str | None = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                base_dir: str | None"""
         self.base_dir = base_dir or os.path.join(get_data_dir(), "real_samples")
         self._mem: dict = {}
 
     def _path_for(self, symbol: str, period: str) -> str:
+        """处理路径for。
+        
+            参数:
+                symbol: str
+                period: str
+        
+            返回:
+                str"""
         return os.path.join(self.base_dir, f"{symbol.replace('.', '_')}_{period}.csv")
 
     def _load(self, symbol: str, period: str) -> pd.DataFrame | None:
+        """加载相关对象。
+        
+            参数:
+                symbol: str
+                period: str
+        
+            返回:
+                pd.DataFrame | None"""
         key = (symbol, period)
         if key in self._mem:
             return self._mem[key]
@@ -49,6 +69,17 @@ class CsvFeed(DataFeed):
         self, symbol: str, start: str, end: str,
         period: str = "1m", limit: int = 0,
     ) -> pd.DataFrame:
+        """获取history。
+        
+            参数:
+                symbol: str
+                start: str
+                end: str
+                period: str
+                limit: int
+        
+            返回:
+                pd.DataFrame"""
         df = self._load(symbol, period)
         if df is None:
             from .synthetic import SyntheticFeed
@@ -60,6 +91,15 @@ class CsvFeed(DataFeed):
         return out.reset_index(drop=True)
 
     def get_recent(self, symbol: str, period: str = "D", limit: int = 600) -> pd.DataFrame:
+        """获取recent。
+        
+            参数:
+                symbol: str
+                period: str
+                limit: int
+        
+            返回:
+                pd.DataFrame"""
         df = self._load(symbol, period)
         if df is None:
             from .synthetic import SyntheticFeed

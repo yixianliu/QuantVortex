@@ -80,6 +80,13 @@ def _screen(mdm, store=None):
     raw = []
 
     def _empty(sym, name, cat, reason):
+        """处理empty。
+        
+            参数:
+                sym
+                name
+                cat
+                reason"""
         raw.append({"sym": sym, "name": name, "cat": cat,
                     "score": 0.0, "tier": "样本不足", "ret": 0.0,
                     "pu": 0.5, "reason": reason})
@@ -146,6 +153,10 @@ def _screen(mdm, store=None):
 
     # ---- 数据驱动分位加权：用全样本分位替代拍脑袋权重，直接反映各因子强度 ----
     def _rank(vals):
+        """处理rank。
+        
+            参数:
+                vals"""
         s = sorted(vals)
         n = len(s) or 1
         return [bisect_right(s, v) / n for v in vals]
@@ -207,6 +218,13 @@ class PredictOpsPage(BasePage):
     """
 
     def __init__(self, mdm, store, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "predict_ops"
         dft = symbol_code(mdm.universe[0])
@@ -225,6 +243,7 @@ class PredictOpsPage(BasePage):
 
     # ---- 构建界面 ----
     def _build(self):
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(6)
@@ -542,6 +561,10 @@ class PredictOpsPage(BasePage):
 
     # ---- 懒加载：首次可见时启动选品排行后台任务 ----
     def showEvent(self, event):
+        """显示事件。
+        
+            参数:
+                event"""
         super().showEvent(event)
         if getattr(self, "_screen_lazy", False):
             self._screen_lazy = False
@@ -549,6 +572,10 @@ class PredictOpsPage(BasePage):
 
     # ---- 事件处理 ----
     def _on_sel(self, *_):
+        """处理onsel。
+        
+            参数:
+                *_: 可变位置参数"""
         self.cur_symbol = self.sym_cb.currentData()
         self.cur_period = self.per_cb.currentData()
         self.selection_changed.emit(self.cur_symbol, self.cur_period)
@@ -627,13 +654,22 @@ class PredictOpsPage(BasePage):
     def _run_screen(self):
         """后台运行选品评分。失败时在状态栏提示，便于排查而非静默空白。"""
         def work():
+            """处理work。"""
             return _screen(self.mdm, self.store)
 
         def done(payload):
+            """处理done。
+            
+                参数:
+                    payload"""
             self._results, self._cats = payload
             self._refresh_screen_table()
 
         def err(e):
+            """处理err。
+            
+                参数:
+                    e"""
             self.status_lbl.setText(f"选品评分加载失败: {e}")
 
         self._run_worker(work, done, on_err=err)
@@ -789,6 +825,7 @@ class PredictOpsPage(BasePage):
 
         def work():
             # ① 学习结算
+            """处理work。"""
             try:
                 settle = evaluate_all_open(store, mdm, max_n=40)
             except Exception:
@@ -867,9 +904,17 @@ class PredictOpsPage(BasePage):
             return res, fit, cfg, bias_info, conf, settle, all_news, ai_report, calib_info
 
         def done(payload):
+            """处理done。
+            
+                参数:
+                    payload"""
             self._on_predict_done(payload)
 
         def err(e):
+            """处理err。
+            
+                参数:
+                    e"""
             self.start_btn.setEnabled(True)
             self.start_btn.setText("🚀 开始预测")
             self.status_lbl.setText(f"预测出错: {e}")
@@ -903,6 +948,7 @@ class PredictOpsPage(BasePage):
                 samples = [(None, self.cur_symbol, self.cur_period)]
 
         def work():
+            """处理work。"""
             added_total = 0
             for (path, sym, per) in samples:
                 df = load_bars_from_csv(path) if path else None
@@ -927,6 +973,10 @@ class PredictOpsPage(BasePage):
                     "only_cur": only_cur}
 
         def done(payload):
+            """处理done。
+            
+                参数:
+                    payload"""
             self._replaying = False
             self.replay_btn.setEnabled(True)
             self.replay_prog.setVisible(False)
@@ -948,6 +998,10 @@ class PredictOpsPage(BasePage):
                     pass
 
         def err(e):
+            """处理err。
+            
+                参数:
+                    e"""
             self._replaying = False
             self.replay_btn.setEnabled(True)
             self.replay_prog.setVisible(False)
@@ -1354,6 +1408,10 @@ class PredictOpsPage(BasePage):
 
         # ② 预测价格概率带：中枢价 + ±1σ 置信区间（PriceChart 复用）
         def _ok(v):
+            """处理ok。
+            
+                参数:
+                    v"""
             return v is not None and math.isfinite(float(v))
         try:
             fc = res.get("forecast") or []
@@ -1407,6 +1465,27 @@ class PredictOpsPage(BasePage):
                      ind_info=None, fund_info=None, stats=None,
                      closed=None, settle=None, ai_report=None,
                      all_news=None, calib_band=None) -> str:
+        """处理detailhtml。
+        
+            参数:
+                res
+                cfg
+                bias_info
+                conf
+                news_an
+                name
+                category
+                ind_info
+                fund_info
+                stats
+                closed
+                settle
+                ai_report
+                all_news
+                calib_band
+        
+            返回:
+                str"""
         p = pal()
         up_c, dn_c, tx_c, mut_c = p["up"], p["down"], p["text"], "#94a3b8"
         p_up = float(res["p_up"])
@@ -1459,6 +1538,12 @@ class PredictOpsPage(BasePage):
         enter, enter_col = PredictOpsPage._soft_degrade_enter(enter, enter_col, clow)
 
         def row(k, v, color=""):
+            """处理行。
+            
+                参数:
+                    k
+                    v
+                    color"""
             c = f" style='color:{color}'" if color else ""
             return (f"<tr><td style='color:{mut_c};padding:3px 12px 3px 0;"
                     f"white-space:nowrap'>{k}</td>"
@@ -1532,6 +1617,11 @@ class PredictOpsPage(BasePage):
             else:
                 db_txt, db_col = f"中性 {db:+.2f}", mut_c
             def lr(k, v):
+                """处理lr。
+                
+                    参数:
+                        k
+                        v"""
                 return (f"<tr><td style='color:{mut_c};padding:3px 12px 3px 0;"
                         f"white-space:nowrap'>{METRIC_LABEL[k]}</td>"
                         f"<td>{v}</td></tr>")
@@ -1602,6 +1692,12 @@ class PredictOpsPage(BasePage):
         fi = fund_info or {}
 
         def row(k, v, color=""):
+            """处理行。
+            
+                参数:
+                    k
+                    v
+                    color"""
             c = f" style='color:{color}'" if color else ""
             return (f"<tr><td style='color:{mut_c};padding:3px 12px 3px 0;"
                     f"white-space:nowrap'>{k}</td>"
@@ -1650,6 +1746,10 @@ class PredictOpsPage(BasePage):
 
     # ---- 主题切换 ----
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         super().set_theme(t)
         for attr in ("chart", "macd", "kdj", "rsi", "reliability_chart", "prob_band"):
             c = getattr(self, attr, None)

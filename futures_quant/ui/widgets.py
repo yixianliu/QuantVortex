@@ -57,6 +57,10 @@ PALETTE = {
 
 
 def pal() -> dict:
+    """处理pal。
+    
+        返回:
+            dict"""
     return PALETTE[THEME]
 
 
@@ -67,6 +71,12 @@ class PageHeader(QWidget):
     """页面顶部标题：左侧强调条 + 大标题 + 副标题。"""
 
     def __init__(self, title: str, subtitle: str = "", theme: Optional[str] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                title: str
+                subtitle: str
+                theme: Optional[str]"""
         super().__init__()
         self.setFixedHeight(50)
         self._theme = THEME if theme is None else theme
@@ -98,10 +108,15 @@ class PageHeader(QWidget):
         self._apply()
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         self._theme = t
         self._apply()
 
     def _apply(self) -> None:
+        """应用相关对象。"""
         p = PALETTE[self._theme]
         self._bar.setStyleSheet(f"background:{p['accent']};border-radius:2px;")
         self._t.setStyleSheet(f"color:{p['text']};font-size:18px;font-weight:bold;")
@@ -122,6 +137,13 @@ class SectionHeader(QWidget):
 
     def __init__(self, title: str, accent: str = "#3b82f6",
                  badge: Optional[str] = None, theme: Optional[str] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                title: str
+                accent: str
+                badge: Optional[str]
+                theme: Optional[str]"""
         super().__init__()
         self._title = title
         self._accent = accent
@@ -148,6 +170,10 @@ class SectionHeader(QWidget):
 
     # ------------------------------------------------------------------
     def set_title(self, title: str) -> None:
+        """设置title。
+        
+            参数:
+                title: str"""
         self._title = title
         self._t.setText(title)
 
@@ -165,12 +191,17 @@ class SectionHeader(QWidget):
             self._badge.show()
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         self._theme = t
         self._apply()
         if self._badge is not None:
             self._badge.set_theme(t)
 
     def _apply(self) -> None:
+        """应用相关对象。"""
         p = PALETTE[self._theme]
         self._t.setStyleSheet(
             f"font-size:14px;font-weight:bold;color:{p['text']};")
@@ -183,6 +214,13 @@ class Badge(QLabel):
     """圆角小标签（方向研判、状态等）。"""
 
     def __init__(self, text: str = "", bg: str = "", fg: str = "", theme: Optional[str] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                text: str
+                bg: str
+                fg: str
+                theme: Optional[str]"""
         super().__init__(text)
         self.setFixedHeight(24)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -192,18 +230,32 @@ class Badge(QLabel):
         self._apply()
 
     def set_color(self, bg: str, fg: str) -> None:
+        """设置颜色。
+        
+            参数:
+                bg: str
+                fg: str"""
         self._bg = bg
         self._fg = fg
         self._apply()
 
     def set_text(self, text: str) -> None:
+        """设置文本。
+        
+            参数:
+                text: str"""
         self.setText(text)
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         self._theme = t
         self._apply()
 
     def _apply(self) -> None:
+        """应用相关对象。"""
         p = PALETTE[self._theme]
         bg = self._bg or p["badge_bg"]
         fg = self._fg or p["text"]
@@ -220,6 +272,13 @@ class MetricChip(QFrame):
 
     def __init__(self, label: str, value: str = "--", value_color: str = "",
                  theme: Optional[str] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                label: str
+                value: str
+                value_color: str
+                theme: Optional[str]"""
         super().__init__()
         self.setObjectName("chip")
         self.setMinimumWidth(120)
@@ -235,15 +294,25 @@ class MetricChip(QFrame):
         self._apply()
 
     def set_value(self, text: str, color: str = "") -> None:
+        """设置数值。
+        
+            参数:
+                text: str
+                color: str"""
         self._val.setText(text)
         c = color or self._val_color or pal()["text"]
         self._val.setStyleSheet(f"color:{c};font-size:16px;font-weight:bold;")
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         self._theme = t
         self._apply()
 
     def _apply(self) -> None:
+        """应用相关对象。"""
         p = PALETTE[self._theme]
         self.setStyleSheet(
             f"#chip{{background:{p['chip_bg']};border:1px solid {p['border']};"
@@ -265,6 +334,11 @@ class StatusTile(QFrame):
     """
 
     def __init__(self, label: str, theme: Optional[str] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                label: str
+                theme: Optional[str]"""
         super().__init__()
         self.setObjectName("status-tile")
         self._theme = THEME if theme is None else theme
@@ -302,9 +376,17 @@ class StatusTile(QFrame):
 
     # ---- 动画属性：脉冲高亮（0~1）----
     def _get_glow(self) -> float:
+        """获取glow。
+        
+            返回:
+                float"""
         return self._glow
 
     def _set_glow(self, v: float) -> None:
+        """设置glow。
+        
+            参数:
+                v: float"""
         self._glow = v
         self._apply_glow()
 
@@ -330,15 +412,24 @@ class StatusTile(QFrame):
             pass
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         self._theme = t
         self._apply()
 
     def _level_color(self) -> str:
+        """处理价位颜色。
+        
+            返回:
+                str"""
         p = PALETTE[self._theme]
         return {"good": p["up"], "bad": p["down"],
                 "neutral": p["accent"]}.get(self._level, p["accent"])
 
     def _apply(self) -> None:
+        """应用相关对象。"""
         p = PALETTE[self._theme]
         col = self._level_color()
         self._lab.setStyleSheet(f"color:{p['text']};font-size:12px;font-weight:bold;")
@@ -348,6 +439,7 @@ class StatusTile(QFrame):
         self._apply_glow()
 
     def _apply_glow(self) -> None:
+        """应用glow。"""
         p = PALETTE[self._theme]
         col = self._level_color()
         bg = QColor(col)
@@ -365,6 +457,11 @@ class ConfidenceBar(QWidget):
     """水平置信度条：轨道 + 渐变填充 + 百分比文字。"""
 
     def __init__(self, pct: float = 0.0, theme: Optional[str] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                pct: float
+                theme: Optional[str]"""
         super().__init__()
         self._pct = max(0.0, min(1.0, pct))
         self._theme = THEME if theme is None else theme
@@ -372,14 +469,26 @@ class ConfidenceBar(QWidget):
         self.setMinimumWidth(120)
 
     def set_pct(self, pct: float) -> None:
+        """设置pct。
+        
+            参数:
+                pct: float"""
         self._pct = max(0.0, min(1.0, pct))
         self.update()
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         self._theme = t
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        """绘制事件。
+        
+            参数:
+                event"""
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p_theme = PALETTE[self._theme]
@@ -427,6 +536,11 @@ class ToolBar(QFrame):
     """
 
     def __init__(self, layout: "QHBoxLayout", theme: Optional[str] = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                layout: 'QHBoxLayout'
+                theme: Optional[str]"""
         super().__init__()
         self.setObjectName("toolbar")
         self._theme = THEME if theme is None else theme
@@ -437,6 +551,10 @@ class ToolBar(QFrame):
         # 外观由 main_window 的全局 QSS（#toolbar 选择器）统一下发，主题切换时自动更新
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         self._theme = t
 
 

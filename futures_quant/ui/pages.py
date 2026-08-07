@@ -57,6 +57,13 @@ PERIOD_LABEL = {"1m": "1分钟", "5m": "5分钟", "15m": "15分钟", "30m": "30�
 
 
 def df_to_bars(df: pd.DataFrame) -> list[dict]:
+    """处理dftoK线。
+    
+        参数:
+            df: pd.DataFrame
+    
+        返回:
+            list[dict]"""
     out = []
     for _, r in df.iterrows():
         out.append({
@@ -70,10 +77,24 @@ def df_to_bars(df: pd.DataFrame) -> list[dict]:
 
 
 def symbol_code(row) -> str:
+    """处理合约代码code。
+    
+        参数:
+            row
+    
+        返回:
+            str"""
     return f"{row[0]}.{row[3]}"
 
 
 def symbol_label(row) -> str:
+    """处理合约代码标签。
+    
+        参数:
+            row
+    
+        返回:
+            str"""
     return f"{row[1]} ({row[0]}.{row[3]})"
 
 
@@ -81,14 +102,22 @@ def symbol_label(row) -> str:
 # 后台计算线程
 # ============================================================================
 class Worker(QThread):
+    """处理工作线程。
+    
+        继承: QThread"""
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
     def __init__(self, fn: Callable[[], Any]) -> None:
+        """初始化相关对象。
+        
+            参数:
+                fn: Callable[[], Any]"""
         super().__init__()
         self._fn = fn
 
     def run(self) -> None:  # noqa: N802
+        """运行相关对象。"""
         try:
             self.finished.emit(self._fn())
         except Exception as e:  # noqa: BLE001
@@ -100,10 +129,20 @@ class Worker(QThread):
 # ============================================================================
 class BasePage(QWidget):
     # 合约/周期变更信号（symbol 可能为空，表示仅周期变化）
+    """处理base页面。
+    
+        继承: QWidget"""
     selection_changed = pyqtSignal(str, str)
 
     def __init__(self, mdm: MarketDataManager, store: AnalysisStore,
                  config=None, session=None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                mdm: MarketDataManager
+                store: AnalysisStore
+                config
+                session"""
         super().__init__()
         self.mdm = mdm
         self.store = store
@@ -133,6 +172,10 @@ class BasePage(QWidget):
         super().closeEvent(event)
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         self._theme = t
         # 向所有具备 set_theme 的子组件递归下发主题（指标卡/徽标/图表/页头等）
         for child in self.findChildren(QWidget):
@@ -145,22 +188,37 @@ class BasePage(QWidget):
 
     def _run_worker(self, fn: Callable[[], Any], on_done: Callable[[Any], None],
                     on_err: Optional[Callable[[str], None]] = None) -> None:
+        """运行工作线程。
+        
+            参数:
+                fn: Callable[[], Any]
+                on_done: Callable[[Any], None]
+                on_err: Optional[Callable[[str], None]]"""
         w = Worker(fn)
         self._workers.append(w)
 
         def _safe_remove():
+            """处理saferemove。"""
             try:
                 self._workers.remove(w)
             except ValueError:
                 pass
 
         def _done(r):
+            """处理done。
+            
+                参数:
+                    r"""
             try:
                 on_done(r)
             finally:
                 _safe_remove()
 
         def _err(e):
+            """处理err。
+            
+                参数:
+                    e"""
             try:
                 if on_err:
                     on_err(e)
@@ -221,11 +279,21 @@ class BasePage(QWidget):
 # ============================================================================
 class MarketPage(BasePage):
     # 预警触发信号（供主窗口做托盘通知）
+    """行情全景页面：展示期货市场多品种涨跌、板块与新闻情绪总览。
+    
+        继承: BasePage"""
     alerts_fired = pyqtSignal(list)
     # 扫描状态信号（供主窗口状态栏提示：加载 / 成功 / 失败）
     scan_status = pyqtSignal(str)
 
     def __init__(self, mdm, store, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "market"
         dft = symbol_code(mdm.universe[0])
@@ -237,6 +305,7 @@ class MarketPage(BasePage):
         self._build()
 
     def _build(self):
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -310,6 +379,10 @@ class MarketPage(BasePage):
 
     # ---- 预警中心 ----
     def _build_alert_center(self, root: QVBoxLayout) -> None:
+        """构建预警center。
+        
+            参数:
+                root: QVBoxLayout"""
         box = QFrame()
         box.setObjectName("card")
         bl = QVBoxLayout(box)
@@ -379,11 +452,16 @@ class MarketPage(BasePage):
         )
 
     def _restore_scan_btn(self) -> None:
+        """处理restorescanbtn。"""
         self._scanning = False
         self.scan_btn.setText("立即扫描")
         self.scan_btn.setEnabled(True)
 
     def _on_alert_done(self, fired: list) -> None:
+        """处理on预警done。
+        
+            参数:
+                fired: list"""
         try:
             self._refresh_alert_list()
             self._refresh_rule_badge()
@@ -403,6 +481,10 @@ class MarketPage(BasePage):
             self._restore_scan_btn()
 
     def _on_alert_err(self, msg: str) -> None:
+        """处理on预警err。
+        
+            参数:
+                msg: str"""
         try:
             ts = dt.datetime.now().strftime("%H:%M:%S")
             self.alert_status.setText(f"上次扫描 {ts} · 失败：{msg}")
@@ -414,6 +496,7 @@ class MarketPage(BasePage):
             self._restore_scan_btn()
 
     def _refresh_alert_list(self) -> None:
+        """刷新预警list。"""
         rows = self.store.query_alerts(limit=30)
         self.alert_list.clear()
         if not rows:
@@ -428,26 +511,37 @@ class MarketPage(BasePage):
                 f"{d} 〔{r.get('symbol')}·{r.get('rule')}·{lvl}〕 {msg}"))
 
     def _refresh_rule_badge(self) -> None:
+        """刷新规则badge。"""
         n = len(self.store.list_alert_rules(enabled_only=True))
         self.rule_badge.set_text(f"预警规则 {n}")
 
     def _on_manage_rules(self) -> None:
+        """处理onmanage规则。"""
         dlg = _AlertRulesDialog(self.mdm, self.store, parent=self)
         dlg.exec()
         self._refresh_rule_badge()
         self._refresh_alert_list()
 
     def _on_symbol(self, i):
+        """处理on合约代码。
+        
+            参数:
+                i"""
         self.cur_symbol = self.sym_cb.itemData(i)
         self.selection_changed.emit(self.cur_symbol, self.cur_period)
         self._refresh()
 
     def _on_period(self, i):
+        """处理on周期。
+        
+            参数:
+                i"""
         self.cur_period = self.per_cb.itemData(i)
         self.selection_changed.emit(self.cur_symbol, self.cur_period)
         self._refresh()
 
     def _toggle_live(self):
+        """切换live。"""
         if not self._live:
             self.mdm.start_live(self.cur_symbol, self.cur_period, 1000)
             self.mdm.bar_arrived.connect(self._on_live)
@@ -466,10 +560,15 @@ class MarketPage(BasePage):
         self.live_btn.setStyleSheet("")
 
     def _on_live(self, bar):
+        """处理onlive。
+        
+            参数:
+                bar"""
         if bar.get("symbol") == self.cur_symbol:
             self._refresh()
 
     def _refresh(self):
+        """刷新相关对象。"""
         df = self.mdm.get_bars(self.cur_symbol, self.cur_period, 240)
         if df.empty:
             return
@@ -492,6 +591,7 @@ class MarketPage(BasePage):
                                      pal()["up"] if q["fund_flow"] >= 0 else pal()["down"])
 
     def _refresh_watch(self):
+        """刷新watch。"""
         pan = self.mdm.compute_panorama("D")
         if pan.empty:
             return
@@ -509,6 +609,10 @@ class MarketPage(BasePage):
         prepare_table(self.watch)
 
     def _on_pick(self, item):
+        """处理onpick。
+        
+            参数:
+                item"""
         name = self.watch.item(item.row(), 0).text()
         for r in self.mdm.universe:
             if r[1] == name:
@@ -525,6 +629,13 @@ class _AlertRuleEditDialog(QDialog):
     """新增 / 编辑单条预警规则。"""
 
     def __init__(self, mdm, store, parent=None, rule: Optional[dict] = None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                parent
+                rule: Optional[dict]"""
         super().__init__(parent)
         self.mdm = mdm
         self.store = store
@@ -590,6 +701,7 @@ class _AlertRuleEditDialog(QDialog):
         root.addLayout(btns)
 
     def _sync_param(self) -> None:
+        """同步参数。"""
         kind = self._kind_cb.currentData()
         meta = RULE_KINDS.get(kind, {})
         unit = meta.get("unit", "")
@@ -610,6 +722,7 @@ class _AlertRuleEditDialog(QDialog):
             self._param.setValue(float(meta.get("default", 0)))
 
     def _on_save(self) -> None:
+        """处理onsave。"""
         rec = dict(
             symbol=self._sym_cb.currentData(),
             kind=self._kind_cb.currentData(),
@@ -629,6 +742,12 @@ class _AlertRulesDialog(QDialog):
     """规则管理：列表 + 新增 / 编辑 / 删除 / 启停。"""
 
     def __init__(self, mdm, store, parent=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                parent"""
         super().__init__(parent)
         self.mdm = mdm
         self.store = store
@@ -659,6 +778,7 @@ class _AlertRulesDialog(QDialog):
         self._reload()
 
     def _reload(self) -> None:
+        """重新加载相关对象。"""
         rules = self.store.list_alert_rules()
         self.tbl.setRowCount(len(rules))
         for i, r in enumerate(rules):
@@ -691,11 +811,16 @@ class _AlertRulesDialog(QDialog):
         prepare_table(self.tbl)
 
     def _on_add(self) -> None:
+        """处理onadd。"""
         dlg = _AlertRuleEditDialog(self.mdm, self.store, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._reload()
 
     def _on_edit(self, rid: int) -> None:
+        """处理onedit。
+        
+            参数:
+                rid: int"""
         r = self.store.get_alert_rule(rid)
         if not r:
             return
@@ -704,10 +829,19 @@ class _AlertRulesDialog(QDialog):
             self._reload()
 
     def _on_delete(self, rid: int) -> None:
+        """处理ondelete。
+        
+            参数:
+                rid: int"""
         self.store.remove_alert_rule(rid)
         self._reload()
 
     def _on_toggle(self, rid: int, state) -> None:
+        """处理ontoggle。
+        
+            参数:
+                rid: int
+                state"""
         self.store.set_alert_rule_enabled(rid, bool(state))
 
 
@@ -715,7 +849,17 @@ class _AlertRulesDialog(QDialog):
 # 模块二：量化指标分析
 # ============================================================================
 class IndicatorPage(BasePage):
+    """技术指标页面：展示与配置各类技术指标计算与可视化。
+    
+        继承: BasePage"""
     def __init__(self, mdm, store, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "indicator"
         dft = symbol_code(mdm.universe[0])
@@ -726,12 +870,14 @@ class IndicatorPage(BasePage):
         self._build()
 
     def _on_change(self):
+        """处理onchange。"""
         self.cur_symbol = self.sym_cb.currentData()
         self.cur_period = self.per_cb.currentData()
         self.selection_changed.emit(self.cur_symbol, self.cur_period)
         self._refresh()
 
     def _build(self):
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -782,6 +928,7 @@ class IndicatorPage(BasePage):
         self._refresh()
 
     def _refresh(self):
+        """刷新相关对象。"""
         self.cur_symbol = self.sym_cb.currentData()
         self.cur_period = self.per_cb.currentData()
         df = self.mdm.get_bars(self.cur_symbol, self.cur_period, 300)
@@ -837,7 +984,17 @@ class IndicatorPage(BasePage):
 # 模块三：AI 智能预测核心
 # ============================================================================
 class PredictPage(BasePage):
+    """预测页面。
+    
+        继承: BasePage"""
     def __init__(self, mdm, store, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "predict"
         dft = symbol_code(mdm.universe[0])
@@ -849,11 +1006,16 @@ class PredictPage(BasePage):
         self._build()
 
     def _on_sel(self, *_):
+        """处理onsel。
+        
+            参数:
+                *_: 可变位置参数"""
         self.cur_symbol = self.sym_cb.currentData()
         self.cur_period = self.per_cb.currentData()
         self.selection_changed.emit(self.cur_symbol, self.cur_period)
 
     def _build(self):
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -979,6 +1141,7 @@ class PredictPage(BasePage):
         self._base_refresh()
 
     def _base_refresh(self):
+        """处理baserefresh。"""
         df = self.mdm.get_bars(self.cur_symbol, self.cur_period, 600)
         if df.empty:
             return
@@ -1101,6 +1264,7 @@ class PredictPage(BasePage):
             return []
 
     def _run(self):
+        """运行相关对象。"""
         self.cur_symbol = self.sym_cb.currentData()
         self.cur_period = self.per_cb.currentData()
         horizon = self.hor_spin.value()
@@ -1119,6 +1283,7 @@ class PredictPage(BasePage):
         def work():
             # ① 学习结算：先把到期的历史预测与真实行情比对结算，
             #    使后续「自适应选参 / 置信度校准」用到最新的经验数据。
+            """处理work。"""
             try:
                 settle = evaluate_all_open(store, mdm, max_n=40)
             except Exception:
@@ -1183,6 +1348,10 @@ class PredictPage(BasePage):
                                            print("预测错误:", e)))
 
     def _on_done(self, payload):
+        """处理ondone。
+        
+            参数:
+                payload"""
         (res, fit, cfg, bias_info, conf, settle, all_news,
          ai_report) = payload
         self.run_btn.setEnabled(True); self.run_btn.setText("运行预测")
@@ -1339,6 +1508,26 @@ class PredictPage(BasePage):
                      ind_info=None, fund_info=None, stats=None,
                      closed=None, settle=None, ai_report=None,
                      all_news=None) -> str:
+        """处理detailhtml。
+        
+            参数:
+                res
+                cfg
+                bias_info
+                conf
+                news_an
+                name
+                category
+                ind_info
+                fund_info
+                stats
+                closed
+                settle
+                ai_report
+                all_news
+        
+            返回:
+                str"""
         p = pal()
         up_c, dn_c, tx_c, mut_c = p["up"], p["down"], p["text"], "#94a3b8"
         p_up = float(res["p_up"]); p_dn = float(res["p_down"])
@@ -1438,6 +1627,12 @@ class PredictPage(BasePage):
             blockers.append("当前未识别到明确阻挡因素，但仍须设好止损、控制单笔仓位。")
 
         def row(k, v, color=""):
+            """处理行。
+            
+                参数:
+                    k
+                    v
+                    color"""
             c = f" style='color:{color}'" if color else ""
             return (f"<tr><td style='color:{mut_c};padding:3px 12px 3px 0;white-space:nowrap'>{k}</td>"
                     f"<td{c}>{v}</td></tr>")
@@ -1459,12 +1654,20 @@ class PredictPage(BasePage):
 
         # 资讯面（多源聚合 + AI 多维研判）
         def _lv_badge(level):
+            """处理lvbadge。
+            
+                参数:
+                    level"""
             cmap = {"A": ("#fef3c7", "#92400e"), "B": ("#e0f2fe", "#075985"),
                      "C": ("#f1f5f9", "#475569")}
             bg, fg = cmap.get((level or "C").upper(), ("#f1f5f9", "#475569"))
             return (f"<span style='background:{bg};color:{fg};border-radius:3px;"
                     f"padding:0 4px;font-size:11px'>{level or 'C'}</span>")
         def _src_badge(src):
+            """处理srcbadge。
+            
+                参数:
+                    src"""
             cmap = {"东方财富": ("#ecfdf5", "#047857"),
                      "和讯": ("#eff6ff", "#1d4ed"),
                      "财联社": ("#fef2f2", "#b91c1c")}
@@ -1472,6 +1675,10 @@ class PredictPage(BasePage):
             return (f"<span style='background:{bg};color:{fg};border-radius:3px;"
                     f"padding:0 4px;font-size:10px'>{src}</span>")
         def _cat_badge(cat):
+            """处理catbadge。
+            
+                参数:
+                    cat"""
             cmap = {"行情动态": ("#f0f9ff", "#1e40af"), "市场分析": ("#f5f3ff", "#6d28d9"),
                      "政策资讯": ("#fef2f2", "#b91c1c"), "品种研报": ("#ecfdf5", "#047857"),
                      "其他": ("#f1f5f9", "#475569")}
@@ -1572,6 +1779,10 @@ class PredictPage(BasePage):
 
         # 历史表现（原学习看板）
         def _rc(rt):
+            """处理rc。
+            
+                参数:
+                    rt"""
             if rt is None:
                 return "#94a3b8"
             if rt >= 0.55:
@@ -1707,7 +1918,17 @@ class PredictPage(BasePage):
 # 模块四：市场全景
 # ============================================================================
 class PanoramaPage(BasePage):
+    """全景研判页面：汇总多维度信号给出品种多空研判。
+    
+        继承: BasePage"""
     def __init__(self, mdm, store, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "panorama"
         if session is not None:
@@ -1717,11 +1938,16 @@ class PanoramaPage(BasePage):
         self._build()
 
     def _on_change(self):
+        """处理onchange。"""
         self.cur_period = self.per_cb.currentData()
         self.selection_changed.emit("", self.cur_period)
         self._refresh()
 
     def _mk_card(self, label):
+        """处理mkcard。
+        
+            参数:
+                label"""
         card = QFrame(); card.setObjectName("kpi-card")
         cv = QVBoxLayout(card); cv.setContentsMargins(10, 8, 10, 8); cv.setSpacing(2)
         v = QLabel("—"); v.setObjectName("kpi-val")
@@ -1731,6 +1957,12 @@ class PanoramaPage(BasePage):
         return card
 
     def _set_card(self, key, text, color=""):
+        """设置card。
+        
+            参数:
+                key
+                text
+                color"""
         c = self._kpi_cards.get(key)
         if not c:
             return
@@ -1738,6 +1970,7 @@ class PanoramaPage(BasePage):
         c._val.setStyleSheet("color:%s;font-size:17px;font-weight:bold;" % (color or pal()["text"]))
 
     def _style_cards(self):
+        """处理stylecards。"""
         p = pal()
         for c in self._kpi_cards.values():
             c.setStyleSheet(
@@ -1745,6 +1978,7 @@ class PanoramaPage(BasePage):
                 % (p["card"], p["border"]))
 
     def _build(self):
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -1842,6 +2076,14 @@ class PanoramaPage(BasePage):
         self._refresh()
 
     def _set(self, table, r, c, text, color=None):
+        """设置相关对象。
+        
+            参数:
+                table
+                r
+                c
+                text
+                color"""
         it = QTableWidgetItem(str(text))
         fg = (QColor(color) if isinstance(color, str) else color) if color is not None \
             else QColor(pal()["text"])
@@ -1850,6 +2092,7 @@ class PanoramaPage(BasePage):
         return it
 
     def _refresh(self):
+        """刷新相关对象。"""
         self.cur_period = self.per_cb.currentData()
         cat = self.cat_cb.currentText()
         pan_all = self.mdm.compute_panorama(self.cur_period)
@@ -1886,6 +2129,10 @@ class PanoramaPage(BasePage):
 
         # 涨跌分布（HTML 横条）
         def pct(n):
+            """处理pct。
+            
+                参数:
+                    n"""
             return (n / total * 100) if total else 0.0
         p = pal()
         self.breadth_lbl.setText(
@@ -1948,12 +2195,27 @@ class PanoramaPage(BasePage):
         prepare_table(self.gain_tbl); prepare_table(self.lag_tbl); prepare_table(self.flow_tbl)
 
     def set_theme(self, t: str) -> None:
+        """设置主题。
+        
+            参数:
+                t: str"""
         super().set_theme(t)
         self._style_cards()
         self.temp_lbl.setStyleSheet("color:%s;" % pal()["sub"])
 
 class ValidatePage(BasePage):
+    """校验页面。
+    
+        继承: BasePage"""
     def __init__(self, mdm, store, config=None, session=None, header: bool = True):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session
+                header: bool"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "validate"
         self._show_header = header
@@ -1965,11 +2227,16 @@ class ValidatePage(BasePage):
         self._build()
 
     def _on_sel(self, *_):
+        """处理onsel。
+        
+            参数:
+                *_: 可变位置参数"""
         self.cur_symbol = self.sym_cb.currentData()
         self.cur_period = self.per_cb.currentData()
         self.selection_changed.emit(self.cur_symbol, self.cur_period)
 
     def _build(self):
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -2015,6 +2282,7 @@ class ValidatePage(BasePage):
         root.addWidget(split, 1)
 
     def _run(self):
+        """运行相关对象。"""
         sym = self.sym_cb.currentData(); per = self.per_cb.currentData()
         horizon = self.hor_spin.value(); n_orig = self.orig_spin.value()
         use_lstm = self.lstm_chk.isChecked()
@@ -2022,6 +2290,7 @@ class ValidatePage(BasePage):
         df_full = self.mdm.get_bars(sym, per, 800)
 
         def work():
+            """处理work。"""
             rows = []; ex_actual = []; ex_pred = []
             total = len(df_full)
             step = max(1, (total - horizon - 60) // max(1, n_orig))
@@ -2055,6 +2324,10 @@ class ValidatePage(BasePage):
                                            self.run_btn.setText("开始验证")))
 
     def _on_done(self, r):
+        """处理ondone。
+        
+            参数:
+                r"""
         self.run_btn.setEnabled(True); self.run_btn.setText("开始验证")
         if not r["rows"]:
             self.metrics.setText("数据不足，无法验证。")
@@ -2087,12 +2360,23 @@ class ValidatePage(BasePage):
 # 模块六：日志 / 预警 / 报告
 # ============================================================================
 class LogPage(BasePage):
+    """记录日志页面。
+    
+        继承: BasePage"""
     def __init__(self, mdm, store, config=None, session=None):
+        """初始化相关对象。
+        
+            参数:
+                mdm
+                store
+                config
+                session"""
         super().__init__(mdm, store, config, session)
         self.PAGE_KEY = "log"
         self._build()
 
     def _build(self):
+        """构建相关对象。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
@@ -2129,9 +2413,11 @@ class LogPage(BasePage):
         root.addWidget(self.tabs, 1)
 
     def _refresh(self):
+        """刷新相关对象。"""
         self.status_lbl.setText("加载中…")
         self.refresh_btn.setEnabled(False)
         def work():
+            """处理work。"""
             return (
                 self.store.query_logs(300),
                 self.store.query_alerts(200),
@@ -2139,6 +2425,10 @@ class LogPage(BasePage):
                 self.store.query_analysis(200),
             )
         def done(payload):
+            """处理done。
+            
+                参数:
+                    payload"""
             logs, alerts, preds, an = payload
             self.tab_log.setRowCount(len(logs))
             for i, r in enumerate(logs):
@@ -2177,11 +2467,16 @@ class LogPage(BasePage):
             self.status_lbl.setText(f"就绪 · 日志:{len(logs)} 预警:{len(alerts)} 预测:{len(preds)} 研判:{len(an)}")
             self.refresh_btn.setEnabled(True)
         def err(e):
+            """处理err。
+            
+                参数:
+                    e"""
             self.status_lbl.setText(f"加载失败: {e}")
             self.refresh_btn.setEnabled(True)
         self._run_worker(work, done, on_err=err)
 
     def _export(self):
+        """导出相关对象。"""
         idx = self.tabs.currentIndex()
         table = ["logs", "alerts", "predictions", "analysis"][idx]
         path = f"data/export_{table}.csv"

@@ -10,23 +10,58 @@ from .base import BrokerBase
 
 
 class PaperBroker(BrokerBase):
+    """仿真经纪商：按当前价即时撮合（含滑点），用于仿真 / 实盘对接，不做回测。
+    
+        继承: BrokerBase"""
     def __init__(self, slippage: float = 1.0, min_tick: float = 1.0, contracts: dict | None = None) -> None:
+        """初始化相关对象。
+        
+            参数:
+                slippage: float
+                min_tick: float
+                contracts: dict | None"""
         self.slippage = slippage
         self.min_tick = min_tick
         self.contracts = contracts or {}
 
     def _tick(self, symbol: str) -> float:
+        """处理Tick 数据。
+        
+            参数:
+                symbol: str
+        
+            返回:
+                float"""
         c = self.contracts.get(symbol)
         return c.min_price_tick if c else self.min_tick
 
     def submit(self, order: Order) -> None:
         # 实盘模式下 submit 通常直接发往接口；此处由引擎调用 fill_now 即时成交
+        """处理submit。
+        
+            参数:
+                order: Order"""
         raise RuntimeError("PaperBroker 请使用 fill_now() 即时撮合。")
 
     def match(self, bar) -> list[Trade]:
+        """处理match。
+        
+            参数:
+                bar
+        
+            返回:
+                list[Trade]"""
         return []
 
     def fill_now(self, order: Order, price: float) -> list[Trade]:
+        """处理fillnow。
+        
+            参数:
+                order: Order
+                price: float
+        
+            返回:
+                list[Trade]"""
         if price is None or price <= 0:
             order.status = OrderStatus.REJECTED
             order.reject_reason = "无有效价格"
