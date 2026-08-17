@@ -2,7 +2,7 @@
 
 存储内容：
     - bars：历史 K 线缓存（按 symbol+period 索引，本地加速加载）；
-    - predictions：每次 AI 预测记录（含预期收益、涨跌概率、风险度、模型类型）；
+    - predictions：每次 KP预测记录（含预期收益、涨跌概率、风险度、模型类型）；
     - analysis：指标共振 / 背离等研判记录；
     - alerts：预警规则与触发日志；
     - logs：系统运行日志。
@@ -570,8 +570,12 @@ class AnalysisStore:
                 ts: str
                 level: str
                 message: str"""
-        self.conn.execute("INSERT INTO logs (ts,level,message) VALUES (?,?,?)", (ts, level, message))
-        self.conn.commit()
+        try:
+            self.conn.execute("INSERT INTO logs (ts,level,message) VALUES (?,?,?)", (ts, level, message))
+            self.conn.commit()
+        except sqlite3.ProgrammingError:
+            # 连接已关闭（如关闭过程竞态）时静默放弃，避免日志写入拖垮主流程
+            pass
 
     def query_logs(self, limit: int = 300) -> list:
         """处理querylogs。

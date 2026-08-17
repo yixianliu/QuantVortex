@@ -17,12 +17,12 @@
 
 ### 3. 重写 docs/ui_design.md
 - 旧版描述 7 页交易外壳（行情/持仓/策略/风控/日志/回测/预测，含手动下单、锁仓等）；
-- 新版描述新 6 页分析 UI（行情全景/指标分析/AI预测/市场全景/回测验证/日志预警），含每页组件层级、图表组件（`KLineChart`/`PriceChart`）、主题系统、二次开发指引、视觉校验命令。
+- 新版描述新 6 页分析 UI（行情全景/指标分析/KP预测/市场全景/回测验证/日志预警），含每页组件层级、图表组件（`KLineChart`/`PriceChart`）、主题系统、二次开发指引、视觉校验命令。
 
 ## 验证结论
 - `python main.py --test` → 核心模块全部可导入 OK；
 - `python examples/test_core.py` → ALL CORE LAYERS OK（data/indicators/ai/analysis/storage 真实跑通，LSTM 训练 ~7s，predict 输出 forecast/置信带/共振/风险/关键价位）；
-- `capture_ui.py` → 六页 + 一次 AI 预测完整渲染无崩溃。
+- `capture_ui.py` → 六页 + 一次 KP预测完整渲染无崩溃。
 
 ## 已知次要问题（非阻塞）
 - 截图时偶发 `QPainterPath::arcTo: Adding arc where a parameter is NaN` 警告（某图表圆角/弧线在 NaN 输入下触发），不影响渲染与功能，后续可定位具体绘制点加 NaN 守卫。

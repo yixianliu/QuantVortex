@@ -110,7 +110,7 @@ PYTHONPATH="D:/PythonProject/QuantVortex" \
 关键 e2e：
 - `test_prob_calib_viz.py`：校准 Tab 组件 / 5 元组 bins / Wilson 带 / 落点 4 元组 / 速览卡片 / 深浅主题 paint 不崩 / 样本不足引导。
 - `test_low_conf_signal.py`：⑬ 决策函数四态（窄/宽/插值/无bins）+ 徽章降级渲染 + 解读文本两态 + ⑭ `_soft_degrade_enter`/`-recommend` 四态单测。
-- `test_screening_low_conf.py`：⑮ `_calib_low_conf` 三态 + 排行表 AI方向列标注 + 入手详情 AI预测信号标注。
+- `test_screening_low_conf.py`：⑮ `_calib_low_conf` 三态 + 排行表 AI方向列标注 + 入手详情 KP预测信号标注。
 - `test_calibration_replay.py`：回放灌样本 + `status='closed'` 隔离断言。
 - `test_all_pages.py`：全页面构造冒烟（含 PredictOpsPage / ScreeningPage）。
 
@@ -147,7 +147,7 @@ PYTHONPATH="D:/PythonProject/QuantVortex" \
 - `_calib_low_conf(pu)`：与 ⑬ 同判定——落点 Wilson 区间宽 `hi−lo > 0.25` → True；无 bins/None/异常 → False（零副作用）。
 - 两处标注：
   1. 排行表「AI方向」列（col 10）：低置信品种追加 `·置信偏低` 并转琥珀色；
-  2. 入手详情「③ AI 预测信号」：低置信品种标注 `·置信偏低` + 追加「⚠ 该档概率历史校准样本稀疏…」警示段。
+  2. 入手详情「③ KP预测信号」：低置信品种标注 `·置信偏低` + 追加「⚠ 该档概率历史校准样本稀疏…」警示段。
 
 **设计取舍**：只标注、不篡改 AI 点估计；与预测页降级口径完全一致（同阈值同判定）。
 

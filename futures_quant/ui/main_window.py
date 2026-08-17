@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
         self._session_timer.timeout.connect(lambda: self.session.flush())
 
         # 启动默认进入「行情全景」页（需求：程序启动后默认进入行情全景页面，
-        # 并自动触发市场数据刷新与新闻 AI 解读——由该页 showEvent 自动拉取）。
+        # 并自动触发市场数据刷新与新闻资讯解读——由该页 showEvent 自动拉取）。
         self.nav.setCurrentRow(0)
         self.stack.setCurrentIndex(0)
 
@@ -232,13 +232,8 @@ class MainWindow(QMainWindow):
 
     def _about(self) -> None:
         """处理about。"""
-        from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.information(
-            self, "关于",
-            "期货智能分析预测系统\n\n"
-            "行情分析 · AI 趋势预测 · 量化信号研判 · 数据复盘 · 风险分析\n"
-            "数据默认接入新浪实盘日线（可切换合成 / CTP 柜台）。\n\n"
-            "本软件仅用于学习与研究，不构成任何投资建议。")
+        from .about_page import show_about_dialog
+        show_about_dialog(self)
 
     def _open_ai_settings(self) -> None:
         """打开 AI 模型配置对话框。"""
@@ -255,9 +250,9 @@ class MainWindow(QMainWindow):
         if st.get("usable"):
             self._status_log.setText(f"Agnes AI：已连接")
         elif st.get("configured"):
-            self._status_log.setText("AI 代理：已配置（未连接）")
+            self._status_log.setText("云端研判：已配置（未连接）")
         else:
-            self._status_log.setText("AI 代理：未配置（降级模式）")
+            self._status_log.setText("云端研判：未配置（降级模式）")
         self._status_log.setStyleSheet(f"color:{pal()['sub']};")
 
     def _show_ai_status(self) -> None:
@@ -304,7 +299,8 @@ class MainWindow(QMainWindow):
     def _restore_geometry(self) -> None:
         """处理restoregeometry。"""
         w = self.session.get("window", {})
-        self._want_max = bool(w.get("maximized", True))
+        # 强制默认最大化（用户上次关闭时未最大化也恢复为最大化）
+        self._want_max = bool(w.get("maximized", True)) or True
         x, y = w.get("x"), w.get("y")
         ww, hh = int(w.get("w", 1360) or 1360), int(w.get("h", 860) or 860)
         if x is not None and y is not None:
@@ -475,15 +471,19 @@ QTabBar::tab { background:#11141c; color:#8b93a7; padding:9px 16px; margin-right
 QTabBar::tab:selected { background:#161a24; color:#fff; }
 QTabBar::tab:hover { color:#e6e6e6; }
 
-/* ===== 滚动条 ===== */
-QScrollBar:vertical { background:#0f1116; width:11px; border-radius:6px; margin:2px; }
-QScrollBar::handle:vertical { background:#2a2e3a; border-radius:6px; min-height:28px; }
-QScrollBar::handle:vertical:hover { background:#3a4154; }
+/* ===== 滚动条（深色） ===== */
+QScrollBar:vertical { background:#0f1116; width:12px; border-radius:6px; margin:0; }
+QScrollBar::handle:vertical { background:rgba(42,46,58,0.8); border-radius:6px; min-height:32px; margin:1px; }
+QScrollBar::handle:vertical:hover { background:rgba(58,65,84,0.95); }
+QScrollBar::handle:vertical:pressed { background:#3b82f6; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
-QScrollBar:horizontal { background:#0f1116; height:11px; border-radius:6px; margin:2px; }
-QScrollBar::handle:horizontal { background:#2a2e3a; border-radius:6px; min-width:28px; }
-QScrollBar::handle:horizontal:hover { background:#3a4154; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transparent; }
+QScrollBar:horizontal { background:#0f1116; height:12px; border-radius:6px; margin:0; }
+QScrollBar::handle:horizontal { background:rgba(42,46,58,0.8); border-radius:6px; min-width:32px; margin:1px; }
+QScrollBar::handle:horizontal:hover { background:rgba(58,65,84,0.95); }
+QScrollBar::handle:horizontal:pressed { background:#3b82f6; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width:0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background:transparent; }
 
 /* ===== 复选框 ===== */
 QCheckBox { color:#cbd5e1; spacing:8px; background:transparent; }
@@ -568,15 +568,19 @@ QTabBar::tab { background:#eef2f7; color:#6b7280; padding:9px 16px; margin-right
 QTabBar::tab:selected { background:#ffffff; color:#111827; }
 QTabBar::tab:hover { color:#111827; }
 
-/* ===== 滚动条 ===== */
-QScrollBar:vertical { background:#f5f7fa; width:11px; border-radius:6px; margin:2px; }
-QScrollBar::handle:vertical { background:#cbd5e1; border-radius:6px; min-height:28px; }
-QScrollBar::handle:vertical:hover { background:#94a3b8; }
+/* ===== 滚动条（浅色） ===== */
+QScrollBar:vertical { background:#f1f5f9; width:12px; border-radius:6px; margin:0; }
+QScrollBar::handle:vertical { background:rgba(203,213,225,0.8); border-radius:6px; min-height:32px; margin:1px; }
+QScrollBar::handle:vertical:hover { background:rgba(148,163,184,0.95); }
+QScrollBar::handle:vertical:pressed { background:#2563eb; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
-QScrollBar:horizontal { background:#f5f7fa; height:11px; border-radius:6px; margin:2px; }
-QScrollBar::handle:horizontal { background:#cbd5e1; border-radius:6px; min-width:28px; }
-QScrollBar::handle:horizontal:hover { background:#94a3b8; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transparent; }
+QScrollBar:horizontal { background:#f1f5f9; height:12px; border-radius:6px; margin:0; }
+QScrollBar::handle:horizontal { background:rgba(203,213,225,0.8); border-radius:6px; min-width:32px; margin:1px; }
+QScrollBar::handle:horizontal:hover { background:rgba(148,163,184,0.95); }
+QScrollBar::handle:horizontal:pressed { background:#2563eb; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width:0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background:transparent; }
 
 /* ===== 复选框 ===== */
 QCheckBox { color:#334155; spacing:8px; background:transparent; }
@@ -650,6 +654,9 @@ def main() -> None:
         win.showMaximized()
     else:
         win.show()
+    # 确保窗口在最前面并激活
+    win.raise_()
+    win.activateWindow()
     app.exec()
 
 

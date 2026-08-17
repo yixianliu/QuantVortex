@@ -41,7 +41,7 @@ CORE_TABLES = [
 # 各表中文名（GUI 展示用）
 TABLE_LABELS = {
     "bars": "K线缓存",
-    "predictions": "AI预测记录",
+    "predictions": "KP预测记录",
     "analysis": "研判记录",
     "alerts": "预警日志",
     "alert_rules": "预警规则",

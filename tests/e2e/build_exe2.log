@@ -1,0 +1,4 @@
+[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":1208,"threshold":50,"scope":"turn","targets":["D:\\PythonProject\\QuantVortex\\dist\\FuturesQuant"],"targetCount":1}
+[门禁] 构建前扫描源码树 ...
+[门禁] 源码扫描通过。
+build_rc=1

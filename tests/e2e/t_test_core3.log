@@ -1,0 +1,38 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+== 1. 合成行情 ==
+  bars: 1500 cols: ['datetime', 'open', 'high', 'low', 'close', 'volume', 'open_interest']
+  close range: 2804.4 ~ 3498.5
+== 2. 多周期重采样 ==
+  5m: 300 rows
+  1h: 25 rows
+  D: 2 rows
+  W: 1 rows
+== 3. 指标 ==
+  indicator cols: ['MA5', 'MA10', 'MA20', 'MA60', 'EMA20', 'BOLL_MID', 'BOLL_UP', 'BOLL_LOW', 'DIF', 'DEA', 'MACD', 'K', 'D', 'J'] ...
+  last RSI14: 65.26 ADX: 39.61
+== 4. KP预测（LSTM 训练+多步预测）==
+  fit: {'trained': True, 'use_lstm': True, 'use_ensemble': False, 'resid_std': 0.002527, 'calib_beta': 0.0, 'skill': 0.0, 'validated': True}  训练耗时 21.31s
+  模型: LSTM  预期收益%: 0.0  p_up: 0.5  风险: 中等风险 48.5
+  行情状态: 震荡行情  共振: 多头共振 51.7
+  关键价位数: 15 | 示例: [(2796.4, 'SwingL'), (2807.0, 'S3'), (2819.8, 'S2')]
+== 5. 研判 ==
+  resonance: 多头共振
+  trend: 趋势 71.3
+  divergence: 底背离(RSI)
+  levels: 15 个
+== 6. 市场全景 ==
+  品种数: 39
+ symbol name category    last  chg_pct       volume  vol_ratio  oi_chg  fund_flow  strength
+zn.SHFE   沪锌     有色金属 25945.0     4.28 1.117406e+05       1.01   18.67     12.441     0.836
+  m.DCE   豆粕      农产品  3154.0     4.16 1.017856e+06       1.08    5.12      1.371     0.882
+  p.DCE  棕榈油      农产品  9662.0     2.73 4.615776e+05       0.74  -31.05      2.084     0.605
+ eg.DCE  乙二醇     能源化工  4817.0     2.69 5.051440e+05       1.29   20.29      1.922     0.913
+  j.DCE   焦炭      黑色系  1868.5     2.30 3.996963e+04       0.92  -33.60     -0.028     0.692
+== 7. 盘口快照 ==
+  last: 3008.0 chg%: -0.2 fund_flow(亿): 0.15
+== 8. 存储层 ==
+  predictions saved: 2
+  export csv: True
+
+ALL CORE LAYERS OK

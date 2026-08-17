@@ -948,10 +948,13 @@ def fetch_all_news(limit: int = 60, force: bool = False,
     tasks.append(("金十数据", lambda: fetch_jin10_news(limit=limit)))
     # 新增主流财经网站，扩大覆盖面与跨源交叉验证样本
     tasks.append(("新浪财经", lambda: fetch_sina_news(limit=limit)))
-    tasks.append(("期货日报", lambda: fetch_qhrb_news(limit=limit)))
+    tasks.append(("金投网", lambda: fetch_cngold_news(limit=limit)))
+    tasks.append(("中金在线", lambda: fetch_zq86_news(limit=limit)))
     tasks.append(("中证网", lambda: fetch_cs_news(limit=limit)))
     tasks.append(("证券时报", lambda: fetch_stcn_news(limit=limit)))
     tasks.append(("凤凰财经", lambda: fetch_ifeng_news(limit=limit)))
+    # 期货日报作为备用，失败不拖垮全局
+    tasks.append(("期货日报", lambda: fetch_qhrb_news(limit=limit)))
 
     parts: list = []
     if tasks:
@@ -990,7 +993,7 @@ def fetch_all_news(limit: int = 60, force: bool = False,
             result["by_category"][cat] = result["by_category"].get(cat, 0) + 1
     result["items"].sort(key=lambda x: x.get("ctime", 0) or 0, reverse=True)
     result["items"] = result["items"][:limit]
-    # 信源覆盖度：成功返回条数的源数 / 总源数（用于 AI 研判置信度与 UI 展示）
+    # 信源覆盖度：成功返回条数的源数 / 总源数（用于 云端研判置信度与 UI 展示）
     active = {k: v for k, v in result["sources"].items() if v > 0}
     result["source_coverage"] = {
         "total_sources": len(result["sources"]),
@@ -1016,8 +1019,8 @@ def fetch_all_news(limit: int = 60, force: bool = False,
 #
 #   未配置代理时自动降级到规则合成，功能始终可用。
 
-def _llm_chat(system: str, user: str, *, max_tokens: int = 900,
-               temperature: float = 0.3) -> str | None:
+def _llm_chat(system: str, user: str, *, max_tokens: int = 1600,
+               temperature: float = 0.35) -> str | None:
     """经自建代理调用大模型；不可用时返回 None 由调用方降级。"""
     try:
         from .llm_client import chat as _proxy_chat
@@ -1052,6 +1055,7 @@ SOURCE_CREDIBILITY = {
     "财联社": 1.00, "华尔街见闻": 0.95, "金十数据": 0.95, "中证网": 0.95,
     "期货日报": 0.92, "东方财富": 0.90, "同花顺": 0.90, "新浪财经": 0.90,
     "证券时报": 0.90, "中国证券报": 0.95, "和讯": 0.80, "凤凰财经": 0.85,
+    "金投网": 0.85, "中金在线": 0.80,
 }
 
 
@@ -1288,9 +1292,49 @@ def _heuristic_report(all_news: dict, res: dict, name: str,
     else:
         actionable = (f"方向待确认：资讯「{tone_word}」与模型「{model_dir}」未形成共振，"
                       f"建议轻仓或观望，重点跟踪 {hot_txt} 的强度延续性。")
+
+    # —— 核心驱动因素（由供需/政策/板块轮动/模型方向合成）——
+    drivers = []
+    if pol_hits:
+        drivers.append(f"政策面 {pol_hits} 条（偏多 {pol_bull}/偏空 {pol_bear}），构成边际驱动")
+    if sd_hits:
+        drivers.append(f"供需/库存线索 {sd_hits} 条，影响 {name} 基本面定价")
+    if hot:
+        drivers.append(f"强势板块聚焦：{hot_txt}")
+    if cold:
+        drivers.append(f"弱势板块承压：{cold_txt}")
+    drivers.append(f"模型方向「{model_dir}」（看涨概率 {p_up*100:.0f}%），与资讯「{tone_word}」"
+                   f"{'共振' if consistent else '互为参考'}")
+    drivers = drivers[:4]
+
+    # —— 情景分析（乐观/中性/悲观三档概率）——
+    optimistic_p = min(0.95, p_up + (1 - confidence) * 0.35)
+    pessimistic_p = max(0.05, 1 - optimistic_p)
+    base_p = max(0.0, 1 - optimistic_p - pessimistic_p)
+    tot = optimistic_p + base_p + pessimistic_p or 1.0
+    scenarios = {
+        "optimistic": {"p": round(optimistic_p / tot, 2),
+                       "desc": f"资讯与模型共振偏多，{name} 延续上行，目标看板块强度延续"},
+        "base": {"p": round(base_p / tot, 2),
+                 "desc": f"多空拉锯、区间震荡，方向待 {hot_txt or '板块强度'} 确认"},
+        "pessimistic": {"p": round(pessimistic_p / tot, 2),
+                        "desc": f"资讯转弱或政策逆风，{name} 回踩支撑，需严控仓位"},
+    }
+
+    # —— 关注品种与逻辑 ——
+    watchlist = []
+    for sym, cnt in list(mentions.items()):
+        if sym == name:
+            continue
+        watchlist.append(f"{sym}（提及 {cnt} 次）")
+    for s in hot[:3]:
+        watchlist.append(f"{s['sector']}（强势，偏多{s['score']:+.2f}）")
+    watchlist = watchlist[:4]
+
     return {"model": "heuristic", "trend": trend, "risk": risk,
             "suggestion": sugg, "by_category": by_cat,
             "brief": brief, "sector_rotation": sector_rotation,
+            "drivers": drivers, "scenarios": scenarios, "watchlist": watchlist,
             "actionable_insights": actionable,
             "source_coverage": coverage, "weighted_bias": round(wbias, 3),
             "consensus": consensus, "confidence": confidence}
@@ -1344,18 +1388,24 @@ def ai_analyze_news(all_news: dict, res: dict, name: str,
                 f"{consensus['bear']} 源）" if consensus["sources"] >= 2
                 else "该品种跨源样本不足，置信度受限")
     system = ("你是期货量化研究的资深分析师。基于给定的多源期货资讯与模型预测，"
-              "输出严格 JSON：{\"trend\":趋势研判(含方向与理由,60-120字,须结合信源覆盖与一致性),"
-              "\"risk\":风险提示(具体风险点,30-60字),"
-              "\"suggestion\":品种关注建议(跟踪哪些品种/逻辑,30-60字),"
+              "输出严格 JSON，字段须充实、可落地："
+              "{\"brief\":一句话结论(方向+置信+关键矛盾,40-70字),"
+              "\"trend\":趋势研判(含大盘/宏观背景、板块联动、核心驱动,150-260字),"
+              "\"drivers\":[核心驱动因素,2-4条,每条20-40字],"
+              "\"scenarios\":{\"optimistic\":{概率(0-1),描述},"
+              "\"base\":{概率,描述},\"pessimistic\":{概率,描述}},"
+              "\"risk\":风险提示(具体风险点与触发条件,80-150字),"
+              "\"suggestion\":操作节奏与时间维度+关注品种逻辑(80-150字),"
+              "\"watchlist\":[关注品种与逻辑,2-4条],"
               "\"key_events\":[关键事件列表(每个含事件描述和影响判断)],"
-              "\"actionable_insights\":可操作洞察(基于资讯的综合判断,20-50字)}。"
+              "\"actionable_insights\":可操作洞察(基于资讯的综合判断,30-70字)}。"
               "不要多余解释，只输出 JSON。")
     user = (f"品种：{name}（{category}）。模型看涨概率 {p_up * 100:.0f}%，"
              f"预期涨跌 {float(res.get('expected_return_pct', 0)):+.2f}%，"
              f"风险度「{(res.get('risk') or {}).get('label', '中')}」。\n"
              f"资讯覆盖：{cov_desc}。综合置信度 {confidence*100:.0f}%。{con_desc}。\n"
-             f"多源资讯（{len(items)} 条，来自财联社/东方财富/华尔街见闻/金十数据/"
-             f"和讯/同花顺/新浪财经/期货日报/中证网/证券时报/凤凰财经）：\n{ctx_block}")
+            f"多源资讯（{len(items)} 条，来自财联社/东方财富/华尔街见闻/金十数据/"
+            f"和讯/同花顺/新浪财经/金投网/中证网/证券时报/凤凰财经/中金在线）：\n{ctx_block}")
     raw = _llm_chat(system, user)
     if raw:
         try:
@@ -1366,10 +1416,15 @@ def ai_analyze_news(all_news: dict, res: dict, name: str,
                     s = s[4:]
             d = json.loads(s)
             # 具体模型由代理服务决定，客户端不感知也不配置
+            sc = d.get("scenarios") or {}
             return {"model": "llm(proxy)",
+                    "brief": str(d.get("brief", "")),
                     "trend": str(d.get("trend", "")),
+                    "drivers": d.get("drivers", []) or [],
+                    "scenarios": sc,
                     "risk": str(d.get("risk", "")),
                     "suggestion": str(d.get("suggestion", "")),
+                    "watchlist": d.get("watchlist", []) or [],
                     "by_category": all_news.get("by_category", {}),
                     "sentiment_breakdown": _sentiment_breakdown(all_news),
                     "key_events": d.get("key_events", []),
@@ -1484,7 +1539,6 @@ def _generate_actionable_insight(all_news: dict, res: dict, name: str,
 # ============================================================================
 THS_HOME = "https://www.10jqka.com.cn/futures/"
 _THS_RE = re.compile(r'href="([^"]*futures/detail/\d+[^"]*)"[^>]*>(.*?)</a>', re.S)
-_THS_BODY_RE = re.compile(r'<div[^>]*class="[^"]*article-content[^"]*"[^>]*>(.*?)</div>', re.S)
 
 def fetch_ths_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> list:
     """抓取同花顺期货频道文章。返回 [{title, url, snippet, source='同花顺'}]。"""
@@ -1507,6 +1561,140 @@ def fetch_ths_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> l
     except Exception:
         pass
     return items
+
+# —— 金投网 · 期货频道 ——
+CNGOLD_FUTURES_HOME = "https://futures.cngold.org/"
+_CNGOLD_ART_RE = re.compile(
+    r'href="(https://futures\.cngold\.org/[^"]+)"[^>]*title="([^"]+)"', re.S)
+_CNGOLD_DATE_RE = re.compile(r'/c/(\d{4})-(\d{2})-(\d{2})/')
+
+def fetch_cngold_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> list:
+    """抓取金投网期货频道文章（UTF-8）。"""
+    if not _HAVE_REQUESTS:
+        return []
+    items = []
+    try:
+        resp = _get(CNGOLD_FUTURES_HOME, timeout, referer=CNGOLD_FUTURES_HOME)
+        if resp.status_code != 200:
+            return []
+        txt = resp.text
+        seen = set()
+        for url, title in _CNGOLD_ART_RE.findall(txt):
+            title = title.strip()
+            if not title or len(title) < 8:
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            m = _CNGOLD_DATE_RE.search(url)
+            ctime, ts = 0.0, ""
+            if m:
+                try:
+                    d = dt.datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                    ctime = d.timestamp()
+                    ts = d.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            items.append({
+                "id": "cngold_" + str(hash(url) % 1000000),
+                "title": title[:120],
+                "content": title,
+                "url": url,
+                "ts": ts,
+                "ctime": ctime,
+                "level": "B",
+                "reading_num": 0,
+                "source": "金投网",
+            })
+            if len(items) >= limit:
+                break
+    except Exception:
+        pass
+    return items[:limit]
+
+
+# —— 新浪财经 · 财经滚动 ——
+SINA_ROLL_HOME = "https://finance.sina.com.cn/"
+_SINA_ROLL_RE = re.compile(
+    r'href="(https?://finance\.sina\.com\.cn/[^"]+\.shtml)"[^>]*>([^<]+)</a>', re.S)
+
+def fetch_sina_roll_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> list:
+    """抓取新浪财经滚动新闻（UTF-8）。"""
+    if not _HAVE_REQUESTS:
+        return []
+    items = []
+    try:
+        resp = _get(SINA_ROLL_HOME, timeout, referer=SINA_ROLL_HOME)
+        if resp.status_code != 200:
+            return []
+        txt = resp.text
+        seen = set()
+        for url, title in _SINA_ROLL_RE.findall(txt):
+            title = title.strip()
+            if not title or len(title) < 8:
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            ctime, ts = _parse_url_date(url)
+            items.append({
+                "id": "sina_roll_" + str(hash(url) % 1000000),
+                "title": title[:120],
+                "content": title,
+                "url": url,
+                "ts": ts,
+                "ctime": ctime,
+                "level": "B",
+                "reading_num": 0,
+                "source": "新浪财经",
+            })
+            if len(items) >= limit:
+                break
+    except Exception:
+        pass
+    return items[:limit]
+
+
+# —— 中金在线 · 财经频道 ——
+ZQ86_HOME = "https://www.zq86.com/"
+_ZQ86_RE = re.compile(
+    r'href="(https?://www\.zq86\.com/[^"]+)"[^>]*>([^<]+)</a>', re.S)
+
+def fetch_zq86_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> list:
+    """抓取中金在线财经频道新闻（UTF-8）。"""
+    if not _HAVE_REQUESTS:
+        return []
+    items = []
+    try:
+        resp = _get(ZQ86_HOME, timeout, referer=ZQ86_HOME)
+        if resp.status_code != 200:
+            return []
+        txt = resp.text
+        seen = set()
+        for url, title in _ZQ86_RE.findall(txt):
+            title = title.strip()
+            if not title or len(title) < 8:
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            ctime, ts = _parse_url_date(url)
+            items.append({
+                "id": "zq86_" + str(hash(url) % 1000000),
+                "title": title[:120],
+                "content": title,
+                "url": url,
+                "ts": ts,
+                "ctime": ctime,
+                "level": "B",
+                "reading_num": 0,
+                "source": "中金在线",
+            })
+            if len(items) >= limit:
+                break
+    except Exception:
+        pass
+    return items[:limit]
 
 
 # ============================================================================

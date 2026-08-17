@@ -1,7 +1,7 @@
-"""预测操作板块：统一"AI预测"与"选品机会"两大功能。
+"""预测操作板块：统一"KP预测"与"选品机会"两大功能。
 
 核心交互流程：
-1. 用户选择目标品种 + 点击"开始预测"按钮触发AI预测
+1. 用户选择目标品种 + 点击"开始预测"按钮触发KP预测
 2. 展示基本面分析、K线图分析及K线图预测路线
 3. K线图上明确标注建议买入价格与卖出价格位置
 4. 保留选品机会的评分排行功能作为子面板
@@ -27,11 +27,11 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel,
     QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
     QSplitter, QSizePolicy, QAbstractItemView, QTabWidget, QSpinBox,
-    QProgressBar, QCheckBox,
+    QProgressBar, QCheckBox, QDialog,
 )
 
 from .widgets import (
-    PageHeader, Badge, MetricChip, ConfidenceBar, SectionHeader,
+    PageHeader, Badge, StatCard, ConfidenceBar, SectionHeader,
     prepare_table, color_pnl, pal, THEME, ToolBar, PALETTE,
 )
 from .icons import icon
@@ -53,6 +53,7 @@ from ..strategy.auto_evolve import (
     latest_signal_for as evolved_signal_for,
     describe_gene, factor_signal, ensemble_strategy_signal,
 )
+from ..ai.linkage_bus import BUS
 from ..analysis.signals import resonance, trend_score, divergence
 from ..core.metric_schema import format_metric, backtest_linkage_for, METRIC_LABEL
 from ..storage.analysis_store import AnalysisStore
@@ -209,7 +210,7 @@ LOW_CONF_BAND_WIDTH = 0.25
 # 预测操作页面
 # ============================================================================
 class PredictOpsPage(BasePage):
-    """统一预测操作板块：AI预测 + 选品机会评分。
+    """统一预测操作板块：KP预测 + 选品机会评分。
 
     交互流程：
     1. 顶部：选择品种 + 周期 + 点击"开始预测"按钮
@@ -238,6 +239,17 @@ class PredictOpsPage(BasePage):
         self._cats = []          # 板块聚合结果
         self._preloaded_gene = None    # 回测中心联动预载的策略基因
         self._preloaded_symbol = None
+        # ---- 指标预测 / AI 辅助 控制状态 ----
+        self.ind_forecast_on = True    # 是否在 MACD/KDJ/RSI 图上叠加预测曲线
+        self.ind_horizon = 10          # 指标预测步数
+        self._last_ind = None          # 最近一次渲染的指标 DataFrame（供 AI 研判）
+        self._last_res = None          # 最近一次预测结果（供 AI 研判）
+        self._ai_running = False       # AI 指标研判进行中标记
+        # ---- 双向联动总线：订阅回测中心实时更新 ----
+        try:
+            BUS.backtest_updated.connect(self._on_backtest_updated)
+        except Exception:  # noqa: BLE001
+            pass
         self._build()
         self._screen_lazy = True   # 首次 showEvent 时延迟加载选品排行
 
@@ -299,6 +311,11 @@ class PredictOpsPage(BasePage):
         self.backtest_link_btn.setToolTip("跳转到「回测中心」并用该品种已验证的最优策略跑一次手动回测")
         self.backtest_link_btn.clicked.connect(self._goto_backtest_with_strategy)
         ctl.addWidget(self.backtest_link_btn)
+        # 双向联动实时状态：显示回测中心反哺的调参画像
+        self.linkage_lbl = QLabel("🔗 联动：回测库空")
+        self.linkage_lbl.setObjectName("sub")
+        self.linkage_lbl.setStyleSheet(f"font-size:11px;color:{pal()['sub']};")
+        ctl.addWidget(self.linkage_lbl)
         ctl.addStretch(1)
 
         self.status_lbl = QLabel("就绪，选择品种后点击「开始预测」")
@@ -310,13 +327,13 @@ class PredictOpsPage(BasePage):
 
         # ---- 结果卡片行 ----
         self.chips = {
-            "exp": MetricChip("预期收益", "--"),
-            "pup": MetricChip("上涨概率", "--"),
-            "risk": MetricChip("风险度", "--"),
-            "regime": MetricChip("行情状态", "--"),
-            "model": MetricChip("模型", "--"),
-            "conf": MetricChip("校准置信度", "--"),
-            "news": MetricChip("资讯偏置", "--"),
+            "exp": StatCard("预期收益", "--", theme=self._theme),
+            "pup": StatCard("上涨概率", "--", theme=self._theme),
+            "risk": StatCard("风险度", "--", theme=self._theme),
+            "regime": StatCard("行情状态", "--", theme=self._theme),
+            "model": StatCard("模型", "--", theme=self._theme),
+            "conf": StatCard("校准置信度", "--", theme=self._theme),
+            "news": StatCard("资讯偏置", "--", theme=self._theme),
         }
         cstrip = QHBoxLayout()
         cstrip.setSpacing(6)
@@ -357,18 +374,43 @@ class PredictOpsPage(BasePage):
         chart_layout.setContentsMargins(0, 0, 0, 0)
         chart_layout.setSpacing(4)
 
+        # 指标图工具条：预测曲线开关 + 指标预测步数 + AI 指标研判
+        ind_tool = QHBoxLayout()
+        ind_tool.setSpacing(8)
+        self.ind_fc_chk = QCheckBox("显示指标预测曲线")
+        self.ind_fc_chk.setChecked(True)
+        self.ind_fc_chk.setToolTip("基于历史指标自回归外推未来走势预测曲线（虚线）")
+        self.ind_fc_chk.stateChanged.connect(self._on_toggle_ind_fc)
+        ind_tool.addWidget(self.ind_fc_chk)
+        ind_tool.addWidget(QLabel("指标预测步数"))
+        self.ind_hor_spin = QSpinBox()
+        self.ind_hor_spin.setRange(3, 30)
+        self.ind_hor_spin.setValue(10)
+        self.ind_hor_spin.setToolTip("MACD/KDJ/RSI 预测曲线外推步数")
+        self.ind_hor_spin.valueChanged.connect(self._on_ind_hor_changed)
+        ind_tool.addWidget(self.ind_hor_spin)
+        ind_tool.addStretch(1)
+        self.ai_ind_btn = QPushButton("🤖 AI 指标研判")
+        self.ai_ind_btn.setObjectName("ghost")
+        self.ai_ind_btn.setMinimumHeight(30)
+        self.ai_ind_btn.setToolTip("调用 AI 模型，基于 MACD/KDJ/RSI 预测曲线"
+                                   "辅助趋势研判与买卖信号分析")
+        self.ai_ind_btn.clicked.connect(self._run_ai_indicator)
+        ind_tool.addWidget(self.ai_ind_btn)
+        chart_layout.addLayout(ind_tool)
+
         self.chart = KLineChart()
         self.chart.setMinimumHeight(320)
         chart_layout.addWidget(self.chart, 3)
 
         # 副图：MACD / KDJ / RSI —— 每个图表独占一行垂直堆叠，
-        # 各占独立高度（min 150），避免水平并排导致细节被压缩。
+        # 各占独立高度（min 260），大幅增加图表高度提升可读性。
         self.macd = PriceChart()
-        self.macd.setMinimumHeight(150)
+        self.macd.setMinimumHeight(260)
         self.kdj = PriceChart()
-        self.kdj.setMinimumHeight(150)
+        self.kdj.setMinimumHeight(260)
         self.rsi = PriceChart()
-        self.rsi.setMinimumHeight(150)
+        self.rsi.setMinimumHeight(260)
         chart_layout.addWidget(self.macd, 1)
         chart_layout.addWidget(self.kdj, 1)
         chart_layout.addWidget(self.rsi, 1)
@@ -379,7 +421,7 @@ class PredictOpsPage(BasePage):
             "<span style='color:#ef4444;font-weight:600;'>◆</span> 建议卖出　"
             "<span style='color:#f59e0b;font-weight:600;'>◆</span> 止损位　"
             "<span style='color:#3b82f6;font-weight:600;'>━</span> 支撑/压力线　"
-            "<span style='color:#ef4444;font-weight:600;'>┅</span> AI预测路径(红涨绿跌)"
+            "<span style='color:#ef4444;font-weight:600;'>┅</span> KP预测路径(红涨绿跌)"
         )
         legend.setObjectName("sub")
         legend.setStyleSheet(f"font-size:11px;color:{p['sub']};padding:2px 0;")
@@ -446,10 +488,10 @@ class PredictOpsPage(BasePage):
 
         # 校准状态速览卡片：样本数 / 平均偏差 / 评级 / 校准区间±（不确定性）
         self.calib_stats = {
-            "n": MetricChip("校准样本", "--"),
-            "err": MetricChip("平均偏差", "--"),
-            "grade": MetricChip("校准评级", "--"),
-            "band": MetricChip("校准区间±", "--"),
+            "n": StatCard("校准样本", "--", theme=self._theme),
+            "err": StatCard("平均偏差", "--", theme=self._theme),
+            "grade": StatCard("校准评级", "--", theme=self._theme),
+            "band": StatCard("校准区间±", "--", theme=self._theme),
         }
         calib_stat_strip = QHBoxLayout()
         calib_stat_strip.setSpacing(6)
@@ -511,11 +553,16 @@ class PredictOpsPage(BasePage):
 
         # 选品排行（带伸缩比例，随窗口调整）
         right_layout.addWidget(SectionHeader("品种入手机会排行", accent="#3b82f6"))
-        self.screen_tbl = QTableWidget(0, 6)
+        # 移除「板块」列：品种字段完整展示（ResizeToContents），其余字段平均分配列宽
+        self.screen_tbl = QTableWidget(0, 5)
         self.screen_tbl.setHorizontalHeaderLabels(
-            ["品种", "板块", "评分", "20日%", "AI方向", "操作"])
-        self.screen_tbl.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch)
+            ["品种", "评分", "20日%", "AI方向", "操作"])
+        _hdr = self.screen_tbl.horizontalHeader()
+        # 品种列：按内容自适应，保证名称+代码完整可见
+        _hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        # 其余字段（评分/20日%/AI方向/操作）平均分配剩余宽度，布局均衡
+        for _c in range(1, 5):
+            _hdr.setSectionResizeMode(_c, QHeaderView.ResizeMode.Stretch)
         self.screen_tbl.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows)
         self.screen_tbl.setSelectionMode(
@@ -566,6 +613,11 @@ class PredictOpsPage(BasePage):
             参数:
                 event"""
         super().showEvent(event)
+        # 页面可见时刷新回测中心反哺的实时联动状态
+        try:
+            self._refresh_linkage_label()
+        except Exception:  # noqa: BLE001
+            pass
         if getattr(self, "_screen_lazy", False):
             self._screen_lazy = False
             QTimer.singleShot(100, self._run_screen)
@@ -649,6 +701,299 @@ class PredictOpsPage(BasePage):
         self.chart.set_forecast(None)
         self.chart.set_levels([])
         self.chart.set_trade_marks([])
+        # 副图指标 + 未来走势预测曲线
+        self._render_indicators(ind)
+
+    # ---- 指标预测曲线 + AI 辅助研判 ----
+    _AI_INDICATOR_SYSTEM = (
+        "你是资深期货量化分析师，擅长基于 MACD / KDJ / RSI 等技术指标"
+        "与模型研判给出简洁、可执行的中文趋势研判。只基于给定数据客观分析，"
+        "不编造未提供的信息，明确提示风险。")
+
+    def _render_indicators(self, ind) -> None:
+        """渲染 MACD / KDJ / RSI 副图，并叠加基于历史数据的未来走势预测曲线。
+
+        - 每个指标取「主序列」（DIF / K / RSI6）做自回归外推预测（虚线 + 置信带）；
+        - 次序列（DEA / D / J / RSI14）保留历史对照；
+        - 预测曲线随「显示指标预测曲线」开关与「指标预测步数」实时刷新。
+        """
+        self._last_ind = ind
+        if ind is None or len(ind) == 0:
+            return
+        H = self.ind_horizon
+        show = self.ind_forecast_on
+
+        # MACD：主序列 DIF（预测），对照 DEA
+        dif = self._safe_list(ind, "DIF")
+        dea = self._safe_list(ind, "DEA")
+        macd_series, macd_band = self._build_ind_chart(
+            "DIF", "#3b82f6", dif,
+            [{"name": "DEA", "color": "#f59e0b", "hist": dea}],
+            H, show)
+        self.macd.set_data(series=macd_series, bands=macd_band, title="MACD")
+
+        # KDJ：主序列 K（预测），对照 D / J
+        k = self._safe_list(ind, "K")
+        d = self._safe_list(ind, "D")
+        j = self._safe_list(ind, "J")
+        kdj_series, kdj_band = self._build_ind_chart(
+            "K", "#3b82f6", k,
+            [{"name": "D", "color": "#22c55e", "hist": d},
+             {"name": "J", "color": "#ef4444", "hist": j}],
+            H, show)
+        self.kdj.set_data(series=kdj_series, bands=kdj_band, title="KDJ")
+
+        # RSI：主序列 RSI6（预测，含 0~100 边界回归），对照 RSI14
+        r6 = self._safe_list(ind, "RSI6")
+        r14 = self._safe_list(ind, "RSI14")
+        rsi_series, rsi_band = self._build_ind_chart(
+            "RSI6", "#a855f7", r6,
+            [{"name": "RSI14", "color": "#06b6d4", "hist": r14}],
+            H, show, bounds=(0.0, 100.0))
+        self.rsi.set_data(series=rsi_series, bands=rsi_band, title="RSI")
+
+    @staticmethod
+    def _safe_list(ind, col) -> list:
+        """从指标 DataFrame 取列并过滤非有限值（NaN/±inf → 丢弃）。"""
+        try:
+            s = ind[col]
+        except KeyError:
+            return []
+        out = []
+        for v in s.tolist():
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(fv):
+                out.append(fv)
+        return out
+
+    def _build_ind_chart(self, pname, pcolor, phist, extras, H, show,
+                         bounds=None):
+        """构造单个指标图的 series / bands。
+
+        PriceChart 按数组下标定位（忽略 series 的 x 字段），因此预测曲线通过
+        **历史段以 None 占位** 实现对齐：仅前景段（末点 + 外推）为有限值，
+        落在绘图区右侧，与历史线末端自然衔接。置信带全程有限（历史段零宽、
+        前景段真实带），与下标一致，避免错位。
+        """
+        N = len(phist)
+        series = [{"name": pname, "color": pcolor, "y": phist}]
+        bands = []
+        if show and N >= 5:
+            fc, lo, hi = self._indicator_forecast(phist, H,
+                                                  bounds[0] if bounds else None,
+                                                  bounds[1] if bounds else None)
+            if fc is not None:
+                # 前景段：历史段 None 占位跳过，仅末点 + 外推为有限值（落右侧）
+                fc_y = [None] * (N - 1) + [phist[-1]] + list(fc)
+                series.append({"name": pname + "预测", "color": pcolor,
+                               "y": fc_y, "dashed": True})
+                # 全程有限置信带：历史段零宽，前景段真实带
+                full_lo = phist[:-1] + [phist[-1]] + list(lo)
+                full_hi = phist[:-1] + [phist[-1]] + list(hi)
+                bands.append({"lower": full_lo, "upper": full_hi,
+                               "color": pcolor, "alpha": 28})
+        for ex in extras:
+            eh = ex.get("hist") or []
+            series.append({"name": ex["name"], "color": ex["color"], "y": eh})
+        return series, bands
+
+    def _indicator_forecast(self, y, horizon, lo=None, hi=None):
+        """基于历史指标序列自回归外推未来走势（含 ±1σ 置信带）。
+
+        方法：对尾部窗口做最小二乘趋势线，外推时趋势随时间指数衰减（避免盲目延展），
+        有界指标（如 RSI/KDJ 0~100）叠加向中值回归项并夹紧边界；
+        置信带宽度随步数 √i 扩张，体现不确定性累积。
+        """
+        ys = [float(v) for v in y if math.isfinite(v)]
+        if len(ys) < 5:
+            return None, None, None
+        arr = np.array(ys[-40:], dtype=float)
+        n = len(arr)
+        t = np.arange(n, dtype=float)
+        slope = 0.0
+        if n >= 3:
+            A = np.vstack([t, np.ones(n)]).T
+            try:
+                coef, *_ = np.linalg.lstsq(A, arr, rcond=None)
+                slope = float(coef[0])
+            except Exception:  # noqa: BLE001
+                slope = 0.0
+        last = float(arr[-1])
+        diffs = np.diff(arr)
+        resid_std = float(np.std(diffs)) if len(diffs) else (abs(slope) + 1e-6)
+        resid_std = max(resid_std, 1e-6)
+        fc, lower, upper = [], [], []
+        for i in range(1, horizon + 1):
+            damp = math.exp(-0.06 * i)
+            v = last + slope * damp * i
+            if lo is not None and hi is not None:
+                mid = 0.5 * (lo + hi)
+                v = v + (mid - v) * (1.0 - math.exp(-0.04 * i))
+                v = max(lo, min(hi, v))
+            fc.append(float(v))
+            b = float(resid_std * math.sqrt(i))
+            lower.append(float(v) - b)
+            upper.append(float(v) + b)
+        return fc, lower, upper
+
+    def _on_toggle_ind_fc(self, state) -> None:
+        """切换「显示指标预测曲线」开关，重渲染当前指标图。"""
+        self.ind_forecast_on = bool(state)
+        if getattr(self, "_last_ind", None) is not None:
+            self._render_indicators(self._last_ind)
+
+    def _on_ind_hor_changed(self, val) -> None:
+        """调整指标预测步数，重渲染当前指标图。"""
+        self.ind_horizon = int(val)
+        if getattr(self, "_last_ind", None) is not None:
+            self._render_indicators(self._last_ind)
+
+    # ---- 双向联动：回测中心 → 预测 ----
+    def _on_backtest_updated(self, payload: dict) -> None:
+        """回测中心实时推送盈利策略时，刷新本页联动状态（画像已在总线内重建）。"""
+        try:
+            self._refresh_linkage_label()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _refresh_linkage_label(self) -> None:
+        """刷新控制栏的联动状态标签：展示回测库反哺的调参画像（命中率 + 权重）。"""
+        try:
+            t = BUS.get_tuning(self.cur_symbol)
+            g = (t.get("global") or {})
+            n = int(g.get("n", 0) or 0)
+            if n == 0:
+                self.linkage_lbl.setText("🔗 联动：回测库空（预测未反哺）")
+                self.linkage_lbl.setStyleSheet(
+                    f"font-size:11px;color:{pal()['sub']};")
+                return
+            cons = float(g.get("consensus", 0.0) or 0.0)
+            base = float(g.get("strat_weight_base", 0.30) or 0.30)
+            sym = t.get("symbol")
+            extra = (f" · 本品种权重 {sym.get('weight', base):.2f}"
+                     if sym else "")
+            hit_rate = float(g.get("hit_rate", 0.5) or 0.5)
+            hit_txt = f" · 命中率 {hit_rate*100:.0f}%" if n >= 2 else ""
+            self.linkage_lbl.setText(
+                f"🔗 联动：回测库 {n} 条 · 方向一致 {cons*100:.0f}% · "
+                f"权重 {base:.2f}{extra}{hit_txt}")
+            self.linkage_lbl.setStyleSheet(
+                f"font-size:11px;color:{pal()['accent']};")
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---- AI 指标研判 ----
+    def _run_ai_indicator(self) -> None:
+        """调用 AI 模型，基于 MACD/KDJ/RSI 现状与预测曲线辅助趋势研判与信号分析。"""
+        if getattr(self, "_ai_running", False):
+            return
+        self._ai_running = True
+        self.ai_ind_btn.setEnabled(False)
+        self.ai_ind_btn.setText("🤖 AI 研判中…")
+        sym = self.cur_symbol
+        ind = getattr(self, "_last_ind", None)
+        res = getattr(self, "_last_res", None)
+
+        def work():
+            """构造指标研判提示词并调用 AI 模型。"""
+            try:
+                from ..ai.llm_client import chat
+                prompt = self._build_indicator_ai_prompt(sym, ind, res)
+                return chat(self._AI_INDICATOR_SYSTEM, prompt)
+            except Exception as e:  # noqa: BLE001
+                return f"AI 调用失败：{e}"
+
+        def done(text):
+            """处理done。
+            
+            参数:
+                text"""
+            self._ai_running = False
+            self.ai_ind_btn.setEnabled(True)
+            self.ai_ind_btn.setText("🤖 AI 指标研判")
+            self._show_ai_indicator_dialog(
+                text or "⚠️ AI 模型当前不可用（请在顶部「AI」菜单配置 API 密钥，"
+                        "或确认网络可达）。")
+
+        def err(e):
+            """处理err。
+            
+            参数:
+                e"""
+            self._ai_running = False
+            self.ai_ind_btn.setEnabled(True)
+            self.ai_ind_btn.setText("🤖 AI 指标研判")
+            self._show_ai_indicator_dialog(f"AI 调用出错：{e}")
+
+        self._run_worker(work, done, on_err=err)
+
+    def _build_indicator_ai_prompt(self, sym, ind, res) -> str:
+        """构造发给 AI 的指标研判提示词（现状 + 预测曲线结论 + 主模型研判）。"""
+        parts = [f"请基于以下期货品种 {sym} 的技术指标现状与未来走势预测，"
+                 f"给出趋势研判、买卖信号（做多/做空/观望）与关键风险提示。"]
+        if ind is not None and len(ind):
+            try:
+                def _last(col):
+                    s = ind[col].dropna()
+                    return float(s.iloc[-1]) if len(s) else None
+
+                dif, dea = _last("DIF"), _last("DEA")
+                kk, dd, jj = _last("K"), _last("D"), _last("J")
+                r6, r14 = _last("RSI6"), _last("RSI14")
+                H = self.ind_horizon
+                if None not in (dif, dea):
+                    parts.append(
+                        f"MACD：DIF={dif:.3f}，DEA={dea:.3f}，柱={dif - dea:.3f}"
+                        f"（{'多头' if dif > dea else '空头'}），"
+                        f"未来 {H} 步 DIF 已外推预测曲线。")
+                if None not in (kk, dd, jj):
+                    parts.append(
+                        f"KDJ：K={kk:.1f}，D={dd:.1f}，J={jj:.1f}"
+                        f"（{'超买' if kk > 80 else '超卖' if kk < 20 else '中性'}）。")
+                if None not in (r6, r14):
+                    parts.append(
+                        f"RSI：RSI6={r6:.1f}，RSI14={r14:.1f}"
+                        f"（{'超买' if r14 > 70 else '超卖' if r14 < 30 else '中性'}）。")
+            except Exception:  # noqa: BLE001
+                pass
+        if res is not None:
+            try:
+                parts.append(
+                    f"主模型研判：上涨概率 {float(res.get('p_up', 0.5)) * 100:.0f}%，"
+                    f"预期收益 {float(res.get('expected_return_pct', 0)):+.2f}%，"
+                    f"行情状态 {res.get('regime', '')}，"
+                    f"风险 {res.get('risk', {}).get('label', '')}。")
+                fc = res.get("forecast") or []
+                if len(fc) > 1:
+                    parts.append(f"主图 KP 预测目标 {float(fc[-1]):,.2f}。")
+            except Exception:  # noqa: BLE001
+                pass
+        parts.append("请以「结论：做多/做空/观望；理由：…；风险：…」三段式作答，"
+                     "中文，不超过 200 字。")
+        return "\n".join(parts)
+
+    def _show_ai_indicator_dialog(self, text: str) -> None:
+        """弹出 AI 指标研判结果对话框。"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🤖 AI 指标趋势研判")
+        dlg.setMinimumSize(480, 340)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(12, 12, 12, 12)
+        v.addWidget(QLabel(f"品种：{self.cur_symbol} · 指标：MACD / KDJ / RSI"))
+        te = QTextEdit()
+        te.setReadOnly(True)
+        te.setPlainText(text)
+        v.addWidget(te, 1)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dlg.accept)
+        h = QHBoxLayout()
+        h.addStretch(1)
+        h.addWidget(close_btn)
+        v.addLayout(h)
+        dlg.exec()
 
     # ---- 选品评分 ----
     def _run_screen(self):
@@ -681,10 +1026,9 @@ class PredictOpsPage(BasePage):
         for r in self._results[:20]:
             row = tbl.rowCount()
             tbl.insertRow(row)
-            # 品种
-            tbl.setItem(row, 0, QTableWidgetItem(f"{r['name']} {r['sym']}"))
-            # 板块
-            tbl.setItem(row, 1, QTableWidgetItem(r["cat"]))
+            # 品种（完整展示名称 + 代码）
+            sym_item = QTableWidgetItem(f"{r['name']} {r['sym']}")
+            tbl.setItem(row, 0, sym_item)
             # 评分
             score_item = QTableWidgetItem(f"{r['score']:.1f}")
             if r["score"] >= 68:
@@ -693,19 +1037,19 @@ class PredictOpsPage(BasePage):
                 score_item.setForeground(QColor("#3b82f6"))
             else:
                 score_item.setForeground(QColor("#64748b"))
-            tbl.setItem(row, 2, score_item)
+            tbl.setItem(row, 1, score_item)
             # 20日%
             ret_item = QTableWidgetItem(f"{r['ret']:+.1f}%")
             ret_item.setForeground(QColor("#22c55e") if r["ret"] >= 0
                                    else QColor("#ef4444"))
-            tbl.setItem(row, 3, ret_item)
+            tbl.setItem(row, 2, ret_item)
             # AI方向
             pu = r.get("pu", 0.5)
             ai_dir = "偏多" if pu >= 0.55 else ("偏空" if pu <= 0.45 else "中性")
             ai_col = "#22c55e" if pu >= 0.55 else ("#ef4444" if pu <= 0.45 else "#f59e0b")
             ai_item = QTableWidgetItem(ai_dir)
             ai_item.setForeground(QColor(ai_col))
-            tbl.setItem(row, 4, ai_item)
+            tbl.setItem(row, 3, ai_item)
             # 操作按钮
             btn = QPushButton("分析")
             btn.setObjectName("secondary")
@@ -715,7 +1059,7 @@ class PredictOpsPage(BasePage):
                 "QPushButton:hover{background:#e0e7ff;}")
             sym = r["sym"]
             btn.clicked.connect(lambda checked, s=sym: self._select_and_predict(s))
-            tbl.setCellWidget(row, 5, btn)
+            tbl.setCellWidget(row, 4, btn)
 
         # 板块机会热力图（可视化条形图）
         if not self._cats:
@@ -805,7 +1149,7 @@ class PredictOpsPage(BasePage):
                     pal()["down"] if score < -20 else pal()["sub"])
             self.verdict_badge.set_color(vcol, "#fff")
 
-    # ---- AI预测 ----
+    # ---- KP预测 ----
     def _run_prediction(self):
         """执行完整预测流程。"""
         self.cur_symbol = self.sym_cb.currentData()
@@ -813,7 +1157,7 @@ class PredictOpsPage(BasePage):
         horizon = self.hor_spin.value()
         self.start_btn.setEnabled(False)
         self.start_btn.setText("预测中…")
-        self.status_lbl.setText("正在执行预测流程：结算历史 → 获取资讯 → 自适应选参 → AI预测 → 校准…")
+        self.status_lbl.setText("正在执行预测流程：结算历史 → 获取资讯 → 自适应选参 → KP预测 → 校准…")
         sym, per = self.cur_symbol, self.cur_period
 
         store, mdm = self.store, self.mdm
@@ -859,16 +1203,32 @@ class PredictOpsPage(BasePage):
             # 融合：资讯偏置 + 自适应权重×策略方向偏置（截断到 ±1）
             # 自适应权重：策略样本越充分、信号越强，融合权重越高（0.3~0.75），
             # 让回测沉淀的高质量策略在研判中占据合理主导，弱信号时不喧宾夺主。
+            # —— 回测中心反哺：读取全市场盈利回测调参画像，自我调整融合权重 ——
+            tuning = BUS.get_tuning(sym)
+            g_tune = (tuning.get("global") or {})
+            s_tune = (tuning.get("symbol") or {})
+            consensus = float(g_tune.get("consensus", 0.0))
+            base_w = float(s_tune.get("weight",
+                          g_tune.get("strat_weight_base", 0.30)))
             strat_bias = float(strat_sig.get("bias", 0.0))
             strat_n = int(strat_sig.get("n", 0) or 0)
             strat_conf = min(1.0, strat_n / 5.0) * min(1.0, abs(strat_bias))
-            w_strat = 0.3 + 0.45 * strat_conf
+            # 基础权重来自回测库容量×方向一致性；单品种有沉淀时进一步上探，
+            # 回测信号越强、全市场方向越一致 → 权重越高（自我调整、贴合实际行情）
+            w_strat = base_w + 0.45 * strat_conf * (0.5 + 0.5 * consensus)
+            w_strat = min(0.85, w_strat)
             fused_bias = bias_info["bias"] + w_strat * strat_bias
             fused_bias = max(-1.0, min(1.0, fused_bias))
-            # ④ 完整预测
+            # ④ 完整预测（回测画像偏好：库充足时自动开启扩展特征 / 集成模型）
+            ext = bool(cfg["extended_features"]) or bool(
+                g_tune.get("prefer_extended", False))
+            ens = bool(cfg["use_ensemble"]) or bool(
+                g_tune.get("prefer_ensemble", False))
+            cfg["extended_features"] = ext
+            cfg["use_ensemble"] = ens
             fit = self.predictor.fit(df, seq_len=20, epochs=25,
-                                     extended_features=cfg["extended_features"],
-                                     use_ensemble=cfg["use_ensemble"])
+                                     extended_features=ext,
+                                     use_ensemble=ens)
             res = self.predictor.predict(df, horizon=horizon,
                                          news_bias=fused_bias,
                                          news_samples=bias_info["samples"])
@@ -1095,7 +1455,7 @@ class PredictOpsPage(BasePage):
     def _compute_trade_marks(self, res: dict, df=None) -> list:
         """计算K线图交易参考点标注（增强版）。
         
-        基于趋势分析 + 压力支撑位 + AI预测，在图上标注：
+        基于趋势分析 + 压力支撑位 + KP预测，在图上标注：
         - 建议买入价格（绿色菱形）：支撑位附近、模型看多信号确认
         - 建议卖出价格（红色菱形）：压力位附近、目标止盈位
         - 多档参考区间 + 止损位
@@ -1201,6 +1561,7 @@ class PredictOpsPage(BasePage):
         self.start_btn.setEnabled(True)
         self.start_btn.setText("🚀 开始预测")
         self.status_lbl.setText(f"✅ 预测完成 — {res['symbol']} / {res['period']}")
+        self._last_res = res
 
         # ---- 更新K线图 ----
         df = self.mdm.get_bars(res["symbol"], res["period"], 300)
@@ -1208,34 +1569,14 @@ class PredictOpsPage(BasePage):
         bars = df_to_bars(df)
         self.chart.set_data(bars, ma={"MA10": ind["MA10"].tolist(),
                                       "MA20": ind["MA20"].tolist()})
-        self.chart.set_watermark(f"{res['symbol']} · {res['period']} · AI预测")
+        self.chart.set_watermark(f"{res['symbol']} · {res['period']} · KP预测")
         self.chart.set_forecast(res["forecast"], res["upper"], res["lower"])
         self.chart.set_levels(res["levels"])
         # 标注买卖点位
         self.chart.set_trade_marks(self._compute_trade_marks(res, df))
 
-        # ---- 更新副图指标 ----
-        x = list(range(len(ind)))
-        self.macd.set_data(
-            series=[{"name": "DIF", "color": "#3b82f6", "x": x,
-                     "y": ind["DIF"].tolist()},
-                    {"name": "DEA", "color": "#f59e0b", "x": x,
-                     "y": ind["DEA"].tolist()}],
-            title="MACD")
-        self.kdj.set_data(
-            series=[{"name": "K", "color": "#3b82f6", "x": x,
-                     "y": ind["K"].tolist()},
-                    {"name": "D", "color": "#22c55e", "x": x,
-                     "y": ind["D"].tolist()},
-                    {"name": "J", "color": "#ef4444", "x": x,
-                     "y": ind["J"].tolist()}],
-            title="KDJ")
-        self.rsi.set_data(
-            series=[{"name": "RSI6", "color": "#a855f7", "x": x,
-                     "y": ind["RSI6"].tolist()},
-                    {"name": "RSI14", "color": "#06b6d4", "x": x,
-                     "y": ind["RSI14"].tolist()}],
-            title="RSI")
+        # ---- 更新副图指标 + 预测曲线 ----
+        self._render_indicators(ind)
 
         # ---- 概率校准可视化（校准可靠度图 + 预测概率带） ----
         self._update_calibration_tab(res, conf, calib_info)
@@ -1262,7 +1603,9 @@ class PredictOpsPage(BasePage):
         # ---- 更新结果卡片 ----
         col = pal()["up"] if res["expected_return_pct"] >= 0 else pal()["down"]
         self.chips["exp"].set_value(f"{res['expected_return_pct']:+,.2f}%", col)
+        self.chips["exp"].set_sub("年化")
         self.chips["pup"].set_value(f"{res['p_up']*100:,.1f}%")
+        self.chips["pup"].set_sub("涨幔概率")
         self.chips["risk"].set_value(
             f"{res['risk']['label']} {res['risk']['score']:.0f}")
         self.chips["regime"].set_value(res["regime"])
@@ -1373,6 +1716,25 @@ class PredictOpsPage(BasePage):
             "status": "open",
             "config": cfg_key,
         })
+
+        # ---- 双向联动：把本次研判信号推送到回测中心，待其验证（自我训练闭环） ----
+        try:
+            strat = res.get("strategy_signal") or {}
+            BUS.push_prediction(res["symbol"], {
+                "p_up": float(res.get("p_up", 0.5)),
+                "p_down": float(res.get("p_down", 0.5)),
+                "expected_return_pct": float(res.get("expected_return_pct", 0.0)),
+                "horizon": int(res.get("horizon", 0)),
+                "forecast_target": (float(res["forecast"][-1])
+                                    if res.get("forecast") else None),
+                "direction_bias": float(strat.get("bias", 0.0) or 0.0),
+                "news_bias": float(res.get("news_bias", 0.0)),
+                "regime": res.get("regime", ""),
+                "ts": str(dt.datetime.now()),
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh_linkage_label()
 
         # 若选品排行/板块机会此前加载失败（空白），预测完成后自愈刷新一次
         if not self._results:
@@ -1676,7 +2038,7 @@ class PredictOpsPage(BasePage):
                 {row('合约', f'{name} ({res.get("symbol","")})')}
                 {row('周期', PERIOD_LABEL.get(res.get("period",""), res.get("period","")))}
                 {row('最新价', f'{last:,.2f}')}
-                {row('AI预测目标', f'{target:,.2f}（{((target/last-1)*100):+.2f}%）')}
+                {row('KP预测目标', f'{target:,.2f}（{((target/last-1)*100):+.2f}%）')}
                 {row('资讯偏置', f'{nb_txt}（匹配 {bias_info.get("matched",0)} 条）')}
             </table>
             {'<div style="margin-top:8px;border-top:1px solid #2a2e3a;padding-top:8px;">' + news_html + '</div>' if news_html else ''}

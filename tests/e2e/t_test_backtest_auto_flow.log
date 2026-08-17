@@ -1,0 +1,14 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[1] 页面构造 OK, PAGE_KEY = backtest
+[2] 零操作自动启动 OK（showEvent → 定时器 → 引擎已创建）
+[3] 第一代进化完成 OK: symbol=sc.INE gen=68 ranked=10 profitable_new=0
+[4] 第二代自动进化 OK: 已评估 690 个策略
+[5] UI 展示 OK: 种群表 10 行, 日志 102 条, 代数chip=第 69 代, 盈利库表 60 行
+[6] 盈利策略库落盘: 60 条 @ D:\PythonProject\QuantVortex\data\auto_strategies\profitable_strategies.json
+[7] KP预测同步信号 OK: rb.SHFE n=3 bias=-0.002 long=0 short=1
+[8] 主题切换 / 关闭保护 OK
+============================================================
+回测中心全自动自学习流程端到端验证：全部通过

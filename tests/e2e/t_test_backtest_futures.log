@@ -1,0 +1,72 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+
+[A] 合约乘数 → 盈亏 / 保证金规模
+   ✓ rb 多头浮动盈亏 = (3520-3500)×1×10 = 200
+   ✓ rb 平仓已实现 = 200（乘数已计入）
+   ✓ IF 多头浮动盈亏 = (4100-4000)×1×300 = 30000（大合约乘数）
+
+[B] 杠杆 / 保证金率 → 占用保证金联动
+   ✓ 保证金率 0.10→占用3500，0.05→占用1750（杠杆减半、保证金减半）
+   ✓ 杠杆 1x ↔ 保证金率 100%
+   ✓ 杠杆 5x ↔ 保证金率 20%
+   ✓ 杠杆 10x ↔ 保证金率 10%
+   ✓ 杠杆 20x ↔ 保证金率 5%
+
+[C] 平今仓手续费折扣（T+0 平今优惠）
+   ✓ 开仓 6 + 平今 3 = 9（平今仓手续费按 0.5 折扣）
+
+[D] 双向交易 + T+0（同 session 开平 / 多空同持）
+   ✓ 多空同时持有：long=3, short=2（双向交易）
+   ✓ T+0 当日平多：long→0
+   ✓ 平多已实现 = 300
+   ✓ 空头仍持有：short=2
+   ✓ T+0 当日平空：short→0
+   ✓ 合计已实现 = 300 + 200 = 500
+
+[E] 交割日强制平仓（不能持有进入交割）
+   ✓ _parse_delivery('2024-01-15') 解析正确
+   ✓ _parse_delivery('20240115') 解析正确
+   ✓ _parse_delivery('2024/01/15') 解析正确
+   ✓ _parse_delivery 非法输入返回 None
+   ✓ 交割日前持有多头 1 手
+   ✓ 交割日 bar 触发强制平仓：多头归零
+
+[F] 指标规范对齐（回测 / 预测 同口径）
+   ✓ 总收益率 0.053 → '5.3%'
+   ✓ 夏普 0.85 → '0.85'
+   ✓ 胜率 0.6 → '60.0%'
+   ✓ None → '—'
+   ✓ normalize 含字段 total_return 及其展示串
+   ✓ normalize 含字段 annual_return 及其展示串
+   ✓ normalize 含字段 sharpe 及其展示串
+   ✓ normalize 含字段 max_drawdown 及其展示串
+   ✓ normalize 含字段 win_rate 及其展示串
+   ✓ normalize 含字段 profit_factor 及其展示串
+   ✓ normalize 含字段 calmar 及其展示串
+   ✓ normalize 含字段 num_closing_trades 及其展示串
+   ✓ backtest_linkage_for 返回 has_backtest / strategy_count
+   ✓ 联动指标与预测页共用 format_metric（总收益 '5.0%'）
+   ✓ 联动含方向偏置（fusion 同口径）
+
+[G] 绩效图表渲染（资金曲线 + 最大回撤）
+   ✓ 单点数据渲染不崩溃
+   ✓ 资金曲线渲染成功
+   ✓ 内部最大回撤计算正确 = 3.92%
+
+[H] 期货参数控制条联动（BacktestCenterPage）
+   ✓ 杠杆 20x → 保证金率 = 1/20
+   ✓ 保证金% 控件自动同步为 5.0%
+   ✓ 合约乘数写入 300
+   ✓ 交割日写入 '2025-06-15'
+   ✓ 控件从参数字典正确恢复（杠杆5/保证金20%/乘数50）
+   ✓ 绩效卡夏普渲染 '1.20'（同 format_metric）
+
+[I] 联动跳转目标：PredictOpsPage.set_symbol 可用
+   ✓ set_symbol 定位品种/周期 OK（供 🔗联动 调用）
+
+============================================================
+回测中心 · 期货特性深度调优 端到端验证：全部通过 ✅

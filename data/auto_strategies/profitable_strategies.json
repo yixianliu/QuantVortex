@@ -1,5 +1,5 @@
 {
- "updated_at": "2026-08-07T02:06:29",
+ "updated_at": "2026-08-15T17:39:28",
  "strategies": [
   {
    "symbol": "rb.SHFE",
@@ -187,6 +187,37 @@
    "symbol": "ru.SHFE",
    "symbol_name": "橡胶",
    "period": "D",
+   "signature": "459b0e89f55d",
+   "gene": {
+    "entry": "momentum",
+    "params": {
+     "period": 10,
+     "th": 0.02
+    },
+    "stop_mult": 1.5,
+    "tp_mult": 6.0,
+    "allow_long": true,
+    "allow_short": true,
+    "lots": 1
+   },
+   "desc": "动量(10期,阈2%) + ATR止损×1.5 + 止盈×6.0 · 多空双向",
+   "metrics": {
+    "total_return": 0.688,
+    "annual_return": 0.0254,
+    "sharpe": 0.714,
+    "max_drawdown": 0.0633,
+    "win_rate": 0.3991,
+    "profit_factor": 1.519,
+    "num_closing_trades": 446
+   },
+   "fitness": 44.05,
+   "found_at": "2026-08-09T19:38:15",
+   "synced": true
+  },
+  {
+   "symbol": "ru.SHFE",
+   "symbol_name": "橡胶",
+   "period": "D",
    "signature": "1b3d442e8539",
    "gene": {
     "entry": "momentum",
@@ -339,37 +370,6 @@
    "synced": true
   },
   {
-   "symbol": "ru.SHFE",
-   "symbol_name": "橡胶",
-   "period": "D",
-   "signature": "8e56725cf05d",
-   "gene": {
-    "entry": "momentum",
-    "params": {
-     "period": 10,
-     "th": 0.02
-    },
-    "stop_mult": 2.5,
-    "tp_mult": 6.0,
-    "allow_long": true,
-    "allow_short": true,
-    "lots": 1
-   },
-   "desc": "动量(10期,阈2%) + ATR止损×2.5 + 止盈×6.0 · 多空双向",
-   "metrics": {
-    "total_return": 0.6508,
-    "annual_return": 0.0244,
-    "sharpe": 0.658,
-    "max_drawdown": 0.0629,
-    "win_rate": 0.407,
-    "profit_factor": 1.542,
-    "num_closing_trades": 344
-   },
-   "fitness": 43.04,
-   "found_at": "2026-07-31T15:57:44",
-   "synced": true
-  },
-  {
    "symbol": "ss.SHFE",
    "symbol_name": "不锈钢",
    "period": "D",
@@ -418,16 +418,16 @@
    },
    "desc": "动量(10期,阈1%) + ATR止损×2.0 + 止盈×4.0 · 多空双向",
    "metrics": {
-    "total_return": 0.4425,
-    "annual_return": 0.0177,
-    "sharpe": 0.664,
+    "total_return": 0.4461,
+    "annual_return": 0.0178,
+    "sharpe": 0.667,
     "max_drawdown": 0.049,
-    "win_rate": 0.4029,
-    "profit_factor": 1.561,
-    "num_closing_trades": 417
+    "win_rate": 0.4019,
+    "profit_factor": 1.558,
+    "num_closing_trades": 418
    },
-   "fitness": 40.59,
-   "found_at": "2026-08-06T20:05:08",
+   "fitness": 40.86,
+   "found_at": "2026-08-15T17:38:46",
    "synced": true
   },
   {
@@ -449,16 +449,16 @@
    },
    "desc": "布林突破(15,1.5σ) + ATR止损×2.5 + 止盈×3.0 · 仅做多",
    "metrics": {
-    "total_return": 1.0551,
-    "annual_return": 0.0352,
-    "sharpe": 0.626,
+    "total_return": 1.0845,
+    "annual_return": 0.0359,
+    "sharpe": 0.638,
     "max_drawdown": 0.1088,
     "win_rate": 0.4944,
     "profit_factor": 1.606,
     "num_closing_trades": 180
    },
-   "fitness": 40.21,
-   "found_at": "2026-07-31T18:07:20",
+   "fitness": 40.45,
+   "found_at": "2026-08-09T15:00:30",
    "synced": true
   },
   {
@@ -480,16 +480,16 @@
    },
    "desc": "布林突破(20,1.5σ) + ATR止损×2.5 + 止盈×3.0 · 仅做多",
    "metrics": {
-    "total_return": 1.0548,
-    "annual_return": 0.0352,
-    "sharpe": 0.631,
+    "total_return": 1.0842,
+    "annual_return": 0.0359,
+    "sharpe": 0.642,
     "max_drawdown": 0.1179,
     "win_rate": 0.5244,
     "profit_factor": 1.676,
     "num_closing_trades": 164
    },
-   "fitness": 40.0,
-   "found_at": "2026-08-03T17:00:20",
+   "fitness": 40.22,
+   "found_at": "2026-08-09T15:00:30",
    "synced": true
   },
   {
@@ -511,16 +511,16 @@
    },
    "desc": "布林突破(20,1.5σ) + ATR止损×3.0 + 止盈×3.0 · 仅做多",
    "metrics": {
-    "total_return": 0.9954,
-    "annual_return": 0.0337,
-    "sharpe": 0.603,
+    "total_return": 1.0248,
+    "annual_return": 0.0344,
+    "sharpe": 0.615,
     "max_drawdown": 0.119,
     "win_rate": 0.5506,
     "profit_factor": 1.586,
     "num_closing_trades": 158
    },
-   "fitness": 39.63,
-   "found_at": "2026-08-03T17:00:33",
+   "fitness": 39.87,
+   "found_at": "2026-08-09T15:00:30",
    "synced": true
   },
   {
@@ -589,6 +589,37 @@
    "symbol": "cu.SHFE",
    "symbol_name": "沪铜",
    "period": "D",
+   "signature": "1933beb216bf",
+   "gene": {
+    "entry": "boll_break",
+    "params": {
+     "period": 15,
+     "num_std": 1.5
+    },
+    "stop_mult": 3.0,
+    "tp_mult": 3.0,
+    "allow_long": true,
+    "allow_short": false,
+    "lots": 1
+   },
+   "desc": "布林突破(15,1.5σ) + ATR止损×3.0 + 止盈×3.0 · 仅做多",
+   "metrics": {
+    "total_return": 1.0299,
+    "annual_return": 0.0345,
+    "sharpe": 0.605,
+    "max_drawdown": 0.1206,
+    "win_rate": 0.4943,
+    "profit_factor": 1.55,
+    "num_closing_trades": 176
+   },
+   "fitness": 39.0,
+   "found_at": "2026-08-09T15:00:39",
+   "synced": true
+  },
+  {
+   "symbol": "cu.SHFE",
+   "symbol_name": "沪铜",
+   "period": "D",
    "signature": "ed914d56a4ab",
    "gene": {
     "entry": "boll_break",
@@ -614,37 +645,6 @@
    },
    "fitness": 38.65,
    "found_at": "2026-07-31T18:08:03",
-   "synced": true
-  },
-  {
-   "symbol": "cu.SHFE",
-   "symbol_name": "沪铜",
-   "period": "D",
-   "signature": "89d4f6ac436a",
-   "gene": {
-    "entry": "boll_break",
-    "params": {
-     "period": 15,
-     "num_std": 1.5
-    },
-    "stop_mult": 2.5,
-    "tp_mult": 6.0,
-    "allow_long": true,
-    "allow_short": false,
-    "lots": 1
-   },
-   "desc": "布林突破(15,1.5σ) + ATR止损×2.5 + 止盈×6.0 · 仅做多",
-   "metrics": {
-    "total_return": 0.9278,
-    "annual_return": 0.032,
-    "sharpe": 0.572,
-    "max_drawdown": 0.1145,
-    "win_rate": 0.4648,
-    "profit_factor": 1.68,
-    "num_closing_trades": 142
-   },
-   "fitness": 38.45,
-   "found_at": "2026-07-31T18:07:20",
    "synced": true
   },
   {
@@ -676,6 +676,37 @@
    },
    "fitness": 38.08,
    "found_at": "2026-07-31T15:33:28",
+   "synced": true
+  },
+  {
+   "symbol": "cf.CZCE",
+   "symbol_name": "棉花",
+   "period": "D",
+   "signature": "1921810b980f",
+   "gene": {
+    "entry": "momentum",
+    "params": {
+     "period": 10,
+     "th": 0.01
+    },
+    "stop_mult": 2.5,
+    "tp_mult": 6.0,
+    "allow_long": true,
+    "allow_short": true,
+    "lots": 1
+   },
+   "desc": "动量(10期,阈1%) + ATR止损×2.5 + 止盈×6.0 · 多空双向",
+   "metrics": {
+    "total_return": 0.4035,
+    "annual_return": 0.0164,
+    "sharpe": 0.604,
+    "max_drawdown": 0.0486,
+    "win_rate": 0.4078,
+    "profit_factor": 1.539,
+    "num_closing_trades": 358
+   },
+   "fitness": 37.13,
+   "found_at": "2026-08-15T17:38:46",
    "synced": true
   },
   {
@@ -728,47 +759,16 @@
    },
    "desc": "动量(40期,阈3%) + ATR止损×3.0 + 止盈×3.0 · 仅做多",
    "metrics": {
-    "total_return": 3.1348,
-    "annual_return": 0.1384,
-    "sharpe": 0.81,
+    "total_return": 3.1689,
+    "annual_return": 0.139,
+    "sharpe": 0.813,
     "max_drawdown": 0.2709,
     "win_rate": 0.5926,
     "profit_factor": 1.798,
     "num_closing_trades": 81
    },
-   "fitness": 34.07,
-   "found_at": "2026-07-31T10:28:33",
-   "synced": true
-  },
-  {
-   "symbol": "cf.CZCE",
-   "symbol_name": "棉花",
-   "period": "D",
-   "signature": "15fb1d780032",
-   "gene": {
-    "entry": "momentum",
-    "params": {
-     "period": 10,
-     "th": 0.01
-    },
-    "stop_mult": 3.0,
-    "tp_mult": 0.0,
-    "allow_long": true,
-    "allow_short": true,
-    "lots": 1
-   },
-   "desc": "动量(10期,阈1%) + ATR止损×3.0 + 跟踪离场 · 多空双向",
-   "metrics": {
-    "total_return": 0.3702,
-    "annual_return": 0.0152,
-    "sharpe": 0.554,
-    "max_drawdown": 0.0491,
-    "win_rate": 0.4,
-    "profit_factor": 1.61,
-    "num_closing_trades": 305
-   },
-   "fitness": 34.02,
-   "found_at": "2026-07-31T15:33:28",
+   "fitness": 34.13,
+   "found_at": "2026-08-09T15:01:39",
    "synced": true
   },
   {
@@ -803,6 +803,38 @@
    "synced": true
   },
   {
+   "symbol": "ss.SHFE",
+   "symbol_name": "不锈钢",
+   "period": "D",
+   "signature": "acd76e413b5e",
+   "gene": {
+    "entry": "rsi_reversal",
+    "params": {
+     "period": 7,
+     "low": 25,
+     "high": 80
+    },
+    "stop_mult": 2.0,
+    "tp_mult": 4.0,
+    "allow_long": true,
+    "allow_short": true,
+    "lots": 1
+   },
+   "desc": "RSI反转(7期,25/80) + ATR止损×2.0 + 止盈×4.0 · 多空双向",
+   "metrics": {
+    "total_return": 0.1868,
+    "annual_return": 0.0263,
+    "sharpe": 0.977,
+    "max_drawdown": 0.0461,
+    "win_rate": 0.5455,
+    "profit_factor": 1.814,
+    "num_closing_trades": 110
+   },
+   "fitness": 33.13,
+   "found_at": "2026-08-09T15:00:22",
+   "synced": true
+  },
+  {
    "symbol": "ta.CZCE",
    "symbol_name": "PTA",
    "period": "D",
@@ -831,6 +863,36 @@
    },
    "fitness": 32.65,
    "found_at": "2026-08-04T19:44:25",
+   "synced": true
+  },
+  {
+   "symbol": "ag.SHFE",
+   "symbol_name": "沪银",
+   "period": "D",
+   "signature": "020cca17e44e",
+   "gene": {
+    "entry": "donchian_break",
+    "params": {
+     "period": 15
+    },
+    "stop_mult": 2.5,
+    "tp_mult": 2.0,
+    "allow_long": true,
+    "allow_short": false,
+    "lots": 1
+   },
+   "desc": "通道突破(15期) + ATR止损×2.5 + 止盈×2.0 · 仅做多",
+   "metrics": {
+    "total_return": 0.19,
+    "annual_return": 0.0127,
+    "sharpe": 0.846,
+    "max_drawdown": 0.0234,
+    "win_rate": 0.5743,
+    "profit_factor": 2.742,
+    "num_closing_trades": 101
+   },
+   "fitness": 32.5,
+   "found_at": "2026-08-09T15:02:28",
    "synced": true
   },
   {
@@ -914,46 +976,16 @@
    },
    "desc": "动量(40期,阈2%) + ATR止损×3.0 + 止盈×3.0 · 仅做多",
    "metrics": {
-    "total_return": 3.0186,
-    "annual_return": 0.1353,
-    "sharpe": 0.754,
+    "total_return": 3.0748,
+    "annual_return": 0.1366,
+    "sharpe": 0.76,
     "max_drawdown": 0.2743,
     "win_rate": 0.5269,
     "profit_factor": 1.726,
     "num_closing_trades": 93
    },
-   "fitness": 32.06,
-   "found_at": "2026-08-04T19:34:10",
-   "synced": true
-  },
-  {
-   "symbol": "ag.SHFE",
-   "symbol_name": "沪银",
-   "period": "D",
-   "signature": "020cca17e44e",
-   "gene": {
-    "entry": "donchian_break",
-    "params": {
-     "period": 15
-    },
-    "stop_mult": 2.5,
-    "tp_mult": 2.0,
-    "allow_long": true,
-    "allow_short": false,
-    "lots": 1
-   },
-   "desc": "通道突破(15期) + ATR止损×2.5 + 止盈×2.0 · 仅做多",
-   "metrics": {
-    "total_return": 0.1839,
-    "annual_return": 0.0124,
-    "sharpe": 0.825,
-    "max_drawdown": 0.0234,
-    "win_rate": 0.5743,
-    "profit_factor": 2.742,
-    "num_closing_trades": 101
-   },
-   "fitness": 31.72,
-   "found_at": "2026-08-01T12:34:45",
+   "fitness": 32.18,
+   "found_at": "2026-08-09T15:01:39",
    "synced": true
   },
   {
@@ -975,16 +1007,16 @@
    },
    "desc": "动量(40期,阈5%) + ATR止损×3.0 + 止盈×3.0 · 仅做多",
    "metrics": {
-    "total_return": 2.7594,
-    "annual_return": 0.1286,
-    "sharpe": 0.717,
+    "total_return": 2.7934,
+    "annual_return": 0.1292,
+    "sharpe": 0.721,
     "max_drawdown": 0.2798,
     "win_rate": 0.5672,
     "profit_factor": 1.721,
     "num_closing_trades": 67
    },
-   "fitness": 31.36,
-   "found_at": "2026-07-31T10:56:04",
+   "fitness": 31.44,
+   "found_at": "2026-08-09T15:01:39",
    "synced": true
   },
   {
@@ -1016,6 +1048,36 @@
    },
    "fitness": 31.28,
    "found_at": "2026-08-04T19:43:42",
+   "synced": true
+  },
+  {
+   "symbol": "ag.SHFE",
+   "symbol_name": "沪银",
+   "period": "D",
+   "signature": "36781d07ba33",
+   "gene": {
+    "entry": "donchian_break",
+    "params": {
+     "period": 15
+    },
+    "stop_mult": 2.0,
+    "tp_mult": 2.0,
+    "allow_long": true,
+    "allow_short": false,
+    "lots": 1
+   },
+   "desc": "通道突破(15期) + ATR止损×2.0 + 止盈×2.0 · 仅做多",
+   "metrics": {
+    "total_return": 0.1811,
+    "annual_return": 0.0122,
+    "sharpe": 0.816,
+    "max_drawdown": 0.0213,
+    "win_rate": 0.514,
+    "profit_factor": 2.688,
+    "num_closing_trades": 107
+   },
+   "fitness": 30.91,
+   "found_at": "2026-08-09T15:02:28",
    "synced": true
   },
   {
@@ -1112,36 +1174,6 @@
    "synced": true
   },
   {
-   "symbol": "ag.SHFE",
-   "symbol_name": "沪银",
-   "period": "D",
-   "signature": "36781d07ba33",
-   "gene": {
-    "entry": "donchian_break",
-    "params": {
-     "period": 15
-    },
-    "stop_mult": 2.0,
-    "tp_mult": 2.0,
-    "allow_long": true,
-    "allow_short": false,
-    "lots": 1
-   },
-   "desc": "通道突破(15期) + ATR止损×2.0 + 止盈×2.0 · 仅做多",
-   "metrics": {
-    "total_return": 0.175,
-    "annual_return": 0.0118,
-    "sharpe": 0.794,
-    "max_drawdown": 0.0213,
-    "win_rate": 0.514,
-    "profit_factor": 2.688,
-    "num_closing_trades": 107
-   },
-   "fitness": 30.1,
-   "found_at": "2026-08-04T19:37:04",
-   "synced": true
-  },
-  {
    "symbol": "ni.SHFE",
    "symbol_name": "沪镍",
    "period": "D",
@@ -1206,6 +1238,37 @@
    "symbol": "sn.SHFE",
    "symbol_name": "沪锡",
    "period": "D",
+   "signature": "726fa3ef1b32",
+   "gene": {
+    "entry": "momentum",
+    "params": {
+     "period": 40,
+     "th": 0.03
+    },
+    "stop_mult": 3.0,
+    "tp_mult": 0.0,
+    "allow_long": true,
+    "allow_short": false,
+    "lots": 1
+   },
+   "desc": "动量(40期,阈3%) + ATR止损×3.0 + 跟踪离场 · 仅做多",
+   "metrics": {
+    "total_return": 2.6247,
+    "annual_return": 0.1245,
+    "sharpe": 0.705,
+    "max_drawdown": 0.2992,
+    "win_rate": 0.5455,
+    "profit_factor": 2.276,
+    "num_closing_trades": 44
+   },
+   "fitness": 29.61,
+   "found_at": "2026-08-09T15:01:50",
+   "synced": true
+  },
+  {
+   "symbol": "sn.SHFE",
+   "symbol_name": "沪锡",
+   "period": "D",
    "signature": "cca821f8bad1",
    "gene": {
     "entry": "momentum",
@@ -1253,16 +1316,16 @@
    },
    "desc": "RSI反转(7期,25/75) + ATR止损×2.5 + 止盈×4.0 · 多空双向",
    "metrics": {
-    "total_return": 0.1564,
-    "annual_return": 0.0223,
-    "sharpe": 0.788,
+    "total_return": 0.1581,
+    "annual_return": 0.0225,
+    "sharpe": 0.794,
     "max_drawdown": 0.0393,
-    "win_rate": 0.6132,
-    "profit_factor": 1.659,
-    "num_closing_trades": 106
+    "win_rate": 0.6168,
+    "profit_factor": 1.67,
+    "num_closing_trades": 107
    },
-   "fitness": 28.66,
-   "found_at": "2026-07-31T18:07:05",
+   "fitness": 28.91,
+   "found_at": "2026-08-09T15:00:15",
    "synced": true
   },
   {
@@ -1315,16 +1378,16 @@
    },
    "desc": "RSI反转(7期,25/75) + ATR止损×2.0 + 止盈×4.0 · 多空双向",
    "metrics": {
-    "total_return": 0.156,
+    "total_return": 0.1569,
     "annual_return": 0.0223,
-    "sharpe": 0.804,
+    "sharpe": 0.807,
     "max_drawdown": 0.0384,
-    "win_rate": 0.5439,
-    "profit_factor": 1.598,
-    "num_closing_trades": 114
+    "win_rate": 0.5478,
+    "profit_factor": 1.611,
+    "num_closing_trades": 115
    },
-   "fitness": 28.32,
-   "found_at": "2026-07-31T15:47:14",
+   "fitness": 28.47,
+   "found_at": "2026-08-09T15:00:15",
    "synced": true
   },
   {
@@ -1421,34 +1484,66 @@
    "synced": true
   },
   {
-   "symbol": "sn.SHFE",
-   "symbol_name": "沪锡",
+   "symbol": "ni.SHFE",
+   "symbol_name": "沪镍",
    "period": "D",
-   "signature": "54eb992dbfc1",
+   "signature": "e9077e2a1928",
    "gene": {
-    "entry": "momentum",
+    "entry": "rsi_reversal",
     "params": {
-     "period": 10,
-     "th": 0.03
+     "period": 7,
+     "low": 20,
+     "high": 70
     },
     "stop_mult": 3.0,
-    "tp_mult": 3.0,
+    "tp_mult": 0.0,
     "allow_long": true,
     "allow_short": false,
     "lots": 1
    },
-   "desc": "动量(10期,阈3%) + ATR止损×3.0 + 止盈×3.0 · 仅做多",
+   "desc": "RSI反转(7期,20/70) + ATR止损×3.0 + 跟踪离场 · 仅做多",
    "metrics": {
-    "total_return": 3.3184,
-    "annual_return": 0.1428,
-    "sharpe": 0.722,
-    "max_drawdown": 0.3304,
-    "win_rate": 0.4494,
-    "profit_factor": 1.819,
-    "num_closing_trades": 89
+    "total_return": 0.6386,
+    "annual_return": 0.046,
+    "sharpe": 0.367,
+    "max_drawdown": 0.2468,
+    "win_rate": 0.6282,
+    "profit_factor": 1.361,
+    "num_closing_trades": 78
    },
-   "fitness": 26.91,
-   "found_at": "2026-08-04T19:34:40",
+   "fitness": 27.17,
+   "found_at": "2026-08-09T15:01:36",
+   "synced": true
+  },
+  {
+   "symbol": "al.SHFE",
+   "symbol_name": "沪铝",
+   "period": "D",
+   "signature": "c207acbb9451",
+   "gene": {
+    "entry": "boll_break",
+    "params": {
+     "period": 20,
+     "num_std": 2.0
+    },
+    "stop_mult": 3.0,
+    "tp_mult": 0.0,
+    "allow_long": true,
+    "allow_short": true,
+    "lots": 1
+   },
+   "desc": "布林突破(20,2.0σ) + ATR止损×3.0 + 跟踪离场 · 多空双向",
+   "metrics": {
+    "total_return": 0.2767,
+    "annual_return": 0.0118,
+    "sharpe": 0.518,
+    "max_drawdown": 0.0626,
+    "win_rate": 0.4188,
+    "profit_factor": 2.002,
+    "num_closing_trades": 117
+   },
+   "fitness": 26.98,
+   "found_at": "2026-08-09T15:00:48",
    "synced": true
   },
   {
@@ -1482,34 +1577,35 @@
    "synced": true
   },
   {
-   "symbol": "al.SHFE",
-   "symbol_name": "沪铝",
+   "symbol": "ss.SHFE",
+   "symbol_name": "不锈钢",
    "period": "D",
-   "signature": "c207acbb9451",
+   "signature": "088f15eb776d",
    "gene": {
-    "entry": "boll_break",
+    "entry": "rsi_reversal",
     "params": {
-     "period": 20,
-     "num_std": 2.0
+     "period": 7,
+     "low": 25,
+     "high": 75
     },
     "stop_mult": 3.0,
-    "tp_mult": 0.0,
+    "tp_mult": 4.0,
     "allow_long": true,
     "allow_short": true,
     "lots": 1
    },
-   "desc": "布林突破(20,2.0σ) + ATR止损×3.0 + 跟踪离场 · 多空双向",
+   "desc": "RSI反转(7期,25/75) + ATR止损×3.0 + 止盈×4.0 · 多空双向",
    "metrics": {
-    "total_return": 0.2723,
-    "annual_return": 0.0116,
-    "sharpe": 0.512,
-    "max_drawdown": 0.0626,
-    "win_rate": 0.4188,
-    "profit_factor": 2.002,
-    "num_closing_trades": 117
+    "total_return": 0.1361,
+    "annual_return": 0.0195,
+    "sharpe": 0.695,
+    "max_drawdown": 0.0399,
+    "win_rate": 0.6429,
+    "profit_factor": 1.524,
+    "num_closing_trades": 98
    },
-   "fitness": 26.59,
-   "found_at": "2026-07-31T18:08:17",
+   "fitness": 25.84,
+   "found_at": "2026-08-09T15:00:18",
    "synced": true
   },
   {
@@ -1606,70 +1702,6 @@
    "synced": true
   },
   {
-   "symbol": "ss.SHFE",
-   "symbol_name": "不锈钢",
-   "period": "D",
-   "signature": "d31ce037c817",
-   "gene": {
-    "entry": "rsi_reversal",
-    "params": {
-     "period": 14,
-     "low": 25,
-     "high": 75
-    },
-    "stop_mult": 2.5,
-    "tp_mult": 2.0,
-    "allow_long": true,
-    "allow_short": true,
-    "lots": 1
-   },
-   "desc": "RSI反转(14期,25/75) + ATR止损×2.5 + 止盈×2.0 · 多空双向",
-   "metrics": {
-    "total_return": 0.0912,
-    "annual_return": 0.0133,
-    "sharpe": 0.767,
-    "max_drawdown": 0.0173,
-    "win_rate": 0.5745,
-    "profit_factor": 1.803,
-    "num_closing_trades": 47
-   },
-   "fitness": 25.4,
-   "found_at": "2026-08-03T13:47:46",
-   "synced": true
-  },
-  {
-   "symbol": "ss.SHFE",
-   "symbol_name": "不锈钢",
-   "period": "D",
-   "signature": "69b9517ecd7e",
-   "gene": {
-    "entry": "rsi_reversal",
-    "params": {
-     "period": 7,
-     "low": 20,
-     "high": 70
-    },
-    "stop_mult": 2.5,
-    "tp_mult": 4.0,
-    "allow_long": true,
-    "allow_short": true,
-    "lots": 1
-   },
-   "desc": "RSI反转(7期,20/70) + ATR止损×2.5 + 止盈×4.0 · 多空双向",
-   "metrics": {
-    "total_return": 0.1493,
-    "annual_return": 0.0214,
-    "sharpe": 0.722,
-    "max_drawdown": 0.0603,
-    "win_rate": 0.5773,
-    "profit_factor": 1.636,
-    "num_closing_trades": 97
-   },
-   "fitness": 25.15,
-   "found_at": "2026-07-31T15:11:04",
-   "synced": true
-  },
-  {
    "symbol": "SF.CZCE",
    "symbol_name": "硅铁",
    "period": "D",
@@ -1698,6 +1730,37 @@
    },
    "fitness": 24.72,
    "found_at": "2026-07-31T18:05:05",
+   "synced": true
+  },
+  {
+   "symbol": "al.SHFE",
+   "symbol_name": "沪铝",
+   "period": "D",
+   "signature": "f2a776644641",
+   "gene": {
+    "entry": "boll_break",
+    "params": {
+     "period": 15,
+     "num_std": 2.0
+    },
+    "stop_mult": 2.0,
+    "tp_mult": 0.0,
+    "allow_long": true,
+    "allow_short": true,
+    "lots": 1
+   },
+   "desc": "布林突破(15,2.0σ) + ATR止损×2.0 + 跟踪离场 · 多空双向",
+   "metrics": {
+    "total_return": 0.237,
+    "annual_return": 0.0103,
+    "sharpe": 0.503,
+    "max_drawdown": 0.051,
+    "win_rate": 0.3818,
+    "profit_factor": 1.72,
+    "num_closing_trades": 165
+   },
+   "fitness": 24.7,
+   "found_at": "2026-08-09T15:00:48",
    "synced": true
   },
   {
@@ -1735,31 +1798,31 @@
    "symbol": "al.SHFE",
    "symbol_name": "沪铝",
    "period": "D",
-   "signature": "f2a776644641",
+   "signature": "c8d1440a6c85",
    "gene": {
     "entry": "boll_break",
     "params": {
      "period": 15,
      "num_std": 2.0
     },
-    "stop_mult": 2.0,
+    "stop_mult": 2.5,
     "tp_mult": 0.0,
     "allow_long": true,
     "allow_short": true,
     "lots": 1
    },
-   "desc": "布林突破(15,2.0σ) + ATR止损×2.0 + 跟踪离场 · 多空双向",
+   "desc": "布林突破(15,2.0σ) + ATR止损×2.5 + 跟踪离场 · 多空双向",
    "metrics": {
-    "total_return": 0.2329,
-    "annual_return": 0.0101,
+    "total_return": 0.2418,
+    "annual_return": 0.0104,
     "sharpe": 0.496,
-    "max_drawdown": 0.051,
-    "win_rate": 0.3818,
-    "profit_factor": 1.72,
-    "num_closing_trades": 165
+    "max_drawdown": 0.0646,
+    "win_rate": 0.3931,
+    "profit_factor": 1.759,
+    "num_closing_trades": 145
    },
-   "fitness": 24.31,
-   "found_at": "2026-07-31T18:08:17",
+   "fitness": 24.05,
+   "found_at": "2026-08-09T15:00:48",
    "synced": true
   },
   {
@@ -1791,67 +1854,6 @@
    },
    "fitness": 24.03,
    "found_at": "2026-08-01T12:42:48",
-   "synced": true
-  },
-  {
-   "symbol": "SM.CZCE",
-   "symbol_name": "锰硅",
-   "period": "D",
-   "signature": "9fa91cfd56e4",
-   "gene": {
-    "entry": "ma_cross",
-    "params": {
-     "fast": 10,
-     "slow": 60
-    },
-    "stop_mult": 1.5,
-    "tp_mult": 2.0,
-    "allow_long": true,
-    "allow_short": false,
-    "lots": 1
-   },
-   "desc": "双均线交叉(快10/慢60) + ATR止损×1.5 + 止盈×2.0 · 仅做多",
-   "metrics": {
-    "total_return": 0.0436,
-    "annual_return": 0.0038,
-    "sharpe": 0.783,
-    "max_drawdown": 0.0064,
-    "win_rate": 0.6,
-    "profit_factor": 2.967,
-    "num_closing_trades": 30
-   },
-   "fitness": 23.85,
-   "found_at": "2026-07-31T15:10:25",
-   "synced": true
-  },
-  {
-   "symbol": "al.SHFE",
-   "symbol_name": "沪铝",
-   "period": "D",
-   "signature": "de801c9270b5",
-   "gene": {
-    "entry": "donchian_break",
-    "params": {
-     "period": 20
-    },
-    "stop_mult": 3.0,
-    "tp_mult": 2.0,
-    "allow_long": true,
-    "allow_short": true,
-    "lots": 1
-   },
-   "desc": "通道突破(20期) + ATR止损×3.0 + 止盈×2.0 · 多空双向",
-   "metrics": {
-    "total_return": 0.2095,
-    "annual_return": 0.0092,
-    "sharpe": 0.456,
-    "max_drawdown": 0.0601,
-    "win_rate": 0.5953,
-    "profit_factor": 1.392,
-    "num_closing_trades": 215
-   },
-   "fitness": 23.64,
-   "found_at": "2026-08-03T17:01:07",
    "synced": true
   }
  ]

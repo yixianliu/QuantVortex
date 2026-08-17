@@ -1,0 +1,25 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+✅ [0] 引擎自动就绪（手动模式复用同一引擎/行情）
+✅ [1] 切到「手动回测」模式：_manual_mode=True
+✅ [1] 手动回测面板已展开
+✅ [1] 自动进化单选已取消
+✅ [2] 品种下拉含 rb.SHFE
+✅ [2] 手动回测后台任务完成
+✅ [2] 手动回测结果已回传（_last_manual）
+✅ [3] 绩效图资金曲线已填充（720 个采样点）
+✅ [3] 绩效指标卡已填充（最大回撤=0.2%）
+    夏普=1.04 年化=0.1% 卡玛=0.47 胜率=36.4% 盈亏比=2.45
+✅ [4] 手动回测已写入历史记录（generation=-1 哨兵，命中 19 条）
+✅ [4] 手动模式下自动进化已暂停（代数未推进）
+✅ [5] 交割日手动回测完成
+✅ [5] 引擎日志器已挂载
+✅ [5] 到达交割日触发强制平仓（日志含「交割」告警）
+✅ [5] 回测产生平仓成交（19 笔平仓）
+✅ [6] 切回自动进化：_manual_mode=False
+✅ [6] 手动面板已收起
+============================================================
+回测中心「手动回测」模式端到端验证：全部通过

@@ -1,4 +1,4 @@
-# 期货 AI 预测模块 + K 线图增强
+# 期货 KP预测模块 + K 线图增强
 
 针对 QuantVortex 期货量化系统的三项需求，完成以下交付（全部在沙箱验证通过）：
 
@@ -21,7 +21,7 @@
 
 ## 验证结果
 - `python api/futures_ai_predict.py` → 本地引擎自校验 PASS（多品种）；
-- `examples/smoke_ai_kline.py`（offscreen PyQt6）→ 8 项 OK（K 线数据/渲染/AI 分析/主题/悬浮）；
+- `examples/smoke_ai_kline.py`（offscreen PyQt6）→ 8 项 OK（K 线数据/渲染/KP分析/主题/悬浮）；
 - `examples/predictor_demo.py` → PASS；`compileall` 全过。
 - 文档：README 结构树 + `docs/prediction.md` 增补 AI 模块与 K 线说明。
 

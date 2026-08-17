@@ -151,7 +151,7 @@ curl -H "X-Admin-Token: $QV_ADMIN_TOKEN" https://ai.yourdomain.com/v1/admin/keys
 - **构建后**：查产物里有没有混入**本地凭据文件**，命中即 `exit 7`。
 
 `.pyc` 一律按二进制扫描 —— **编译不是加密**，字符串常量原样保留。
-本项目历史上正是在 `api_docs/__pycache__/` 里泄露过真实密钥。
+本项目历史上正是在 `docs/api_docs/__pycache__/` 里泄露过真实密钥。
 
 误报的唯一逃生口是在该行加 `# secret-scan: allow`。这个标记会留在代码里被 review 看到 ——
 **不要给扫描器加宽泛白名单，白名单过宽等同于关掉扫描。**

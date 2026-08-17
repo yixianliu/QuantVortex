@@ -4,7 +4,7 @@
     - Worker：后台计算线程（避免 AI 训练/验证阻塞 UI）；
     - MarketPage：模块一 实时行情全景；
     - IndicatorPage：模块二 量化指标分析（共振/背离/趋势）；
-    - PredictPage：模块三 AI 智能预测核心；
+    - PredictPage：模块三 KP 预测核心；
     - PanoramaPage：模块四 市场全景（强弱/量能/资金流）；
     - ValidatePage：模块五 预测回测验证；
     - LogPage：模块六 日志 / 预警 / 报告。
@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .widgets import (
-    PageHeader, Badge, MetricChip, ConfidenceBar, prepare_table,
+    PageHeader, Badge, StatCard, ConfidenceBar, prepare_table,
     color_pnl, pal, THEME, ToolBar,
 )
 from .icons import icon
@@ -338,14 +338,14 @@ class MarketPage(BasePage):
         ctl.addStretch(1)
         root.addWidget(ToolBar(ctl))
 
-        # 盘口快照
+        # 盘口快照（统一 StatCard 视觉语言：标签 + 数值 + 单位 + 副提示）
         self.chips = {
-            "last": MetricChip("最新价", "--"),
-            "chg": MetricChip("涨跌", "--"),
-            "pct": MetricChip("涨跌幅", "--"),
-            "vol": MetricChip("成交量", "--"),
-            "oi": MetricChip("持仓量", "--"),
-            "fund": MetricChip("资金流(亿)", "--"),
+            "last": StatCard("最新价", "--", theme=self._theme),
+            "chg": StatCard("涨跌", "--", theme=self._theme),
+            "pct": StatCard("涨跌幅", "--", theme=self._theme),
+            "vol": StatCard("成交量", "--", theme=self._theme),
+            "oi": StatCard("持仓量", "--", theme=self._theme),
+            "fund": StatCard("资金流(亿)", "--", theme=self._theme),
         }
         cstrip = QHBoxLayout()
         for c in self.chips.values():
@@ -585,10 +585,17 @@ class MarketPage(BasePage):
         self.chips["last"].set_value(f"{q['last']:,.1f}")
         self.chips["chg"].set_value(f"{q['chg']:+,.1f}", upc)
         self.chips["pct"].set_value(f"{q['chg_pct']:+,.2f}%", upc)
-        self.chips["vol"].set_value(f"{q['volume']:,.0f}")
-        self.chips["oi"].set_value(f"{q['open_interest']:,.0f}")
+        vol_num, vol_unit = _fmt_hands(q["volume"])
+        self.chips["vol"].set_value(vol_num)
+        self.chips["vol"].set_unit(vol_unit)
+        self.chips["vol"].set_sub("净流入" if q["fund_flow"] >= 0 else "净流出")
+        oi_num, oi_unit = _fmt_hands(q["open_interest"])
+        self.chips["oi"].set_value(oi_num)
+        self.chips["oi"].set_unit(oi_unit)
+        self.chips["oi"].set_sub("持仓净增")
         self.chips["fund"].set_value(f"{q['fund_flow']:+,.2f}",
                                      pal()["up"] if q["fund_flow"] >= 0 else pal()["down"])
+        self.chips["fund"].set_unit("亿")
 
     def _refresh_watch(self):
         """刷新watch。"""
@@ -981,7 +988,7 @@ class IndicatorPage(BasePage):
 
 
 # ============================================================================
-# 模块三：AI 智能预测核心
+# 模块三：KP 预测核心
 # ============================================================================
 class PredictPage(BasePage):
     """预测页面。
@@ -1019,7 +1026,7 @@ class PredictPage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
-        root.addWidget(PageHeader("AI 智能预测核心", "LSTM 趋势预测 · 涨跌概率 · 压力支撑 · 风险度 ｜ 一键运行即自动完成：结算历史 · 抓取资讯 · 自适应选参 · AI预测 · 学习校准"))
+        root.addWidget(PageHeader("KP 预测核心", "LSTM 趋势预测 · 涨跌概率 · 压力支撑 · 风险度 ｜ 一键运行即自动完成：结算历史 · 抓取资讯 · 自适应选参 · KP预测 · 学习校准"))
 
         ctl = QHBoxLayout()
         self.sym_cb = QComboBox(); self.sym_cb.setMinimumWidth(180)
@@ -1045,30 +1052,30 @@ class PredictPage(BasePage):
         #   ② 获取最新资讯（cls.cn 快讯，融入涨跌概率偏置）
         #   ③ 自适应选参 / 置信度校准（基于历史经验）
         #   ④ 运行增强模型预测 + 渲染解读 / 资讯 / 学习看板
-        self.auto_lbl = QLabel("点「运行预测」即自动完成：结算历史 · 抓取资讯 · 自适应选参 · AI预测 · 学习校准")
+        self.auto_lbl = QLabel("点「运行预测」即自动完成：结算历史 · 抓取资讯 · 自适应选参 · KP预测 · 学习校准")
         self.auto_lbl.setObjectName("sub")
         self.auto_lbl.setWordWrap(True)
         ctl.addStretch(1)
         ctl.addWidget(self.auto_lbl)
         root.addWidget(ToolBar(ctl))
 
-        # 结果卡片
+        # 结果卡片（统一 StatCard 视觉语言）
         self.chips = {
-            "exp": MetricChip("预期收益", "--"),
-            "pup": MetricChip("上涨概率", "--"),
-            "risk": MetricChip("风险度", "--"),
-            "regime": MetricChip("行情状态", "--"),
-            "model": MetricChip("模型", "--"),
-            "conf": MetricChip("校准置信度", "--"),
-            "news": MetricChip("资讯偏置", "--"),
+            "exp": StatCard("预期收益", "--", theme=self._theme),
+            "pup": StatCard("上涨概率", "--", theme=self._theme),
+            "risk": StatCard("风险度", "--", theme=self._theme),
+            "regime": StatCard("行情状态", "--", theme=self._theme),
+            "model": StatCard("模型", "--", theme=self._theme),
+            "conf": StatCard("校准置信度", "--", theme=self._theme),
+            "news": StatCard("资讯偏置", "--", theme=self._theme),
         }
         cstrip = QHBoxLayout()
         for c in self.chips.values():
             cstrip.addWidget(c, 1)
         root.addLayout(cstrip)
 
-        # 指标共振研判条（指标分析并入 AI 预测：多指标共振 + 趋势强弱，
-        # 与下方 AI 预测方向交叉印证，构成「指标面 + AI面」双重研判）
+        # 指标共振研判条（指标分析并入 KP预测：多指标共振 + 趋势强弱，
+        # 与下方 KP预测方向交叉印证，构成「指标面 + AI面」双重研判）
         self.verdict_badge = Badge("--", pal()["accent"], "#fff")
         self.score_bar = ConfidenceBar(0.5)
         self.trend_badge = Badge("--")
@@ -1084,7 +1091,7 @@ class PredictPage(BasePage):
         ind_row.addStretch(1)
         root.addLayout(ind_row)
 
-        # 市场入手机会速览（Top3 品种评分 + 方向指示，与 AI 预测联动）
+        # 市场入手机会速览（Top3 品种评分 + 方向指示，与 KP预测联动）
         self.op_score = QLabel("—")
         self.op_name = QLabel("—")
         self.op_ai_dir = QLabel("—")
@@ -1098,7 +1105,7 @@ class PredictPage(BasePage):
         op_row.addWidget(QLabel("AI方向:"))
         op_row.addWidget(self.op_ai_dir)
         op_row.addStretch(1)
-        op_label = QLabel(" ← 选品机会板块联动数据（含AI预测信号）")
+        op_label = QLabel(" ← 选品机会板块联动数据（含KP预测信号）")
         op_label.setObjectName("sub")
         op_label.setStyleSheet("font-size:11px;color:#94a3b8;")
         op_row.addWidget(op_label)
@@ -1153,7 +1160,7 @@ class PredictPage(BasePage):
     def _compute_trade_marks(self, res: dict, df=None) -> list:
         """计算 K 线图交易参考点标注（增强版）。
         
-        基于趋势分析结果 + 压力支撑位 + AI预测，在图上标注：
+        基于趋势分析结果 + 压力支撑位 + KP预测，在图上标注：
         - 建议入手价格（绿色菱形）：支撑位附近、模型看多信号确认
         - 建议出手价格（红色菱形）：压力位附近、目标止盈位
         - 多档参考区间：给出更丰富的交易参考点
@@ -1219,7 +1226,7 @@ class PredictPage(BasePage):
                 exit_y = nearest_resistance * 0.997
                 exit_targets.append((exit_y, nearest_resistance, "第一目标"))
             
-            # AI预测的目标价（预测路径的终点）
+            # KP预测的目标价（预测路径的终点）
             if len(forecast) > 1:
                 forecast_target = float(forecast[-1])
                 if forecast_target > last:
@@ -1359,7 +1366,7 @@ class PredictPage(BasePage):
         ind = add_indicators(df)
         bars = df_to_bars(df)
         self.chart.set_data(bars, ma={"MA10": ind["MA10"].tolist(), "MA20": ind["MA20"].tolist()})
-        self.chart.set_watermark(f"{res['symbol']} · {res['period']} · AI预测")
+        self.chart.set_watermark(f"{res['symbol']} · {res['period']} · KP预测")
         self.chart.set_forecast(res["forecast"], res["upper"], res["lower"])
         self.chart.set_levels(res["levels"])
         # K 线图标注：增强版建议入场/出场价位（多档参考 + 止损位）
@@ -1380,7 +1387,7 @@ class PredictPage(BasePage):
             series=[{"name": "RSI6", "color": "#a855f7", "x": x, "y": ind["RSI6"].tolist()},
                     {"name": "RSI14", "color": "#06b6d4", "x": x, "y": ind["RSI14"].tolist()}],
             title="RSI")
-        # 多指标共振 + 趋势强弱（指标分析核心结论，与 AI 预测交叉印证）
+        # 多指标共振 + 趋势强弱（指标分析核心结论，与 KP预测交叉印证）
         try:
             reso = resonance(ind)
             tr = trend_score(ind)
@@ -1881,10 +1888,10 @@ class PredictPage(BasePage):
             f"｜ 综合趋势 / 资金流 / 量能 / 持仓 / 波动 + AI方向概率因子"
             f"</p>"
 
-            f"{sec('⑥ 技术面（指标分析 · 已并入 AI 预测）')}"
+            f"{sec('⑥ 技术面（指标分析 · 已并入 KP预测）')}"
             f"<p style='margin:2px 0'>指标共振「<b>{reso}</b>」（多空分 {ind_score:+.0f}），"
             f"趋势「{ind_state}」，方向 <b>{ind_dir}</b>；"
-            f"MACD / KDJ / RSI 三副图可见：{ind_dir}信号已由 AI 预测方向辅助印证。</p>"
+            f"MACD / KDJ / RSI 三副图可见：{ind_dir}信号已由 KP预测方向辅助印证。</p>"
 
             f"{sec('⑦ 模型面')}"
             f"<p style='margin:2px 0'>上涨概率 <b>{p_up*100:.0f}%</b> / 下跌 <b>{p_dn*100:.0f}%</b>，"

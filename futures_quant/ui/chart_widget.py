@@ -168,18 +168,17 @@ class PriceChart(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pal = self._palette()
         W, H = self.width(), self.height()
-        title_h = 20 if self._title else 4
-        x0, y0 = 10, 8 + title_h
-        x1, y1 = W - 10, H - 22
+        title_h = 24 if self._title else 4
+        x0, y0 = 12, 10 + title_h
+        x1, y1 = W - 14, H - 26
         if x1 <= x0 or y1 <= y0:
             return
 
-        # 标题
+        # 标题（增大字体，提升清晰度）
         if self._title:
             painter.setPen(pal["text"])
-            painter.setFont(QFont(_get_font(), 11, QFont.Weight.Bold))
-            # 修正标题Y坐标，避免紧贴顶部被截断：增加上边距，让文字完整显示
-            painter.drawText(x0, 18 + title_h, self._title)
+            painter.setFont(QFont(_get_font(), 12, QFont.Weight.Bold))
+            painter.drawText(x0, 20 + title_h, self._title)
 
         # 无数据
         if not self._series:
@@ -212,9 +211,9 @@ class PriceChart(QWidget):
                     float"""
             return y1 - (v - ymin) / span * (y1 - y0)
 
-        # 横向网格 + Y 轴标签
+        # 横向网格 + Y 轴标签（增大字体）
         painter.setPen(QPen(pal["grid"], 1))
-        painter.setFont(QFont(_get_font(), 9))
+        painter.setFont(QFont(_get_font(), 10))
         for k in range(5):
             yy = y0 + k * (y1 - y0) / 4
             painter.drawLine(int(x0), int(yy), int(x1), int(yy))
@@ -222,17 +221,17 @@ class PriceChart(QWidget):
             if isinstance(val, float) and val != val:
                 continue
             painter.setPen(pal["text"])
-            painter.drawText(2, int(yy) + 3, f"{val:,.1f}")
+            painter.drawText(4, int(yy) + 4, f"{val:,.1f}")
             painter.setPen(QPen(pal["grid"], 1))
 
-        # X 轴刻度（调用方提供）
+        # X 轴刻度（调用方提供，增大字体）
         if self._x_ticks:
             painter.setPen(pal["text"])
-            painter.setFont(QFont(_get_font(), 9))
+            painter.setFont(QFont(_get_font(), 10))
             for frac, label in self._x_ticks:
                 xx = x0 + frac * (x1 - x0)
-                painter.drawLine(int(xx), int(y1), int(xx), int(y1) + 3)
-                painter.drawText(int(xx) - 18, int(y1) + 16, str(label))
+                painter.drawLine(int(xx), int(y1), int(xx), int(y1) + 4)
+                painter.drawText(int(xx) - 20, int(y1) + 18, str(label))
 
         # 置信带（在折线之下）
         for b in self._bands:
@@ -271,22 +270,22 @@ class PriceChart(QWidget):
                 painter.drawEllipse(pts[-1], 2.5, 2.5)
                 painter.setPen(pen)
 
-        # 图例（左上）
+        # 图例（左上，增大字体和线条）
         if self._series:
-            painter.setFont(QFont(_get_font(), 9))
+            painter.setFont(QFont(_get_font(), 10))
             fm = painter.fontMetrics()
-            lx = x0 + 6
-            ly = y0 + 2
+            lx = x0 + 8
+            ly = y0 + 4
             for s in self._series:
                 name = s.get("name", "")
                 if not name:
                     continue
                 color = _to_color(s.get("color", "#888"))
-                painter.setPen(QPen(color, 2))
-                painter.drawLine(int(lx), int(ly + 4), int(lx + 12), int(ly + 4))
+                painter.setPen(QPen(color, 2.5))
+                painter.drawLine(int(lx), int(ly + 5), int(lx + 14), int(ly + 5))
                 painter.setPen(pal["text"])
-                painter.drawText(int(lx + 16), int(ly + 9), name)
-                lx += 16 + fm.horizontalAdvance(name) + 12
+                painter.drawText(int(lx + 18), int(ly + 10), name)
+                lx += 22 + fm.horizontalAdvance(name) + 14
 
 
 # ============================================================================
@@ -691,7 +690,7 @@ class KLineChart(QWidget):
     def set_forecast(self, y: Optional[Sequence[float]] = None,
                      upper: Optional[Sequence[float]] = None,
                      lower: Optional[Sequence[float]] = None) -> None:
-        """叠加 AI 预测曲线（含 ±1σ 置信带）。y[0] 应与最后一根收盘价一致。"""
+        """叠加 KP预测曲线（含 ±1σ 置信带）。y[0] 应与最后一根收盘价一致。"""
         if y is None:
             self._forecast = None
         else:
@@ -1019,7 +1018,7 @@ class KLineChart(QWidget):
         if self._trade_marks:
             draw_trade_marks(painter, pal, self._trade_marks, px, py, total_n, padL, priceTop, plotW)
 
-        # ---- AI 预测曲线 + 置信带（增强：方向色 + 分隔线 + 终点价签） ----
+        # ---- KP预测曲线 + 置信带（增强：方向色 + 分隔线 + 终点价签） ----
         if fc and len(fc["y"]) > 1:
             base = total - 1  # 与最后一根蜡烛衔接
             # 历史 / 预测 分隔竖线（虚线，明确预测起点）

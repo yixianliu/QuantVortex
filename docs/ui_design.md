@@ -2,7 +2,7 @@
 
 本文档说明 `futures_quant/ui/main_window.py`、`futures_quant/ui/widgets.py`、`futures_quant/ui/icons.py` 与 `futures_quant/ui/pages.py`、`futures_quant/ui/chart_widget.py` 的视觉与交互设计，便于后续维护、扩展与主题二次开发。
 
-> **本系统为分析/预测工具，不含持仓、下单、风控平仓等交易界面。** 页面为：行情全景 / 指标分析 / AI 预测 / 市场全景 / 回测验证 / 日志预警。
+> **本系统为分析/预测工具，不含持仓、下单、风控平仓等交易界面。** 页面为：行情全景 / 指标分析 / KP预测 / 市场全景 / 回测验证 / 日志预警。
 
 ---
 
@@ -10,7 +10,7 @@
 
 - **顶部菜单栏 + 左侧导航 + 右侧堆叠页面**：QMenuBar 提供 视图（切换主题 Ctrl+T）/ 数据（重连数据源）/ 帮助（关于）；左侧 168px 导航面板；右侧 `QStackedWidget` 切换 6 个业务页面。主窗口默认最大化，并设最小尺寸 `1100×680`。
 - **数据源（实盘接入）**：`MarketDataManager` 按 `config/settings.json` 的 `data.source` 选择 `SinaFeed`（**新浪公开接口，真实日线，免密钥**）/ `SyntheticFeed`（合成）/ `CTPFeed`（柜台）。默认 `sina`，外网不可达时自动回退合成，状态栏实时显示当前源。日线/周线为真实数据，日内周期回退合成并明确标注。
-- **全局字体**：显式加载 `C:/Windows/Fonts/simhei.ttf`（黑体）并注册为应用字体，QSS `font-family` 依次为 `'SimHei','Noto Sans SC','Microsoft YaHei'`；offscreen 截图环境下也通过 `examples/capture_ui.py` 的 `setup_fonts()` 显式注册，避免中文 tofu。
+- **全局字体**：显式加载 `C:/Windows/Fonts/simhei.ttf`（黑体）并注册为应用字体，QSS `font-family` 依次为 `'SimHei','Noto Sans SC','Microsoft YaHei'`；offscreen 截图环境下也通过 `docs/examples/capture_ui.py` 的 `setup_fonts()` 显式注册，避免中文 tofu。
 - **圆角卡片化**：统一圆角 10px、卡片底色，与 `QSS` 保持一致。
 - **页头 `PageHeader`**：每个页面顶部固定高度标题区，左侧 4px 强调色竖条 + 大标题 + 副标题，建立清晰层级。
 
@@ -65,7 +65,7 @@
 
 ## 四、导航与状态栏
 
-- 每个导航项左侧带 **SVG 矢量图标**（行情全景 / 指标分析 / AI 预测 / 市场全景 / 回测验证 / 日志预警），激活态为白色，未激活态为次要文字色，hover 背景反馈。
+- 每个导航项左侧带 **SVG 矢量图标**（行情全景 / 指标分析 / KP预测 / 市场全景 / 回测验证 / 日志预警），激活态为白色，未激活态为次要文字色，hover 背景反馈。
 - 底部状态栏（`QStatusBar`）：连接状态点（● 已连接/离线）+ 数据源标签 + 实时时钟 + 「重连」按钮 + 主题切换按钮（sun/moon 图标）。
 
 ---
@@ -81,7 +81,7 @@
 - 主图 `KLineChart` 叠加均线 / BOLL；下方三个 `PriceChart` 副图：`MACD`（DIF/DEA/柱）、`KDJ`（K/D/J）、`RSI`（RSI6/RSI14），各 `setMinimumHeight(90)`。
 - 结论卡：多空共振打分、趋势强弱（基于 ADX）、RSI 背离类型。
 
-### AI 预测（PredictPage）
+### KP预测（PredictPage）
 - 参数卡：品种、周期、回看根数、预测期数、蓝色「运行预测」按钮（`run_btn`，`objectName=primary`）。
 - 结论卡：方向徽章（看多/看空/中性）+ 置信度条 + 最新价 / 预测中枢 / 支撑 / 阻力指标卡。
 - 预测图 `KLineChart`：历史收盘 + 预测中枢虚线（`set_forecast`）+ 阴影置信带（±1σ）+ 压力支撑水平虚线（`set_levels`）。
@@ -125,7 +125,7 @@
 
 ## 八、视觉校验
 
-本项目包含 `examples/capture_ui.py` 用于离线渲染截图，生成位置 `examples/output/`：
+本项目包含 `docs/examples/capture_ui.py` 用于离线渲染截图，生成位置 `docs/examples/output/`：
 
 - `ui_market_dark.png` / `ui_market_light.png`
 - `ui_indicator_dark.png` / `ui_indicator_light.png`
@@ -134,10 +134,10 @@
 - `ui_validate_dark.png` / `ui_validate_light.png`
 - `ui_log_dark.png` / `ui_log_light.png`
 
-运行（会先触发一次 AI 预测以填充预测页内容）：
+运行（会先触发一次 KP预测以填充预测页内容）：
 
 ```bash
-QT_QPA_PLATFORM=offscreen python examples/capture_ui.py
+QT_QPA_PLATFORM=offscreen python docs/examples/capture_ui.py
 ```
 
 > 注意：在沙箱/offscreen 环境下，`capture_ui.py` 通过 `setup_fonts()` 显式注册 `simhei.ttf / NotoSansSC-VF.ttf / msyh.ttc` 并应用为应用字体，已解决中文 tofu 问题；真实 Windows 环境下由 `main_window.main()` 的 `QFontDatabase.addApplicationFont` 同样保证中文显示。
@@ -145,7 +145,7 @@ QT_QPA_PLATFORM=offscreen python examples/capture_ui.py
 更全面的交互冒烟测试：
 
 ```bash
-QT_QPA_PLATFORM=offscreen python examples/smoke_ai_kline.py
+QT_QPA_PLATFORM=offscreen python docs/examples/smoke_ai_kline.py
 ```
 
 ---

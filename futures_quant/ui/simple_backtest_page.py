@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .pages import BasePage, Worker, symbol_code, symbol_label, PERIODS, PERIOD_LABEL
-from .widgets import PageHeader, SectionHeader, MetricChip, pal, prepare_table, ToolBar
+from .widgets import PageHeader, SectionHeader, StatCard, pal, prepare_table, ToolBar
 from ..backtest.backtester import Backtester
 
 
@@ -167,9 +167,9 @@ class SimpleBacktestPage(BasePage):
 
         # ---- 绩效区 ----
         self.kpi_row = QHBoxLayout()
-        self.kpis: dict[str, MetricChip] = {}
+        self.kpis: dict[str, StatCard] = {}
         for label in ("总收益", "年化收益", "最大回撤", "夏普比率", "胜率", "盈亏比"):
-            chip = MetricChip(label, "--")
+            chip = StatCard(label, "--", theme=self._theme)
             self.kpis[label] = chip
             self.kpi_row.addWidget(chip, 1)
         root.addLayout(self.kpi_row)

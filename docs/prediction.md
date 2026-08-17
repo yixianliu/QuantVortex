@@ -33,7 +33,7 @@ python api/futures_ai_predict.py
 - **支撑 / 阻力**：回看窗口内的最低价 / 最高价
 - **预测表**：逐期（T+1…T+N）的日期、中枢价、情景区间
 
-UI「预测」页（已升级为「AI 辅助分析」）提供：品种选择（螺纹钢/白银/沪铜/黄金/当前行情）、行情模式、回看根数、预测期数；点击「运行 AI 分析」后展示：AI 文本结论 + 方向/置信度/支撑阻力 + 关键指标 + 预测图（历史收盘 + 预测中枢虚线 + 阴影置信带，三档 X 轴标注「历史 / 现在 / 预测」）+ 逐期预测表。
+UI「预测」页（已升级为「AI 辅助分析」）提供：品种选择（螺纹钢/白银/沪铜/黄金/当前行情）、行情模式、回看根数、预测期数；点击「运行 KP分析」后展示：AI 文本结论 + 方向/置信度/支撑阻力 + 关键指标 + 预测图（历史收盘 + 预测中枢虚线 + 阴影置信带，三档 X 轴标注「历史 / 现在 / 预测」）+ 逐期预测表。
 
 ## 三、K 线图（chart_widget.KLineChart，新增）
 
@@ -78,7 +78,7 @@ res = Predictor().predict(
 print(res.direction, res.target_price, res.summary)
 ```
 
-自校验：`python examples/predictor_demo.py`（对关键不变量做断言）。
+自校验：`python docs/examples/predictor_demo.py`（对关键不变量做断言）。
 
 ## 在代码中调用 AI 模块
 

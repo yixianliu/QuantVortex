@@ -13,7 +13,7 @@
 ```
 QuantVortex/                     # 项目根目录
 ├── futures_quant/               # [核心库] 期货智能分析预测系统主包
-│   ├── ai/                      #     AI 预测模型（LSTM、集成学习、新闻推送）
+│   ├── ai/                      #     KP预测模型（LSTM、集成学习、新闻推送）
 │   ├── alerts/                  #     预警引擎（规则扫描、触发通知）
 │   ├── analysis/                #     技术分析引擎（支撑阻力、共振信号）
 │   ├── analytics/               #     分析评估工具（预测结果评估）
@@ -61,7 +61,7 @@ QuantVortex/                     # 项目根目录
 | **data/** | 6 | 数据源层：新浪实时行情、CTP柜台行情、合成模拟行情 | `sina_feed.py`, `ctp_gateway.py`, `synthetic.py`, `market_data.py`, `base.py` |
 | **storage/** | 8 | 存储后端：SQLite 单文件、PostgreSQL ���产级、JSON 配置、迁移导出 | `analysis_store.py`, `sqlite_backend.py`, `postgres_backend.py`, `factory.py`, `config_manager.py`, `json_store.py`, `base.py`, `data_transfer.py` |
 | **ui/** | 10 | GUI 界面：主窗口、7 个功能页、K线图组件、图标系统 | `main_window.py`, `pages.py`, `chart_widget.py`, `data_page.py`, `icons.py`, `widgets.py`, `backtest_page.py`, `screening_page.py`, `ctp_monitor_page.py`, `__main__.py` |
-| **ai/** | 7 | AI 预测：LSTM 序列预测、特征工程、集成学习、反馈评估、新闻流 | `predictor.py`, `lstm.py`, `ensemble.py`, `features.py`, `evaluate.py`, `feedback.py`, `news_feed.py` |
+| **ai/** | 7 | KP预测：LSTM 序列预测、特征工程、集成学习、反馈评估、新闻流 | `predictor.py`, `lstm.py`, `ensemble.py`, `features.py`, `evaluate.py`, `feedback.py`, `news_feed.py` |
 | **analysis/** | 2 | 技术分析：共振信号检测、趋势打分、支撑阻力线计算 | `signals.py`, `support_resistance.py` |
 | **alerts/** | 2 | 预警引擎：规则定义、周期扫描、阈值触发 | `__init__.py`（含常量定义）, `engine.py`（扫描器） |
 | **analytics/** | 2 | 分析评估：预测准确度评估 | `__init__.py`, `predictor.py` |
@@ -83,7 +83,7 @@ QuantVortex/                     # 项目根目录
 
 | 文件 | 功能 |
 |------|------|
-| `api/futures_ai_predict.py` | AI 预测 API 接口 |
+| `api/futures_ai_predict.py` | KP预测 API 接口 |
 | `api/agnes-2.0-flash.py` | 第三方模型调用适配 |
 
 ### 2. 配置文件 — 3 个 JSON + 1 个 spec
@@ -99,7 +99,7 @@ QuantVortex/                     # 项目根目录
 
 | 文件 | 路径 | 用途 |
 |------|------|------|
-| `quant_analysis.db` | `data/` | **主库**：K线缓存、AI预测、研判、预警、日志、判断、选品样本 |
+| `quant_analysis.db` | `data/` | **主库**：K线缓存、KP预测、研判、预警、日志、判断、选品样本 |
 | `_selftest.db` | `data/` | 功能自测 SQLite 库 |
 | `integration_test.db` | `data/` | 集成测试 SQLite 库 |
 | `smoke_test.db` (+ shm/wal) | `data/` | 冒烟测试 SQLite 库 |
@@ -139,7 +139,7 @@ QuantVortex/                     # 项目根目录
 | `docs/SimNow注册完全指南.md` | 接入 | SimNow 注册教程 |
 | `docs/ctp_wiring.md` | 接入 | CTP 接线/连接说明 |
 | `docs/storage.md` | 架构 | 存储层设计说明 |
-| `docs/prediction.md` | 架构 | AI 预测系统设计 |
+| `docs/prediction.md` | 架构 | KP预测系统设计 |
 | `docs/strategy_tuning.md` | 策略 | 策略参数调优指南 |
 | `docs/ui_design.md` | UI | 界面设计规范 |
 | `docs/ui_alternative.md` | UI | 备选 UI 方案 |
@@ -276,7 +276,7 @@ QuantVortex/
 │   ├── __init__.py
 │   ├── runtime.py
 │   ├── screening_eval.py
-│   ├── ai/                        # AI 预测
+│   ├── ai/                        # KP预测
 │   ├── alerts/                    # 预警引擎
 │   ├── analysis/                  # 技术分析
 │   ├── analytics/                 # 分析评估

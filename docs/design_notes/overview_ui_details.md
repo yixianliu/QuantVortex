@@ -42,7 +42,7 @@
 
 - `python -m py_compile` 通过（`widgets.py`、`main_window.py`、`chart_widget.py`、`capture_ui.py`）。
 - `QT_QPA_PLATFORM=offscreen python examples/capture_ui.py` 成功生成 7 张深/浅主题截图。
-- `QT_QPA_PLATFORM=offscreen python examples/smoke_ai_kline.py` 全部通过（K 线、AI 分析、39 品种、板块筛选、导航图标、双击切换等）。
+- `QT_QPA_PLATFORM=offscreen python examples/smoke_ai_kline.py` 全部通过（K 线、KP分析、39 品种、板块筛选、导航图标、双击切换等）。
 
 ## 交付文件
 

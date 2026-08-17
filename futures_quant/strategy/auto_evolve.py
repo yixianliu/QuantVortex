@@ -8,7 +8,7 @@
        适应度综合 夏普 / 总收益 / 回撤 / 胜率 / 成交充分性；
     ④ 盈利判定：多阈值联合判定（收益、夏普、回撤、胜率、交易数）；
     ⑤ 自动同步：判定盈利的策略落盘 data/auto_strategies/，
-       「AI预测」模块通过 latest_signal_for() 读取并把策略信号融合进预测。
+       「KP预测」模块通过 latest_signal_for() 读取并把策略信号融合进预测。
 
 诚实声明：默认合成行情下的结论仅验证方法有效性，不可外推真实市场。
 """
@@ -171,7 +171,7 @@ def crossover(a: dict, b: dict, rng: random.Random) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 因子信号（策略与 AI 预测共用，保证「回测的」与「同步给预测的」一致）
+# 因子信号（策略与 KP预测共用，保证「回测的」与「同步给预测的」一致）
 # ---------------------------------------------------------------------------
 def factor_signal(gene: dict, closes: Sequence[float], highs: Sequence[float],
                   lows: Sequence[float]) -> int:
@@ -415,7 +415,7 @@ def is_profitable(m: dict) -> tuple[bool, list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# 盈利策略库（落盘 + 供 AI 预测读取）
+# 盈利策略库（落盘 + 供 KP预测读取）
 # ---------------------------------------------------------------------------
 def load_profitable() -> list[dict]:
     """加载profitable。
@@ -467,7 +467,7 @@ def save_profitable(new_entries: list[dict]) -> int:
 
 def make_entry(symbol: str, symbol_name: str, period: str, gene: dict,
                metrics: dict, fit: float) -> dict:
-    """构造一条盈利策略库记录（synced=True 表示已同步 AI 预测）。"""
+    """构造一条盈利策略库记录（synced=True 表示已同步 KP预测）。"""
     return {
         "symbol": symbol,
         "symbol_name": symbol_name,
@@ -485,7 +485,7 @@ def make_entry(symbol: str, symbol_name: str, period: str, gene: dict,
 
 
 def latest_signal_for(symbol: str, df) -> dict:
-    """供「AI预测」调用：汇总该品种盈利策略在最新行情上的方向信号。
+    """供「KP预测」调用：汇总该品种盈利策略在最新行情上的方向信号。
 
     返回 {"n": 策略数, "bias": -1..1 加权方向, "long": 看多数, "short": 看空数,
           "detail": [{desc, signal, fitness, total_return, sharpe}]}
@@ -736,7 +736,7 @@ class EvolutionEngine:
         self.evaluated_total += len(results)
         results.sort(key=lambda x: x["fitness"], reverse=True)
 
-        # 盈利判定 + 自动同步（落盘即视为已同步：AI预测实时读取该库）
+        # 盈利判定 + 自动同步（落盘即视为已同步：KP预测实时读取该库）
         new_entries = [make_entry(sym, sym_name, self.period,
                                   r["gene"], r["metrics"], r["fitness"])
                        for r in results if r["profitable"]]

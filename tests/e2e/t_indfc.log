@@ -1,0 +1,31 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+✅ 机会排行列数=5
+✅ 机会排行已移除板块列
+✅ 机会排行保留品种/评分/20日%/AI方向/操作
+✅ MACD 含 DIF 历史序列
+✅ MACD 含 DIF 预测序列
+✅ 预测序列长度 = 历史-1 + 1 + 步数
+✅ 预测序列历史段为 None 占位
+✅ 预测序列前景段为有限值
+✅ MACD 含置信带
+✅ 置信带长度 = 历史 + 步数
+✅ 置信带全程有限
+✅ KDJ 含 K 预测序列
+✅ RSI 含 RSI6 预测序列
+✅ 指标图 offscreen 绘制不崩
+✅ 关闭预测开关后无预测序列
+✅ RSI 预测长度=10
+✅ RSI 预测全程有限
+✅ RSI 预测夹紧在 0~100
+✅ RSI 置信带宽度随步数扩张
+✅ 联动画像含 global 字段
+✅ global 含方向一致/反哺权重
+✅ 反哺权重在 0.30~0.85 区间
+✅ 预测信号已入总线
+✅ 回测中心可消费待验证信号
+✅ 回测结果推送不崩
+============================================================
+指标预测 + 双向联动 回归：25 通过 / 0 失败

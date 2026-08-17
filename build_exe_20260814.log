@@ -1,0 +1,182 @@
+3538 INFO: PyInstaller: 6.21.0, contrib hooks: 2026.6
+3539 INFO: Python: 3.13.5 (conda)
+3564 INFO: Platform: Windows-11-10.0.26200-SP0
+3564 INFO: Python environment: D:\anaconda3
+3638 INFO: NumExpr defaulting to 16 threads.
+8199 INFO: Module search paths (PYTHONPATH):
+['D:\\PythonProject\\QuantVortex',
+ 'C:\\Program '
+ 'Files\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\vendor\\shim',
+ 'D:\\anaconda3\\python313.zip',
+ 'D:\\anaconda3\\DLLs',
+ 'D:\\anaconda3\\Lib',
+ 'D:\\anaconda3',
+ 'D:\\anaconda3\\Lib\\site-packages',
+ 'D:\\anaconda3\\Lib\\site-packages\\win32',
+ 'D:\\anaconda3\\Lib\\site-packages\\win32\\lib',
+ 'D:\\anaconda3\\Lib\\site-packages\\Pythonwin',
+ 'D:\\PythonProject\\QuantVortex']
+12197 INFO: Appending 'datas' from .spec
+12200 INFO: checking Analysis
+12200 INFO: Building Analysis because Analysis-00.toc is non existent
+12200 INFO: Looking for Python shared library...
+12201 INFO: Using Python shared library: D:\anaconda3\python313.dll
+12201 INFO: Running Analysis Analysis-00.toc
+12201 INFO: Target bytecode optimization level: 0
+12201 INFO: Initializing module dependency graph...
+12202 INFO: Initializing module graph hook caches...
+12232 INFO: Analyzing modules for base_library.zip ...
+25044 INFO: Processing standard module hook 'hook-encodings.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+29701 INFO: Processing standard module hook 'hook-math.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+31988 INFO: Processing standard module hook 'hook-pickle.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+33423 INFO: Processing standard module hook 'hook-heapq.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+34317 INFO: Caching module dependency graph...
+34434 INFO: Analyzing D:\PythonProject\QuantVortex\main.py
+34484 INFO: Processing standard module hook 'hook-PyQt6.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+35938 INFO: Processing standard module hook 'hook-PyQt6.QtCore.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+42241 INFO: Processing standard module hook 'hook-PyQt6.QtGui.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+66569 INFO: Processing standard module hook 'hook-PyQt6.QtWidgets.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+72233 INFO: Processing standard module hook 'hook-PyQt6.QtSvg.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+74419 INFO: Processing standard module hook 'hook-numpy.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+74687 INFO: Processing standard module hook 'hook-_ctypes.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+75168 INFO: Processing standard module hook 'hook-platform.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+75541 INFO: Processing standard module hook 'hook-sysconfig.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+76018 INFO: Processing standard module hook 'hook-webbrowser.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+77348 INFO: Processing standard module hook 'hook-difflib.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+77701 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+77849 INFO: Processing standard module hook 'hook-xml.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+79519 INFO: Processing standard module hook 'hook-psutil.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+81435 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+82155 INFO: Processing standard module hook 'hook-pandas.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+3562 INFO: NumExpr defaulting to 16 threads.
+88016 INFO: Processing standard module hook 'hook-pytz.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+92122 INFO: Processing standard module hook 'hook-pandas.io.formats.style.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+95803 INFO: Processing standard module hook 'hook-pandas.plotting.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+96550 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+96552 INFO: SetuptoolsInfo: initializing cached setuptools info...
+106142 INFO: Processing standard module hook 'hook-openpyxl.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+106308 INFO: Processing standard module hook 'hook-lxml.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+110242 INFO: Processing standard module hook 'hook-lxml.etree.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+110400 INFO: Processing standard module hook 'hook-pkg_resources.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+114300 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+114431 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+114433 INFO: Setuptools: 'jaraco' appears to be a partial setuptools-vendored copy - extending search paths to ['D:\\anaconda3\\Lib\\site-packages\\jaraco', 'D:\\anaconda3\\Lib\\site-packages\\setuptools\\_vendor\\jaraco']!
+114434 INFO: Processing pre-safe-import-module hook 'hook-jaraco.text.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+114435 INFO: Setuptools: 'jaraco.text' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco.text'!
+114448 INFO: Processing standard module hook 'hook-setuptools.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+114465 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+115064 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+115231 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+115273 INFO: Processing standard module hook 'hook-importlib_metadata.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+115310 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+115342 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+115343 INFO: Setuptools: 'importlib_resources' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.importlib_resources'!
+115516 INFO: Processing pre-safe-import-module hook 'hook-ordered_set.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+115517 INFO: Setuptools: 'ordered_set' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.ordered_set'!
+115541 INFO: Processing pre-safe-import-module hook 'hook-jaraco.functools.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+115724 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+116547 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+116881 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+116884 INFO: Processing pre-safe-import-module hook 'hook-jaraco.context.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+116903 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+116904 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+117081 INFO: Processing pre-safe-import-module hook 'hook-platformdirs.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+117100 INFO: Processing standard module hook 'hook-platformdirs.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+117190 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+117338 INFO: Processing standard module hook 'hook-xml.dom.domreg.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+118470 INFO: Processing standard module hook 'hook-PIL.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+118635 INFO: Processing standard module hook 'hook-PIL.Image.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+122871 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+125972 INFO: Processing standard module hook 'hook-sqlalchemy.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+132516 INFO: Processing standard module hook 'hook-sqlite3.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+136456 INFO: Processing standard module hook 'hook-pandas.io.clipboard.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+136473 INFO: Processing standard module hook 'hook-qtpy.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+136474 INFO: hook-qtpy: selected 'PyQt6' as Qt bindings because hook for 'PyQt6' has been run before.
+136904 INFO: Processing standard module hook 'hook-PyQt6.QtOpenGL.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+141069 INFO: Processing standard module hook 'hook-PyQt6.QtOpenGLWidgets.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+145553 INFO: Processing standard module hook 'hook-dateutil.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+145811 INFO: Processing pre-safe-import-module hook 'hook-six.moves.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+146525 INFO: Processing standard module hook 'hook-fsspec.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+151321 INFO: Processing standard module hook 'hook-lz4.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+152474 INFO: Processing standard module hook 'hook-chardet.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+156331 INFO: Processing standard module hook 'hook-urllib3.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+157630 INFO: Processing standard module hook 'hook-certifi.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+158902 INFO: Processing standard module hook 'hook-jinja2.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+166558 INFO: Processing standard module hook 'hook-nacl.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+167060 INFO: Analyzing hidden import 'futures_quant.data.collect_real_samples'
+167064 INFO: Analyzing hidden import 'futures_quant.ui.__main__'
+167065 INFO: Analyzing hidden import 'futures_quant.utils.logger'
+167664 INFO: Processing module hooks (post-graph stage)...
+167664 WARNING: Hidden import "charset_normalizer.md__mypyc" not found!
+170127 INFO: Processing standard module hook 'hook-lxml.isoschematron.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+170139 INFO: Processing standard module hook 'hook-lxml.objectify.py' from 'D:\\anaconda3\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+170962 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+171797 INFO: Processing standard module hook 'hook-sqlalchemy.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+172652 WARNING: Hidden import "pysqlite2" not found!
+172652 WARNING: Hidden import "MySQLdb" not found!
+175127 INFO: Performing binary vs. data reclassification (942 entries)
+175647 INFO: Looking for ctypes DLLs
+175807 INFO: Analyzing run-time hooks ...
+175822 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175828 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175832 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175836 INFO: Including run-time hook 'pyi_rth_pkgres.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175847 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175853 INFO: Including run-time hook 'pyi_rth_pyqt6.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175857 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+175861 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'D:\\anaconda3\\Lib\\site-packages\\PyInstaller\\hooks'
+175946 INFO: Creating base_library.zip...
+175983 INFO: Looking for dynamic libraries
+185093 INFO: Extra DLL search directories (AddDllDirectory): ['D:\\anaconda3\\Lib\\site-packages\\PyQt6\\Qt6\\bin']
+185094 INFO: Extra DLL search directories (PATH): ['D:\\anaconda3\\Lib\\site-packages\\PyQt6\\Qt6\\bin']
+190188 WARNING: Library not found: could not resolve 'ze_loader.dll', dependency of 'D:\\anaconda3\\Library\\bin\\omptarget.rtl.level0.dll'.
+190191 WARNING: Library not found: could not resolve 'sycl6.dll', dependency of 'D:\\anaconda3\\Library\\bin\\omptarget.sycl.wrap.dll'.
+190192 WARNING: Library not found: could not resolve 'impi.dll', dependency of 'D:\\anaconda3\\Library\\bin\\mkl_blacs_intelmpi_lp64.2.dll'.
+190192 WARNING: Library not found: could not resolve 'msmpi.dll', dependency of 'D:\\anaconda3\\Library\\bin\\mkl_blacs_msmpi_lp64.2.dll'.
+190193 WARNING: Library not found: could not resolve 'msmpi.dll', dependency of 'D:\\anaconda3\\Library\\bin\\mkl_blacs_msmpi_ilp64.2.dll'.
+190194 WARNING: Library not found: could not resolve 'pgf90.dll', dependency of 'D:\\anaconda3\\Library\\bin\\mkl_pgi_thread.2.dll'.
+190195 WARNING: Library not found: could not resolve 'pgc.dll', dependency of 'D:\\anaconda3\\Library\\bin\\mkl_pgi_thread.2.dll'.
+190196 WARNING: Library not found: could not resolve 'pgmath.dll', dependency of 'D:\\anaconda3\\Library\\bin\\mkl_pgi_thread.2.dll'.
+190197 WARNING: Library not found: could not resolve 'impi.dll', dependency of 'D:\\anaconda3\\Library\\bin\\mkl_blacs_intelmpi_ilp64.2.dll'.
+190266 INFO: Warnings written to D:\PythonProject\QuantVortex\build\pyi_1786697118\futures_qt\warn-futures_qt.txt
+190554 INFO: Graph cross-reference written to D:\PythonProject\QuantVortex\build\pyi_1786697118\futures_qt\xref-futures_qt.html
+190654 INFO: checking PYZ
+190654 INFO: Building PYZ because PYZ-00.toc is non existent
+190654 INFO: Building PYZ (ZlibArchive) D:\PythonProject\QuantVortex\build\pyi_1786697118\futures_qt\PYZ-00.pyz
+192756 INFO: Building PYZ (ZlibArchive) D:\PythonProject\QuantVortex\build\pyi_1786697118\futures_qt\PYZ-00.pyz completed successfully.
+192810 INFO: checking PKG
+192811 INFO: Building PKG because PKG-00.toc is non existent
+192811 INFO: Building PKG (CArchive) FuturesQuant.pkg
+192857 INFO: Building PKG (CArchive) FuturesQuant.pkg completed successfully.
+192858 INFO: Bootloader D:\anaconda3\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+192859 INFO: checking EXE
+192859 INFO: Building EXE because EXE-00.toc is non existent
+192859 INFO: Building EXE from EXE-00.toc
+192859 INFO: Copying bootloader EXE to D:\PythonProject\QuantVortex\build\pyi_1786697118\futures_qt\FuturesQuant.exe
+192870 INFO: Copying icon to EXE
+192878 INFO: Copying 0 resources to EXE
+192878 INFO: Embedding manifest in EXE
+192887 INFO: Appending PKG archive to EXE
+192908 INFO: Fixing EXE headers
+193072 INFO: Building EXE from EXE-00.toc completed successfully.
+193087 INFO: checking COLLECT
+193087 INFO: Building COLLECT because COLLECT-00.toc is non existent
+193088 INFO: Building COLLECT COLLECT-00.toc
+196908 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+196934 INFO: Build complete! The results are available in: D:\PythonProject\QuantVortex\dist
+[spec][安全] 跳过本地凭据文件，不打入产物：config/ctp_settings.json
+[门禁] 构建前扫描源码树 ...
+[门禁] 源码扫描通过。
+[构建] 执行： D:\anaconda3\python.exe -m PyInstaller --noconfirm --workpath D:\PythonProject\QuantVortex\build\pyi_1786697118 --distpath D:\PythonProject\QuantVortex\dist D:\PythonProject\QuantVortex\build_tools\futures_qt.spec
+[产物] 主程序：存在  文件数：1160  总体积：829.9 MB
+[验证] 扫描打包产物（含 exe / pyc / dll 字节级）...
+[验证] 产物中无本地凭据文件混入。
+[验证] 产物中无 __pycache__ 残留。
+[验证] 产物扫描通过：未发现任何密钥。
+[完成] 可执行文件位于：
+        D:\PythonProject\QuantVortex\dist\FuturesQuant
+[说明] 把整个 dist/FuturesQuant/ 目录发给用户即可；
+        首次运行会自动在 exe 同级（或 AppData）生成 data/ 存放数据库与配置。
+        客户端不含任何上游密钥：云端研判能力需由用户通过环境变量 QV_AGNES_API_KEY 注入，
+        未注入时自动降级为本地规则合成，功能不中断。
+        如需安装向导，请用 packaging/installer.iss 打包（见 packaging/分发说明.md）。

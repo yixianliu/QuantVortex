@@ -130,7 +130,7 @@ class CTPMonitorPage(BasePage):
         pcard = QFrame(); pcard.setObjectName("card")
         pl = QVBoxLayout(pcard); pl.setContentsMargins(10, 8, 10, 8); pl.setSpacing(4)
         pl.addWidget(SectionHeader("持仓 / 委托（只读原型）", accent="#8b5cf6"))
-        note = QLabel("⚠️ 交易侧未启用：本系统定位为「行情分析 / AI 预测 / 量化研判」，"
+        note = QLabel("⚠️ 交易侧未启用：本系统定位为「行情分析 / KP预测 / 量化研判」，"
                       "不做自动交易。下单、持仓、委托功能需用户明确确认后另行开发，"
                       "且须在期货公司模拟盘充分验证风控（见 docs/ctp_wiring.md）。")
         note.setObjectName("hint"); note.setWordWrap(True)

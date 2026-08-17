@@ -1,0 +1,11 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+PASS: _calib_conf_flag 窄/宽/插值/无bins 四态判定正确
+PASS: 区间返回值结构正确（lo=0.09999999999999998, hi=0.8999999999999999, width=0.800）
+PASS: 研判徽章降级渲染：正常『看多』/ 降级『信号不明·⚠低置信』
+PASS: 解读文本带校准区间说明（低置信/可信/无band 三态）
+PASS: _soft_degrade_enter 激进入手降级 / 偏空观望不改 / 无副作用
+PASS: _soft_degrade_recommend 偏多降级 / 偏空观望不改 / 无副作用
+============================================================
+实时研判降级信号：全部断言通过 ✅

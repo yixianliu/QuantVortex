@@ -43,7 +43,7 @@ from ..ai.predictor import FuturesPredictor
 from ..ai.feedback import reliability_calibration, calibration_band_at
 from .widgets import (
     PageHeader, ToolBar, PALETTE, THEME, prepare_table, color_pnl,
-    ConfidenceBar, MetricChip, Badge, pal,
+    ConfidenceBar, StatCard, Badge, pal,
 )
 
 # 校准区间「低置信」阈值：与 predict_ops_page.LOW_CONF_BAND_WIDTH 保持一致
@@ -334,7 +334,7 @@ def _ai_p_up(df) -> float:
 
 
 def _ai_full_predict(df) -> tuple:
-    """完整 AI 预测，返回 (p_up, expected_return, confidence)。
+    """完整 KP预测，返回 (p_up, expected_return, confidence)。
     
     用于选品页面展示 AI 预期收益和置信度，与预测页联动。
     """
@@ -473,7 +473,7 @@ class ScreeningPage(BasePage):
     """选品评分页面：按多维因子对品种打分排序并高亮机会。
     
         继承: BasePage"""
-    navig_to_predict = pyqtSignal(str, str)  # symbol, period → 切换到 AI 预测并自动运行
+    navig_to_predict = pyqtSignal(str, str)  # symbol, period → 切换到 KP预测并自动运行
 
     def __init__(self, mdm, store, config=None, session=None):
         """初始化相关对象。
@@ -503,8 +503,8 @@ class ScreeningPage(BasePage):
         root.setSpacing(8)
         root.addWidget(PageHeader(
             "选品入手机会 · AI 决策辅助",
-            "全合约入手机会评分 · 趋势 / 资金流 / 量能 / 持仓 / 波动 五维综合 + AI预测辅助 · "
-            "直接回答「哪些品种可考虑入手 · 哪些板块值得关注 · AI预测信号如何」"))
+            "全合约入手机会评分 · 趋势 / 资金流 / 量能 / 持仓 / 波动 五维综合 + KP预测辅助 · "
+            "直接回答「哪些品种可考虑入手 · 哪些板块值得关注 · KP预测信号如何」"))
 
         # 样本状态横幅
         self.banner = QFrame()
@@ -583,7 +583,7 @@ class ScreeningPage(BasePage):
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
-        lv.addWidget(QLabel("全合约入手机会排行（单击查看入手逻辑 / 风险 / 历史成功率 / AI预测信号）"))
+        lv.addWidget(QLabel("全合约入手机会排行（单击查看入手逻辑 / 风险 / 历史成功率 / KP预测信号）"))
         self.tbl = QTableWidget(0, 13)
         self.tbl.setHorizontalHeaderLabels(
             ["合约", "板块", "评分", "历史成功率", "20日%", "资金流(亿)",
@@ -639,9 +639,9 @@ class ScreeningPage(BasePage):
             "帮助判断是否值得入手、何时入手。</p>")
         root.addWidget(self.detail)
 
-        # 联动按钮：「在 AI 预测中分析」和「查看K线图」
+        # 联动按钮：「在 KP预测中分析」和「查看K线图」
         btn_row = QHBoxLayout()
-        self.predict_btn = QPushButton("在 AI 预测中分析 →")
+        self.predict_btn = QPushButton("在 KP预测中分析 →")
         self.predict_btn.setObjectName("primary")
         self.predict_btn.setVisible(False)
         self.predict_btn.clicked.connect(self._on_navigate_to_predict)
@@ -672,7 +672,7 @@ class ScreeningPage(BasePage):
         pal = PALETTE[THEME]
         box = QHBoxLayout()
         box.setSpacing(8)
-        self.sum_score = MetricChip("进场评分", "--", pal["text"])
+        self.sum_score = StatCard("进场评分", "--", theme=THEME)
         box.addWidget(self.sum_score)
 
         # 历史成功率卡（含 ConfidenceBar，关键数据突出）
@@ -693,9 +693,9 @@ class ScreeningPage(BasePage):
         rcl.addWidget(self.rate_val)
         box.addWidget(self.rate_card)
 
-        self.sum_cat = MetricChip("同类成功率", "--", pal["text"])
+        self.sum_cat = StatCard("同类成功率", "--", theme=THEME)
         box.addWidget(self.sum_cat)
-        self.sum_sample = MetricChip("历史样本", "--", pal["sub"])
+        self.sum_sample = StatCard("历史样本", "--", theme=THEME)
         box.addWidget(self.sum_sample)
         self.sum_badge = Badge("", bg=pal["badge_bg"], fg=pal["text"])
         box.addWidget(self.sum_badge)
@@ -1006,7 +1006,7 @@ class ScreeningPage(BasePage):
             font.setPointSize(9); font.setBold(True)
             it_ai.setFont(font)
             
-            # AI 预测预期收益（新增列）
+            # KP预测预期收益（新增列）
             ai_exp = r.get("ai_exp", 0.0)
             exp_col = pal["up"] if ai_exp >= 0 else (pal["down"] if ai_exp < 0 else pal["sub"])
             it_exp = self._set(self.tbl, i, 11, f"{ai_exp:+.1f}%", QColor(exp_col))
@@ -1084,7 +1084,7 @@ class ScreeningPage(BasePage):
         self.chart_btn._current_name = r["name"]
 
     def _on_navigate_to_predict(self):
-        """将选中的品种联动到 AI 预测页。"""
+        """将选中的品种联动到 KP预测页。"""
         sym = getattr(self.predict_btn, "_current_sym", None)
         per = getattr(self.predict_btn, "_current_per", "D")
         if sym:
@@ -1140,7 +1140,7 @@ class ScreeningPage(BasePage):
 
     # ---- 入手详情：结构化 HTML（比纯文本更易读） ----
     def _logic_html(self, r: dict, cat_examples: Optional[list] = None) -> str:
-        """把「入手逻辑 / 风险提示 / 历史信号回测 / AI预测」渲染为结构化 HTML，更直观易读。"""
+        """把「入手逻辑 / 风险提示 / 历史信号回测 / KP预测」渲染为结构化 HTML，更直观易读。"""
         p = PALETTE[THEME]
         tcol = _tier_color(r["tier"]).name()
         logic, risk = [], []
@@ -1208,7 +1208,7 @@ class ScreeningPage(BasePage):
             f"<ul style='margin:2px 0 0 16px'>"
             f"{li([f'<span style=\"color:{p['down']}\">{x}</span>' if ('追高' in x or '止损' in x) else x for x in risk])}</ul>"
         )
-        # ③ AI 预测信号（新增板块，整合 AI 预测数据）
+        # ③ KP预测信号（新增板块，整合 KP预测数据）
         pu = r.get("pu", 0.5)
         ai_exp = r.get("ai_exp", 0.0)
         ai_conf = r.get("ai_conf", 0.5)
@@ -1222,7 +1222,7 @@ class ScreeningPage(BasePage):
         conf_color = "#22c55e" if ai_conf >= 0.65 else "#f59e0b" if ai_conf >= 0.5 else "#ef4444"
         ai_dir_suffix = (" <span style='color:#f59e0b'>·置信偏低</span>"
                          if low_conf else "")
-        html += (f"<p style='font-weight:bold;margin:10px 0 2px'>③ AI 预测信号</p>"
+        html += (f"<p style='font-weight:bold;margin:10px 0 2px'>③ KP预测信号</p>"
                  f"<p style='margin:2px 0'>AI 方向判断：<b style='color:{ai_dir_color}'>{ai_dir}</b>{ai_dir_suffix} "
                  f"（上涨概率 {pu*100:.0f}%）</p>"
                  f"<p style='margin:2px 0'>AI 预期收益：<b style='color:{exp_color}'>{ai_exp:+.1f}%</b></p>"

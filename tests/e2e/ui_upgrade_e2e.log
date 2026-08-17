@@ -1,0 +1,36 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "d:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "d:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "d:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "d:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "d:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "d:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "d:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "d:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+======================================================================
+全页面 GUI 冒烟测试
+======================================================================
+[1/7] 行情全景     - 构造 OK, PAGE_KEY=market
+                   主题切换 OK
+                   关闭保护 OK
+[2/7] 预测操作     - 构造 OK, PAGE_KEY=predict_ops
+                   主题切换 OK
+                   关闭保护 OK
+[3/7] 回测中心     - 构造 OK, PAGE_KEY=backtest
+                   主题切换 OK
+                   关闭保护 OK
+[4/7] 独立回测     - 构造 OK, PAGE_KEY=simple_backtest
+                   主题切换 OK
+                   关闭保护 OK
+[5/7] 实盘监控     - 构造 OK, PAGE_KEY=ctp
+                   主题切换 OK
+                   关闭保护 OK
+[6/7] 日志预警     - 构造 OK, PAGE_KEY=log
+                   主题切换 OK
+                   关闭保护 OK
+[7/7] 数据管理     - 构造 OK, PAGE_KEY=
+                   主题切换 OK
+                   关闭保护 OK
+======================================================================
+测试结果: 7/7 通过, 0/7 失败
+所有页面均正常！
+======================================================================

@@ -31,6 +31,7 @@ from .pages import (
 )
 from .widgets import (
     PageHeader, ToolBar, prepare_table, color_pnl, PALETTE, THEME, SectionHeader,
+    StatCard,
 )
 from .icons import icon
 from .chart_widget import PriceChart
@@ -1045,7 +1046,7 @@ PIPELINE_STAGES = [
     ("⏱️", "历史回测"),
     ("🔁", "迭代优化"),
     ("⚖️", "盈利判定"),
-    ("🚀", "同步AI预测"),
+    ("🚀", "同步KP预测"),
 ]
 
 # 两次进化之间的间歇（毫秒）：页面可见时短间歇，不可见时长间歇省资源
@@ -1063,7 +1064,7 @@ class BacktestCenterPage(BasePage):
         ③ 迭代优化：遗传算法逐代进化（精英保留/锦标赛/交叉/变异），
            适应度综合夏普、收益、回撤、胜率与成交充分性；
         ④ 盈利判定：多阈值联合判定策略是否具备盈利能力；
-        ⑤ 自动同步：盈利策略实时落盘策略库，「AI预测」模块直接读取
+        ⑤ 自动同步：盈利策略实时落盘策略库，「KP预测」模块直接读取
            并把策略方向信号融合进预测（无需任何人工确认）。
     品种自动轮换：每个品种进化若干代后自动切换下一品种，全市场循环学习。
     """
@@ -1128,14 +1129,14 @@ class BacktestCenterPage(BasePage):
     # ------------------------------------------------------------------
     def _build(self) -> None:
         """构建相关对象。"""
-        from .widgets import StatusTile, MetricChip
+        from .widgets import StatusTile, StatCard
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(8)
         root.addWidget(PageHeader(
             "回测中心 · 全自动自我学习",
-            "AI自主生成策略因子 → 自动回测 → 迭代进化 → 盈利判定 → 自动同步AI预测"
+            "AI自主生成策略因子 → 自动回测 → 迭代进化 → 盈利判定 → 自动同步KP预测"
             "｜ 全程零操作，打开即运行"))
 
         # ---- 运行状态行 ----
@@ -1164,7 +1165,7 @@ class BacktestCenterPage(BasePage):
             ("evaluated", "已评估策略"), ("profitable", "盈利策略库"),
             ("best_fit", "最佳适应度"), ("best_ret", "最佳总收益"),
         ]:
-            chip = MetricChip(label)
+            chip = StatCard(label, theme=self._theme)
             self._chips[key] = chip
             chip_bar.addWidget(chip)
         chip_bar.addStretch(1)
@@ -1191,7 +1192,7 @@ class BacktestCenterPage(BasePage):
             ("pf_annual", "年化收益"), ("pf_calmar", "卡玛比率"),
             ("pf_wr", "胜率"), ("pf_pf", "盈亏比"),
         ]:
-            chip = MetricChip(label)
+            chip = StatCard(label, theme=self._theme)
             self._perf_chips[key] = chip
             perf_bar.addWidget(chip)
         perf_bar.addStretch(1)
@@ -1220,7 +1221,7 @@ class BacktestCenterPage(BasePage):
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.tabs.addTab(self.pop_tbl, "🧬 当代种群排行")
 
-        # ② 盈利策略库（已自动同步 AI 预测）
+        # ② 盈利策略库（已自动同步 KP预测）
         self.lib_tbl = QTableWidget(0, 10)
         self.lib_tbl.setHorizontalHeaderLabels(
             ["品种", "策略因子", "总收益", "年化", "夏普", "回撤",
@@ -1302,10 +1303,10 @@ class BacktestCenterPage(BasePage):
         self.delivery_de.dateChanged.connect(self._sync_futures_params)
         bar.addWidget(self.delivery_de)
 
-        # 联动 AI 预测：携带当前品种跳转，进行板块联动分析
-        self.link_btn = QPushButton("🔗 联动AI预测")
+        # 联动 KP预测：携带当前品种跳转，进行板块联动分析
+        self.link_btn = QPushButton("🔗 联动KP预测")
         self.link_btn.setObjectName("secondary")
-        self.link_btn.setToolTip("携带当前学习品种跳转到「AI预测」板块，"
+        self.link_btn.setToolTip("携带当前学习品种跳转到「KP预测」板块，"
                                 "查看与回测结果联动的研判")
         self.link_btn.clicked.connect(self._goto_predict)
         bar.addWidget(self.link_btn)
@@ -1346,7 +1347,7 @@ class BacktestCenterPage(BasePage):
                 + "，下代回测自动生效")
 
     def _goto_predict(self) -> None:
-        """联动跳转：携带当前学习品种到「AI预测」板块并预选该品种。"""
+        """联动跳转：携带当前学习品种到「KP预测」板块并预选该品种。"""
         sym = (self._engine.symbol() if self._engine
                else (self.mdm.universe[0][0] if self.mdm.universe else None))
         if sym is None:
@@ -1365,7 +1366,7 @@ class BacktestCenterPage(BasePage):
                 pass
 
     def _lib_to_predict(self, idx: int) -> None:
-        """盈利策略库行内「🔮 预测」：跳转到 AI预测 并预载该策略基因。"""
+        """盈利策略库行内「🔮 预测」：跳转到 KP预测 并预载该策略基因。"""
         if idx < 0 or idx >= len(self._lib_entries):
             return
         e = self._lib_entries[idx]
@@ -1385,7 +1386,7 @@ class BacktestCenterPage(BasePage):
                 pass
 
     def run_manual_for(self, symbol: str, gene: dict = None) -> None:
-        """供「AI预测」页联动：切到手动回测模式并用指定策略基因跑回测。"""
+        """供「KP预测」页联动：切到手动回测模式并用指定策略基因跑回测。"""
         if self._closed:
             return
         # 切到手动模式（与自动进化互斥）
@@ -1406,6 +1407,22 @@ class BacktestCenterPage(BasePage):
             if midx >= 0:
                 self._manual_strat_cb.setCurrentIndex(midx)
         self._run_manual()
+
+    def _sync_from_prediction_bus(self) -> None:
+        """消费预测操作板块推送的待验证研判信号（预测 → 回测 闭环）。
+
+        这些信号由预测页在每次研判完成时写入联动总线；回测中心在此读取并提示，
+        引导用户用真实回测验证预测策略，形成「预测 → 回测验证 → 反哺预测」的自我训练。
+        """
+        try:
+            from ..ai.linkage_bus import BUS
+            pending = BUS.consume_pending_predictions()
+            if pending:
+                syms = ", ".join(sorted({str(p.get("symbol", "")) for p in pending}))
+                self._log(f"📡 收到预测信号 {len(pending)} 条（{syms}），"
+                          f"可在「手动回测」中验证其策略有效性。")
+        except Exception:  # noqa: BLE001
+            pass
 
     def _fill_perf_chips(self, m: dict) -> None:
         """绩效指标卡：夏普/回撤/年化/卡玛/胜率/盈亏比（与预测板块同口径）。"""
@@ -1479,6 +1496,7 @@ class BacktestCenterPage(BasePage):
                           f"开始进化")
             self._fill_library(load_profitable())
             self._chips["profitable"].set_value(str(n_lib))
+            self._sync_from_prediction_bus()
             self._next_generation()
         except Exception as e:  # noqa: BLE001
             self.info.setText(f"引擎启动失败：{e}（{ERR_RETRY_MS // 1000}s 后自动重试）")
@@ -1794,7 +1812,7 @@ class BacktestCenterPage(BasePage):
             self.info.setText(f"⚠️ 未找到品种 {sym} 的合约规格")
             return
 
-        # 精确基因优先（AI预测联动注入 / 历史记录「复跑」注入），
+        # 精确基因优先（KP预测联动注入 / 历史记录「复跑」注入），
         # 确保「恢复该次完整配置」时严格使用原基因而非预设默认值。
         gene_override = getattr(self, "_manual_gene_override", None)
         if gene_override is not None:
@@ -1948,6 +1966,21 @@ class BacktestCenterPage(BasePage):
             f"手动回测完成 · {row[1]} · 收益 {_pct(m.get('total_return'))} · "
             f"夏普 {m.get('sharpe')} · 回撤 {_pct(m.get('max_drawdown'))}",
             duration=4000)
+        # 命中回执：将本次回测结果作为后续预测调权的依据（盈利≈方向命中）
+        try:
+            from ..ai.linkage_bus import BUS
+            hit = float(m.get("total_return", 0) or 0) > 0
+            BUS.record_hit(sym, hit)
+        except Exception:  # noqa: BLE001
+            pass
+        # ---- 双向联动：回测结果反哺预测（实时推送盈利策略画像） ----
+        try:
+            from ..ai.linkage_bus import BUS
+            BUS.push_backtest_result(sym, gene, m)
+        except Exception:  # noqa: BLE001
+            pass
+        # 消费预测操作板块推送的待验证信号（预测 → 回测 闭环）
+        self._sync_from_prediction_bus()
 
     def _on_manual_err(self, msg: str) -> None:
         """处理onmanualerr。
@@ -1982,7 +2015,7 @@ class BacktestCenterPage(BasePage):
         self._set_stage(1, "good", "回测中", "逐一送入历史行情回测引擎")
         self._set_stage(2, "good", f"第{gen_no}代", "遗传算法逐代进化寻优")
         self._set_stage(3, "neutral", "等待", "回测完成后自动判定")
-        self._set_stage(4, "neutral", "等待", "盈利策略将自动同步AI预测")
+        self._set_stage(4, "neutral", "等待", "盈利策略将自动同步KP预测")
 
         bt_store = self._bt_store
 
@@ -2030,14 +2063,14 @@ class BacktestCenterPage(BasePage):
             self._set_stage(3, "good", f"+{len(new_prof)} 盈利",
                             "；".join(e["desc"][:26] for e in new_prof[:2]))
             self._set_stage(4, "good", f"库 {snap['profitable_total']} 条",
-                            "已自动写入策略库，AI预测实时读取生效")
+                            "已自动写入策略库，KP预测实时读取生效")
         else:
             self._set_stage(3, "bad", "未达标",
                             "本代无策略通过盈利判定（收益/夏普/回撤/胜率/交易数联合阈值）")
             self._set_stage(4,
                             "good" if snap["profitable_total"] else "neutral",
                             f"库 {snap['profitable_total']} 条",
-                            "策略库现有盈利策略持续对AI预测生效")
+                            "策略库现有盈利策略持续对KP预测生效")
 
         # ---- KPI ----
         p = PALETTE[self._theme]
@@ -2069,7 +2102,7 @@ class BacktestCenterPage(BasePage):
                       f"最优「{best['desc']}」收益 {_pct(m.get('total_return'))} "
                       f"夏普 {m.get('sharpe')} 适应度 {best['fitness']}")
         for e in new_prof:
-            self._log(f"💰 盈利策略入库并同步AI预测：{e['symbol_name']} · {e['desc']}"
+            self._log(f"💰 盈利策略入库并同步KP预测：{e['symbol_name']} · {e['desc']}"
                       f"（收益 {_pct(e['metrics'].get('total_return'))}，"
                       f"夏普 {e['metrics'].get('sharpe')}）")
         if snap.get("symbol_done"):
@@ -2080,7 +2113,7 @@ class BacktestCenterPage(BasePage):
         self.info.setText(
             f"✅ 第 {snap['generation']} 代完成 · {snap['symbol_name']}　"
             f"累计评估 {snap['evaluated_total']} 个策略，盈利库 "
-            f"{snap['profitable_total']} 条（已自动同步AI预测）。"
+            f"{snap['profitable_total']} 条（已自动同步KP预测）。"
             f"系统持续自我进化中，无需任何操作…")
         self._schedule_next()
 
@@ -2230,11 +2263,11 @@ class BacktestCenterPage(BasePage):
             self.lib_tbl.setItem(i, 6, QTableWidgetItem(_pct(m.get("win_rate"))))
             self.lib_tbl.setItem(
                 i, 7, QTableWidgetItem(str(e.get("found_at", ""))[:16].replace("T", " ")))
-            s_item = QTableWidgetItem("✅ 已同步AI预测")
+            s_item = QTableWidgetItem("✅ 已同步KP预测")
             s_item.setForeground(_qcolor("up"))
-            s_item.setToolTip("该策略已写入盈利策略库，AI预测模块实时读取其方向信号并融合进预测")
+            s_item.setToolTip("该策略已写入盈利策略库，KP预测模块实时读取其方向信号并融合进预测")
             self.lib_tbl.setItem(i, 8, s_item)
-            # 第 9 列：联动跳转「AI预测」并预载该策略基因
+            # 第 9 列：联动跳转「KP预测」并预载该策略基因
             btn = QPushButton("🔮 预测")
             btn.setObjectName("ghost")
             btn.setMinimumHeight(26)

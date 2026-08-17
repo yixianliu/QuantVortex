@@ -35,9 +35,6 @@ nul
 # ================= 打包临时 =================
 *.spec.bak
 
-# ================= 测试 fixtures（可选提交） =================
-# tests/fixtures/*.csv
-# tests/fixtures/*.json
-api_docs
-build_tools
-tests
+# ================= 临时构建/调试工具（不入库）=================
+# build_tools/ 内的 _rebrand_*.py 是临时重命名脚本，不在代码中引用
+build_tools/_rebrand_*.py

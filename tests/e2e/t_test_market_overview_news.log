@@ -1,0 +1,16 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+======================================================================
+行情全景 · 布局 + AI 资讯引擎 验证
+======================================================================
+[引擎] confidence=0.58 consensus={'sources': 1, 'bull': 1, 'bear': 0, 'direction': '偏多', 'agree': 1.0} wbias=0.122
+[引擎] trend 片段: 综合 5 条多源资讯（覆盖 5/11 个信源（财联社、东方财富、期货日报、金十数据、华尔街见闻）），整体情绪「偏多」（简单偏置 +0.11 / 可信度加权偏置 
+[解析] 新浪财经列表解析 OK，2 条
+[布局] 速览表：39 行 × 6 列，stretchLast=True，minSec=96
+[渲染] AI 面板已渲染 信源覆盖/跨源一致性/综合置信度，无异常
+[预览] 已保存 tests/e2e/market_overview_v2_preview.png
+======================================================================
+全部检查通过 ✅
+======================================================================

@@ -1,0 +1,11 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+PASS: _calib_low_conf 宽档/窄档/无信息 三态判定正确
+PASS: 排行表 AI方向列：低置信『偏多·置信偏低』/ 正常『中性』
+PASS: 入手详情 KP预测信号：低置信标注 / 正常不标注
+PASS: 板块关注方向：金属『重点留意 ·置信偏低』/ 能化『可留意』
+PASS: 中概率板块『暂观望』不误报
+PASS: 无校准信息板块『暂观望』零副作用
+============================================================
+选品排行 AI方向 置信偏低标注：全部断言通过 ✅

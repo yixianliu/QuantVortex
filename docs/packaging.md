@@ -1,6 +1,6 @@
 # 打包为桌面 exe（PyInstaller）
 
-本项目是 PyQt6 桌面程序，依赖仅为 `PyQt6 + numpy + pandas`（AI 预测用原生 numpy 实现，K 线用 QPainter 绘制，无 torch/matplotlib/pyqtgraph）。可一键打包成免配置、双击即用的 exe，分发时**无需目标机安装 Python**。
+本项目是 PyQt6 桌面程序，依赖仅为 `PyQt6 + numpy + pandas`（KP预测用原生 numpy 实现，K 线用 QPainter 绘制，无 torch/matplotlib/pyqtgraph）。可一键打包成免配置、双击即用的 exe，分发时**无需目标机安装 Python**。
 
 ## 1. 安装构建依赖
 
@@ -26,7 +26,7 @@ pyinstaller futures_qt.spec --clean --noconfirm
 
 - `console=False`：桌面程序，不弹黑色控制台窗口。
 - `datas`：把 `config/`（含 `settings.json` 模板）打入；若仓库存在 `assets/fonts/` 也会一并打入（见第 5 节字体）。
-- `hiddenimports`：`collect_submodules("futures_quant")` 收集整个包，确保动态/延迟导入的指标、存储、数据源、AI 预测等都被包含；并显式列出 `PyQt6` 子模块。
+- `hiddenimports`：`collect_submodules("futures_quant")` 收集整个包，确保动态/延迟导入的指标、存储、数据源、KP预测等都被包含；并显式列出 `PyQt6` 子模块。
 - `excludes`：排除 `matplotlib`/`tkinter`/`PyQt5`/`PySide*`/`scipy`/`sklearn`/`torch`/`tensorflow` 等无关或重型库，显著减小体积。
 - `upx=True`：可执行文件压缩（如遇杀软误报可在 spec 中关闭）。
 

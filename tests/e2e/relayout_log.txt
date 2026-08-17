@@ -1,0 +1,3 @@
+[OK] _fill_news + _render_ai/_render_tech 完整渲染（含 drivers/scenarios/watchlist）
+[OK] show/resize/resize 重布局无异常（ResponsiveRow + FlowLayout）
+ALL_OK

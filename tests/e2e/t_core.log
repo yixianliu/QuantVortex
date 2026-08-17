@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "D:\PythonProject\QuantVortex\tests\e2e\test_core.py", line 7, in <module>
+    from futures_quant.data.synthetic import generate_bars, SyntheticFeed, resample_bars
+ModuleNotFoundError: No module named 'futures_quant'

@@ -1,0 +1,36 @@
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "D:\\PythonProject\\QuantVortex\\data\\.write_test", "reason": "windows-sandbox-recycle-bin-unavailable"}
+
+[A] 回测中心「🔮 预测」→ AI预测 预载基因
+✅ [A] 盈利策略库行已写入内存（_lib_entries）
+✅ [A] 第 9 列「🔮 预测」按钮已渲染
+✅ [A] 预测页已预载该策略基因（_preloaded_gene）
+✅ [A] 预测页记录预载品种（_preloaded_symbol）
+✅ [A] 状态栏展示「已载入回测策略基因」横幅
+
+[C] backtest_linkage_for 暴露最优策略基因
+✅ [C] has_backtest=True
+✅ [C] best_gene 与写入基因一致（预测→回测可反向取用）
+✅ [C] strategy_count>=1
+
+[B] AI预测「🧪 回测此策略」→ 回测中心手动回测（同基因）
+✅ [B] 跳转后回测中心切到「手动回测」模式
+✅ [B] 手动回测品种已定位到该品种
+✅ [B] 基因已注入手动回测（override 或已被 __lib__ 消费）
+✅ [B] 反向驱动的手动回测后台完成
+✅ [B] 回测结果已回传（_last_manual 非空）
+✅ [B] 手动回测实际运行的基因 == 联动最优基因(best_gene)
+
+[D] 预测页将预载基因融合进策略信号
+✅ [D] 策略计数 +1（预载策略已计入）
+✅ [D] 策略明细首位为预载策略并标记 preloaded
+✅ [D] 预载策略方向有效（preloaded_dir ∈ {-1,0,1}）
+✅ [D] 多/空计数与方向一致
+
+[E] 导航不再受 PAGE_KEY 覆写影响（修复前 symbol 无法送达预测页）
+✅ [E] 经 stack.currentWidget 导航，基因确实送达预测页 set_symbol
+============================================================
+回测↔预测 双向联动 端到端验证：全部通过
