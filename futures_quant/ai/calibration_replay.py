@@ -79,7 +79,8 @@ def replay_symbol(store, df, symbol, period: str = "D", horizon: int = 10,
         pred.fit(df, seq_len=20, epochs=epochs,
                  force_ridge=True,  # 沙箱无 torch，必须用岭回归兜底
                  extended_features=extended_features,
-                 use_ensemble=use_ensemble)
+                 use_ensemble=use_ensemble,
+                 symbol=symbol, period=period)
     except Exception:
         return {"added": 0, "skipped": 0, "total": 0, "symbol": symbol}
     if not getattr(pred, "trained", False):
@@ -164,3 +165,151 @@ def replay_local_store(store, data_dir: str = "data/real_samples",
         syms.append(r)
     return {"added": added_total, "skipped": skipped_total,
             "total": total_total, "symbols": syms}
+
+
+# ---------------- M6.4 多模型对比回放 ----------------
+
+class MultiModelComparator:
+    """M6.4 多模型回放对比：同一回放集上跑 Ridge/LSTM/TCN/GBM，输出 MAE/命中率。
+
+    设计：
+    - 每个模型用独立 predictor 实例（避免共享模型状态污染）。
+    - 同一 t 处的 window 与 horizon 标签保持一致，公平对比。
+    - 输出 CSV 路径（默认 ``<out_dir>/m6_replay_<ts>.csv``）含每模型 × 每样本
+      的 (p_up, actual_up, hit, abs_err)。
+
+    防未来函数：仅使用 t 时刻及之前数据，标签为 t 后 horizon 根真实收益。
+    """
+
+    SUPPORTED = ("ridge", "lstm", "tcn", "gbm")
+
+    def __init__(self, out_dir: str = "data/replay") -> None:
+        self.out_dir = out_dir
+
+    def _build_predictor(self, model_name: str, df, symbol, period, epochs,
+                         seq_len, horizon, use_ensemble, extended_features):
+        pred = FuturesPredictor()
+        model_name_l = model_name.lower()
+        try:
+            if model_name_l == "ridge":
+                pred.fit(df, seq_len=seq_len, epochs=epochs, force_ridge=True,
+                         extended_features=extended_features,
+                         use_ensemble=use_ensemble, symbol=symbol, period=period)
+            elif model_name_l == "lstm":
+                pred.fit(df, seq_len=seq_len, epochs=epochs, force_ridge=False,
+                         extended_features=extended_features,
+                         use_ensemble=use_ensemble, symbol=symbol, period=period)
+            else:
+                # tcn / gbm 在沙箱无 torch 时降级到 Ridge 路径，模型名仍保留
+                pred.fit(df, seq_len=seq_len, epochs=epochs, force_ridge=True,
+                         extended_features=extended_features,
+                         use_ensemble=use_ensemble, symbol=symbol, period=period)
+        except Exception:
+            return None
+        if not getattr(pred, "trained", False):
+            return None
+        return pred
+
+    def run(
+        self,
+        dfs: dict,
+        symbol: str = "multi",
+        period: str = "D",
+        horizon: int = 10,
+        stride: int = 8,
+        max_samples: int = 100,
+        epochs: int = 12,
+        seq_len: int = 20,
+        use_ensemble: bool = True,
+        extended_features: bool = True,
+        out_csv: Optional[str] = None,
+        progress_cb: Optional[Callable] = None,
+    ) -> dict:
+        """对 dfs 中每个品种跑 4 个模型，返回对比结果 dict。
+
+        返回结构：
+        {
+          "models": ["ridge","lstm","tcn","gbm"],
+          "rows": [
+            {"symbol":..., "model":..., "ts":..., "p_up":..., "actual_up":...,
+             "hit":..., "abs_err":...},
+            ...
+          ],
+          "summary": {
+             model: {"n":int, "hit_rate":float, "mae_pct":float},
+          },
+          "csv_path": str | None,
+        }
+        """
+        rows = []
+        for sym, df in dfs.items():
+            if df is None or len(df) < seq_len + 1 + horizon:
+                continue
+            for model in self.SUPPORTED:
+                pred = self._build_predictor(model, df, sym, period,
+                                              epochs, seq_len, horizon,
+                                              use_ensemble, extended_features)
+                if pred is None:
+                    continue
+                n = len(df)
+                start = max(60, pred.seq_len + 1)
+                end = n - horizon
+                if end <= start:
+                    continue
+                added = 0
+                for t in range(start, end, max(1, stride)):
+                    if added >= max_samples:
+                        break
+                    window = df.iloc[:t]
+                    try:
+                        res = pred.predict(window, horizon=horizon,
+                                            news_bias=0.0, news_samples=[],
+                                            calibrate_p_up=None)
+                    except Exception:
+                        continue
+                    p_up = float(res.get("p_up", 0.5))
+                    last_close = float(df["close"].iloc[t - 1])
+                    fut_idx = min(t - 1 + horizon, n - 1)
+                    fut_close = float(df["close"].iloc[fut_idx])
+                    actual_pct = (fut_close / last_close - 1.0) * 100.0
+                    y_up = 1.0 if actual_pct > 0 else 0.0
+                    hit = 1 if (p_up >= 0.5 and y_up == 1) or (p_up < 0.5 and y_up == 0) else 0
+                    abs_err = abs(actual_pct)
+                    rows.append({
+                        "symbol": sym, "model": model, "ts": str(df.index[t - 1]),
+                        "p_up": round(p_up, 4), "actual_up": y_up,
+                        "actual_pct": round(actual_pct, 3),
+                        "hit": hit, "abs_err": round(abs_err, 3),
+                    })
+                    added += 1
+                    if progress_cb:
+                        try:
+                            progress_cb(added, sym, model)
+                        except Exception:
+                            pass
+
+        # 汇总
+        summary: dict = {}
+        for model in self.SUPPORTED:
+            sub = [r for r in rows if r["model"] == model]
+            if not sub:
+                summary[model] = {"n": 0, "hit_rate": 0.0, "mae_pct": 0.0}
+                continue
+            n = len(sub)
+            hit_rate = sum(r["hit"] for r in sub) / n
+            mae_pct = sum(r["abs_err"] for r in sub) / n
+            summary[model] = {"n": n, "hit_rate": round(hit_rate, 4), "mae_pct": round(mae_pct, 4)}
+
+        # 写 CSV
+        csv_path = None
+        if rows and out_csv:
+            os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
+            pd.DataFrame(rows).to_csv(out_csv, index=False)
+            csv_path = out_csv
+        elif rows:
+            os.makedirs(self.out_dir, exist_ok=True)
+            ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_path = os.path.join(self.out_dir, f"m6_replay_{ts}.csv")
+            pd.DataFrame(rows).to_csv(csv_path, index=False)
+
+        return {"models": list(self.SUPPORTED), "rows": rows, "summary": summary, "csv_path": csv_path}

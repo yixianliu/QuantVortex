@@ -23,6 +23,7 @@ from futures_quant.ai.predictor import FuturesPredictor  # noqa: E402
 from futures_quant.ai.feedback import reliability_calibration  # noqa: E402
 from futures_quant.ai.calibration_replay import (  # noqa: E402
     replay_symbol, load_bars_from_csv, discover_local_samples,
+    MultiModelComparator,
 )
 from futures_quant.data.synthetic import generate_bars  # noqa: E402
 
@@ -105,9 +106,41 @@ def test_load_bars_from_real_csv():
           f"discover 命中 {len(found)} 个文件）")
 
 
+def test_m6_multi_model_replay():
+    """M6.4 多模型对比：Ridge/LSTM/TCN/GBM 在同一回放集上跑 MAE/命中率。"""
+    df1 = generate_bars(symbol="rb.SHFE", n=250, mode="mixed", seed=20260811, freq="1min")
+    df2 = generate_bars(symbol="au.SHFE", n=250, mode="trend", seed=20260812, freq="1min")
+    for d in (df1, df2):
+        d["datetime"] = pd.to_datetime(d["datetime"])
+        d = d.set_index("datetime").sort_index()
+    comparator = MultiModelComparator()
+    result = comparator.run(
+        {"rb.SHFE": df1, "au.SHFE": df2},
+        horizon=5, stride=5, max_samples=40, epochs=10, seq_len=20,
+    )
+    assert "summary" in result and "rows" in result
+    for m in ("ridge", "lstm", "tcn", "gbm"):
+        assert m in result["summary"], f"missing model summary {m}"
+        s = result["summary"][m]
+        assert s["n"] >= 30, f"model {m} sample too few: {s['n']}"
+        assert 0.0 <= s["hit_rate"] <= 1.0
+        assert s["mae_pct"] >= 0.0
+    # CSV 输出
+    if result.get("csv_path"):
+        assert os.path.exists(result["csv_path"])
+        csv_df = pd.read_csv(result["csv_path"])
+        assert {"model", "p_up", "hit", "abs_err"}.issubset(csv_df.columns)
+        print(f"M6 多模型回放 CSV: {result['csv_path']}")
+    print("M6 多模型回放 summary:")
+    for m, s in result["summary"].items():
+        print(f"  {m:6s} n={s['n']:4d} hit_rate={s['hit_rate']:.3f} mae_pct={s['mae_pct']:.3f}")
+    print("PASS: M6.4 多模型回放对比")
+
+
 if __name__ == "__main__":
     app = QApplication.instance() or QApplication([])
     test_save_closed_prediction_and_readback()
     test_replay_symbol_builds_calibration()
     test_load_bars_from_real_csv()
+    test_m6_multi_model_replay()
     print("\n历史回放校准：全部断言通过 ✅")

@@ -3,7 +3,7 @@
 **基线版本**: 3.1.0  
 **目标版本**: 4.0.0  
 **开始时间**: 2026-09-20  
-**当前阶段**: P2 策略与 AI（✅ 已完成）
+**当前阶段**: P3 数据与 AI 融合（✅ 已完成）
 
 ## 基线校验结果
 - 版本确认: futures_quant.__version__ == "3.1.0" ✓
@@ -51,4 +51,30 @@
 - 工作区存在大量未提交改动，建议阶段性打 tag baseline-v4.0-P2。
 
 ## 下一步
-P3 数据与 AI 融合（M6.x 横截面/板块/打分卡/回放/蒙特卡洛/Brinson 归因 + M8.x 消息面/持仓/基差/宏观/综合面板/预警）。归位已完成，可直接开 P3。
+P4 UI 与进化（M1.1~M1.6 UI/交互 + M7.1~M7.6 进化/自学习）。P3 已完场，可直接开 P4。
+
+## P3 数据与 AI 融合（本轮完成 2026-09-20）
+### M6 横截面 / 多模型 / 风险
+- [x] M6.1 横截面打分 - `ai/cross_section.py`（compute_scores/rank_symbols/heatmap，39 品种 <2s），test_cross_section.py 全绿
+- [x] M6.2 板块因子 - `analysis/sector.py`（SectorFactor：6 板块映射、因子收益、板块内 rank、成员相关度），test_sector.py 全绿
+- [x] M6.3 多因子打分卡 - `analysis/scorecard.py`（技术面/量能/AI概率/板块 4 项，缺失→0.5 中性），test_scorecard.py 全绿
+- [x] M6.4 多模型回放 - `ai/calibration_replay.py` 追加 MultiModelComparator（ridge/lstm/tcn/gbm 4 模型对比 + CSV 落盘），test_calibration_replay.py 全绿
+- [x] M6.5 蒙特卡洛 - `risk/monte_carlo.py`（mc_equity：bootstrap 1000 次、P5/P50/P95），test_monte_carlo.py 全绿
+- [x] M6.6 Brinson 归因 - `analysis/brinson_attribution.py`（配置/选股/交互 + 策略归因），test_brinson_attribution.py 全绿
+
+### M8 市场信息
+- [x] M8.1 新闻聚合 - `ai/news_feed.py` 追加 NewsAggregator（4 源并发 + 去重 + tfidf_sentiment∈[0,1]），test_news_feed.py 全绿
+- [x] M8.2 持仓排行 - `data/position_rank.py`（多空 Top-N 占比、集中度、多空比），test_position_rank.py 全绿
+- [x] M8.3 基差 / 权证 - `data/basis.py`（basis/basis_chg/basis_rank）+ `data/warrant.py`（warrant_factor：chg/supply_signal/z_score），test_basis.py 全绿
+- [x] M8.4 宏观日历 - `data/macro_calendar.py`（MacroCalendar 30 事件/年 + mark_vol_amplification 事件窗口波动放大标记），test_macro_calendar.py 全绿
+- [x] M8.5 综合信号面板 - `analysis/scorecard.py` 扩展 FULL_WEIGHTS 8 项（+news/position/basis/event），include_full=True 启用，test_scorecard_full.py 全绿
+- [x] M8.6 政策事件预警 - `alerts/engine.py` 新增 event 规则类型 + scan_events（事件→阈值→通知，接 M8.4 MacroCalendar，冷却去重，单事件一次推送），test_alerts.py 全绿
+
+### P3 阶段门禁（全部通过）
+- [x] `python -m py_compile` 全 P3 文件绿
+- [x] `test_all_pages.py` 全绿（rc=0）
+- [x] `build_tools/secret_scan.py` 绿（exit 0，无密钥泄露）
+- [x] P3 全 12 个模块 e2e 测试 rc=0（cross_section/sector/scorecard/calibration_replay/monte_carlo/brinson_attribution/news_feed/position_rank/basis/macro_calendar/scorecard_full/alerts）
+
+### 修复的既有缺陷
+- **build_features 契约错位（M5.1 遗留）**：`ai/features.py::build_features` 曾返回 2 元组 `(F, names)`，但 `predictor._features` / `ensemble` 按 3 元组 `(ind, F, names)` 解包，致 test_calibration_replay / test_features_no_lookahead / test_predictor_model ImportError。统一为 3 元组并同步 3 个测试。

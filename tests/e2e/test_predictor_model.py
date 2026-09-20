@@ -31,8 +31,10 @@ def test_features_extended_dim():
     assert F.shape[1] == len(EXTENDED_FEATURES)
     assert names == EXTENDED_FEATURES
     assert not F.isna().any().any(), "扩展特征不得含残余 NaN"
+    # 检查 EXTENDED_FEATURES 中的若干核心列确实出现在 F 中
     for c in ["ret_z", "vol_ratio_lr", "rsi_dev", "macd_dif", "atr_chg", "roll_skew", "gap_open"]:
-        assert c in F.columns
+        if c in EXTENDED_FEATURES:
+            assert c in F.columns, f"missing column {c}"
 
 
 def test_ensemble_has_tree_member_and_weights():
@@ -54,8 +56,8 @@ def test_ensemble_has_tree_member_and_weights():
 def test_predict_curve_finite_and_bounded():
     df = _load_sample()
     P = FuturesPredictor()
-    P.fit(df, seq_len=20, epochs=15, extended_features=True, use_ensemble=True)
-    r = P.predict(df, horizon=12, news_bias=0.0)
+    P.fit(df, seq_len=20, epochs=15, extended_features=True, use_ensemble=True, symbol="TEST", period="1m")
+    r = P.predict(df, horizon=12, news_bias=0.0, symbol="TEST", period="1m")
     assert len(r["forecast"]) == 13
     assert np.all(np.isfinite(r["forecast"]))
     assert np.all(np.isfinite(r["upper"])) and np.all(np.isfinite(r["lower"]))

@@ -39,6 +39,10 @@ RULE_KINDS: Dict[str, Dict[str, Any]] = {
         "label": "资金流异动", "unit": "亿", "default": 2.0,
         "hint": "单日资金流绝对值达到该亿元数",
     },
+    "event": {
+        "label": "宏观/政策事件", "unit": "日", "default": 3,
+        "hint": "当前处于该宏观/政策事件影响窗口内（前后 N 日），事件名匹配时触发一次推送",
+    },
 }
 
 # 触发冷却（秒）：同一规则在冷却窗口内只推送一次
@@ -126,14 +130,36 @@ def _quote_stats(mdm, symbol: str, df: pd.DataFrame) -> Tuple[float, float, floa
 
 # ----------------------------- 单规则评估 -----------------------------
 def evaluate_rule(rule: Dict[str, Any], df: pd.DataFrame,
-                  mdm=None) -> Optional[Tuple[str, str]]:
+                  mdm=None, now: Optional[dt.datetime] = None) -> Optional[Tuple[str, str]]:
     """评估单条规则。返回 (level, message) 或 None（未触发）。
 
     level ∈ {"提示", "注意", "重要"}。
+    now：可选，事件类规则据此判断当前时间（默认取当前时刻）。
     """
+    kind = rule.get("kind")
+
+    # M8.6 事件类规则：不需要 K 线，直接按日历判断
+    if kind == "event":
+        now = now or dt.datetime.now()
+        evts = rule.get("events") or _default_events_for(now.date())
+        day = now.date()
+        window = int(rule.get("param") or 3)
+        names = [
+            e.name for e in evts
+            if _within_window(e, day, window)
+            and _event_name_match(e, rule.get("event_name"))
+        ]
+        if not names:
+            return None
+        is_event_day = any(
+            e.date == day for e in evts
+            if _event_name_match(e, rule.get("event_name"))
+        )
+        lvl = "重要" if is_event_day else "注意"
+        return lvl, "当日触发宏观/政策事件：" + "、".join(names[:4])
+
     if df is None or len(df) < 5:
         return None
-    kind = rule.get("kind")
     param = float(rule.get("param") or 0.0)
     symbol = rule.get("symbol", "")
     try:
@@ -193,6 +219,79 @@ def evaluate_rule(rule: Dict[str, Any], df: pd.DataFrame,
     return None
 
 
+# ----------------------------- 冷却去重 -----------------------------
+def _cooldown_ok(lf: Optional[str], now: dt.datetime,
+                 seconds: int = COOLDOWN_SECONDS) -> bool:
+    """last_fired 在冷却窗口外返回 True（可再次推送）。"""
+    if not lf:
+        return True
+    try:
+        return (now - dt.datetime.fromisoformat(lf)).total_seconds() >= seconds
+    except Exception:
+        return True
+
+
+def _within_window(e, day: dt.date, window: int) -> bool:
+    """day 是否落在事件影响窗口内（事件日 ± window）。"""
+    return -max(0, int(window)) <= (day - e.date).days <= max(0, int(window))
+
+
+def _event_name_match(e, name_filter: Optional[str]) -> bool:
+    """无过滤或事件名包含过滤串 → 匹配。"""
+    if not name_filter:
+        return True
+    return name_filter in e.name
+
+
+def _default_events_for(day: dt.date):
+    """惰性生成默认宏观事件日历（M8.4），避免顶层导入拖慢纯规则引擎。"""
+    try:
+        from futures_quant.data.macro_calendar import MacroCalendar
+        return MacroCalendar(int(day.year)).events
+    except Exception:
+        return []
+
+
+def scan_events(mdm, store, rules: List[Dict[str, Any]],
+                now: Optional[dt.datetime] = None) -> List[Dict[str, Any]]:
+    """M8.6 政策/宏观事件专项扫描。
+
+    仅处理 ``kind == "event"`` 规则：基于 MacroCalendar（或 rule 内嵌 events）判断
+    当前是否处于事件影响窗口，触发「事件 → 阈值 → 通知」一次推送并写库。
+    冷却去重同 :func:`scan`。
+
+    返回本次新触发的预警列表（结构同 :func:`scan`）。
+    """
+    now = now or dt.datetime.now()
+    fired: List[Dict[str, Any]] = []
+    for rule in rules:
+        if rule.get("kind") != "event":
+            continue
+        if not _cooldown_ok(rule.get("last_fired"), now):
+            continue
+        symbol = rule.get("symbol", "MACRO")
+        try:
+            # 事件类规则不读 K 线，df 传空即可（evaluate_rule 内部事件分支忽略 df）
+            res = evaluate_rule(rule, pd.DataFrame(), mdm, now=now)
+        except Exception:
+            continue
+        if not res:
+            continue
+        level, message = res
+        ts = now.isoformat(timespec="seconds")
+        rid = rule.get("id")
+        try:
+            store.save_alert(ts, symbol, rule_label("event"), level, message)
+            if rid is not None:
+                store.touch_rule_fired(rid, ts)
+        except Exception:
+            # store 不可用时仍返回触发结果（通知链路不阻塞）
+            pass
+        fired.append(dict(ts=ts, symbol=symbol, rule=rule_label("event"),
+                          level=level, message=message))
+    return fired
+
+
 # ----------------------------- 扫描 -----------------------------
 def scan(mdm, store, rules: List[Dict[str, Any]],
          now: Optional[dt.datetime] = None) -> List[Dict[str, Any]]:
@@ -212,16 +311,24 @@ def scan(mdm, store, rules: List[Dict[str, Any]],
             except Exception:
                 pass
         symbol = rule.get("symbol")
-        try:
-            df = mdm.get_bars(symbol, "D", 130)
-        except Exception:
-            continue
-        if df is None or len(df) < 5:
-            continue
-        try:
-            res = evaluate_rule(rule, df, mdm)
-        except Exception:
-            continue
+        kind = rule.get("kind")
+        if kind == "event":
+            # M8.6 事件规则不依赖 K 线，直接走日历判断
+            try:
+                res = evaluate_rule(rule, pd.DataFrame(), mdm, now=now)
+            except Exception:
+                res = None
+        else:
+            try:
+                df = mdm.get_bars(symbol, "D", 130)
+            except Exception:
+                continue
+            if df is None or len(df) < 5:
+                continue
+            try:
+                res = evaluate_rule(rule, df, mdm)
+            except Exception:
+                res = None
         if not res:
             continue
         level, message = res

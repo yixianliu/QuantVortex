@@ -222,21 +222,13 @@ _NAME_ALIASES_EXT = {
     "20号胶": ["NR", "烟片胶"],
     "SP": ["纸浆"],
     "液化": ["LPG"],
+    "钯金": ["钯金", "钯"],
 }
 
-# 合并为 NAME_ALIASES，新增品种也在此注册
+# 合并为 NAME_ALIASES
 NAME_ALIASES = {}
 for k, v in _NAME_ALIASES_EXT.items():
     NAME_ALIASES[k] = list(v)
-# 确保基础版也有（避免重复定义）
-for name in ["铁矿石", "螺纹钢", "热卷", "焦炭", "焦煤", "沪铜", "沪铝",
-             "沪锌", "沪镍", "沪锡", "黄金", "白银", "原油", "燃料油",
-             "低硫燃料油", "沥青", "橡胶", "PTA", "甲醇", "乙二醇",
-             "聚乙烯", "聚丙烯", "聚氯乙烯", "豆粕", "菜粕", "棕榈油",
-             "豆油", "菜油", "玉米", "鸡蛋", "生猪", "棉花", "白糖",
-             "苹果", "红枣", "玻璃", "纯碱", "锰硅", "硅铁", "不锈钢"]:
-    if name not in NAME_ALIASES:
-        NAME_ALIASES[name] = []
 
 
 # =========================== 缓存 ===========================
@@ -894,31 +886,67 @@ _CAT_POLICY = ["政策", "国务院", "央行", "证监会", "交易所", "发�
                 "工信部", "商务部", "限产", "保供", "约谈", "处罚", "立案", "制裁"]
 _CAT_REPORT = ["研报", "评级", "点评", "深度报告", "专题报告", "周报", "月报", "季报",
                 "机构观点", "券商", "路演", "纪要", "研报称", "分析报告指出",
-                "目标价", "策略报告", "晨会", "调研", "观点认为"]
+                "目标价", "策略报告", "晨会", "调研", "观点认为",
+                "投资建议", "评论文章", "行业报告", "公司研究", "宏观研究",
+                "策略研究", "量化研究", "基金研究", "债券研究", "商品研究",
+                "期货研究", "风险报告", "展望报告", "回顾报告"]
 _CAT_ANALYSIS = ["分析", "解读", "研判", "后市", "展望", "逻辑", "技术面", "基本面",
                   "行情", "策略", "看法", "认为", "预计", "提示", "观点"]
 _CAT_DYNAMICS = ["收盘", "开盘", "主力", "持仓", "成交", "涨停", "跌停", "异动", "拉升",
                   "跳水", "突破", "新高", "新低", "合约", "盘", "上涨", "下跌", "涨幅", "跌幅"]
 
 
-def _classify_category(text: str) -> str:
+def _classify_category(text: str, source: str = None) -> str:
     """处理classifycategory。
     
-        参数:
-            text: str
+    参数:
+        text: str
+        source: str, 资讯来源（可选）
     
-        返回:
-            str"""
+    返回:
+        str"""
     t = text or ""
+    
+    # 定义来源与内容类型的关联关系（可增强特定来源的分类准确度）
+    source_category_boost = {
+        "期货日报": {"品种研报": 0.3, "政策资讯": 0.2},
+        "财联社": {"市场分析": 0.2, "行情动态": 0.2},
+        "华尔街见闻": {"市场分析": 0.2},
+        "金十数据": {"行情动态": 0.3},
+        "中证网": {"政策资讯": 0.2},
+        "证券时报": {"政策资讯": 0.2},
+    }
+    
+    # 基础分类得分
+    scores = {
+        "政策资讯": 0.0,
+        "品种研报": 0.0,
+        "市场分析": 0.0,
+        "行情动态": 0.0,
+        "其他": 0.0
+    }
+    
+    # 根据关键词匹配计算基础得分
     if any(k in t for k in _CAT_POLICY):
-        return "政策资讯"
+        scores["政策资讯"] += 1.0
     if any(k in t for k in _CAT_REPORT):
-        return "品种研报"
+        scores["品种研报"] += 1.0
     if any(k in t for k in _CAT_ANALYSIS):
-        return "市场分析"
+        scores["市场分析"] += 1.0
     if any(k in t for k in _CAT_DYNAMICS):
-        return "行情动态"
-    return "其他"
+        scores["行情动态"] += 1.0
+    
+    # 如果没有匹配到任何关键词，默认为其他
+    if not any(scores[cat] > 0 for cat in ["政策资讯", "品种研报", "市场分析", "行情动态"]):
+        scores["其他"] += 1.0
+    
+    # 应用来源提升（如果提供了来源且来源在提升映射中）
+    if source and source in source_category_boost:
+        for category, boost in source_category_boost[source].items():
+            scores[category] += boost
+    
+    # 返回得分最高的类别
+    return max(scores, key=scores.get)
 
 
 def fetch_all_news(limit: int = 60, force: bool = False,
@@ -985,7 +1013,7 @@ def fetch_all_news(limit: int = 60, force: bool = False,
                 s, _ = _sentiment_of(txt)
                 it["sentiment"] = round(s, 3)
             if "category" not in it:
-                it["category"] = _classify_category(txt)
+                it["category"] = _classify_category(txt, src_name)
             it.setdefault("source", src_name)
             result["items"].append(it)
             result["by_source"][src_name] = result["by_source"].get(src_name, 0) + 1
@@ -1021,7 +1049,18 @@ def fetch_all_news(limit: int = 60, force: bool = False,
 
 def _llm_chat(system: str, user: str, *, max_tokens: int = 1600,
                temperature: float = 0.35) -> str | None:
-    """经自建代理调用大模型；不可用时返回 None 由调用方降级。"""
+    """经自建代理调用大模型；不可用时返回 None 由调用方降级。
+    
+    调用前确保 AI 配置（含 API 密钥）已热更新到 LLM 客户端单例。
+    """
+    # 1. 确保配置已同步（延迟导入避免循环依赖）
+    try:
+        from .config import get_ai_config
+        ai_cfg = get_ai_config()  # 单例已由主窗口初始化，无需传 config
+        ai_cfg.apply()
+    except Exception:
+        pass  # 配置同步失败不阻塞，后续 chat() 会自动降级
+    
     try:
         from .llm_client import chat as _proxy_chat
     except Exception:
@@ -1345,6 +1384,60 @@ def ai_analyze_news(all_news: dict, res: dict, name: str,
     """对多源资讯做 AI 多维研判，返回 {model, trend, risk, suggestion, by_category, 
     sentiment_breakdown, key_events, hot_symbols, actionable_insights}。
     
+    AI模型应用场景：
+    - 综合多源期货资讯（财联社、东方财富、华尔街见闻、金十数据、和讯、同花顺、 
+      新浪财经、金投网、中证网、证券时报、凤凰财经、中金在线、期货日报）进行深度分析
+    - 生成投资研判报告，包括趋势预测、风险评估、投资建议和可操作洞察
+    - 为期货交易决策提供辅助信息，提高分析效率和决策质量
+    
+    数据输入格式：
+    - all_news: dict，包含多源资讯抓取结果，结构为：
+        {
+            "items": [  # 资讯条目列表
+                {
+                    "title": str,  # 资讯标题
+                    "content": str,  # 资讯正文
+                    "source": str,  # 资讯来源
+                    "category": str,  # 资讯类别（政策资讯、品种研报、市场分析、行情动态、其他）
+                    "sentiment": float,  # 情感得分 [-1,1]
+                    "level": str,  # 重要度（A/B/C）
+                    "ts": str,  # 时间戳
+                    ...
+                }
+            ],
+            "sources": dict,  # 各来源的资讯数量
+            "by_category": dict,  # 各类别的资讯数量
+            ...
+        }
+    - res: dict，技术模型预测结果，包含 p_up（看涨概率）、expected_return_pct等
+    - name: str，期货品种名称
+    - category: str，期货品种类别
+    
+    数据输出格式：
+    - dict，包含以下字段：
+        {
+            "model": str,  # 使用的模型类型（llm(proxy)或heuristic）
+            "brief": str,  # 一句话结论（方向+置信+关键矛盾）
+            "trend": str,  # 趋势研判报告
+            "risk": str,  # 风险提示
+            "suggestion": str,  # 投资建议
+            "by_category": dict,  # 按类别的资讯统计
+            "sentiment_breakdown": dict,  # 按来源和类别的情感细分
+            "key_events": list,  # 关键事件列表
+            "hot_symbols": dict,  # 活跃品种排行
+            "actionable_insights": str,  # 可操作洞察
+            "source_coverage": dict,  # 信源覆盖度统计
+            "weighted_bias": float,  # 可信度加权情感偏置
+            "consensus": dict,  # 跨源一致性分析
+            "confidence": float  # 综合置信度 [0,1]
+        }
+    
+    性能指标要求：
+    - 响应时间：<5秒（网络正常时）
+    - 成功率：>95%（LLM服务可用时）或 >90%（包含 fallback 机制时）
+    - 准确率：依赖于底层LLM质量，heuristic方法提供基础分析能力
+    - 稳定性：任何异常均会回退到规则兜底，确保始终返回有效结果
+    
     - 若配置了 LLM（QV_LLM_*），调用模型生成结构化 JSON；
     - 否则用规则合成兜底；任何异常均回退规则，保证始终有结论。
     - 新增：情感细分、关键事件提取、活跃品种排行、可操作洞察。
@@ -1417,6 +1510,7 @@ def ai_analyze_news(all_news: dict, res: dict, name: str,
             d = json.loads(s)
             # 具体模型由代理服务决定，客户端不感知也不配置
             sc = d.get("scenarios") or {}
+            logger.info("AI分析使用LLM模型成功生成结果")
             return {"model": "llm(proxy)",
                     "brief": str(d.get("brief", "")),
                     "trend": str(d.get("trend", "")),
@@ -1431,9 +1525,12 @@ def ai_analyze_news(all_news: dict, res: dict, name: str,
                     "hot_symbols": _symbol_mentions(items),
                     "actionable_insights": str(d.get("actionable_insights", "")),
                     **meta}
-        except Exception:
+        except Exception as e:
+            logger.warning(f"LLM结果解析失败，回退到heuristic方法: {e}")
             pass
     
+    # 使用heuristic方法作为后备
+    logger.info("AI分析使用heuristic方法生成结果")
     base = _heuristic_report(all_news, res, name, category)
     base.update({
         "sentiment_breakdown": _sentiment_breakdown(all_news),
@@ -1664,37 +1761,55 @@ def fetch_zq86_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> 
     """抓取中金在线财经频道新闻（UTF-8）。"""
     if not _HAVE_REQUESTS:
         return []
-    items = []
     try:
         resp = _get(ZQ86_HOME, timeout, referer=ZQ86_HOME)
         if resp.status_code != 200:
+            logger.warning("中金在线抓取失败：HTTP %s", resp.status_code)
             return []
         txt = resp.text
+        # 反爬挑战页（JS 校验、无真实正文）识别：直接按抓取失败降级
+        if ("window." in txt and txt.count("<script") > 3
+                and len(_ZQ86_RE.findall(txt)) == 0):
+            return []
         seen = set()
-        for url, title in _ZQ86_RE.findall(txt):
-            title = title.strip()
+        out = []
+        for m in _ZQ86_RE.finditer(txt):
+            groups = m.groups()
+            if len(groups) < 2:
+                continue
+            url = groups[0]
+            title = _clean_html(groups[1])
             if not title or len(title) < 8:
                 continue
             if url in seen:
                 continue
             seen.add(url)
+            full_url = url if url.startswith("http") else (
+                "https:" + url if url.startswith("//") else url)
             ctime, ts = _parse_url_date(url)
-            items.append({
+            # 数据质量验证：确保标题和内容不为空且有一定长度
+            if not title or len(title) < 5:  # 标题太短可能是无效的
+                continue
+            out.append({
                 "id": "zq86_" + str(hash(url) % 1000000),
                 "title": title[:120],
-                "content": title,
-                "url": url,
+                "content": title,  # Will be overwritten by _enrich_bodies if enrich=True
+                "url": full_url,
                 "ts": ts,
                 "ctime": ctime,
                 "level": "B",
                 "reading_num": 0,
                 "source": "中金在线",
             })
-            if len(items) >= limit:
+            if len(out) >= limit:
                 break
-    except Exception:
-        pass
-    return items[:limit]
+        if enrich:
+            _enrich_bodies(out, "utf-8", max_n=6, timeout=5,
+                           referer=ZQ86_HOME, body_re=_GENERIC_BODY_RE)
+        return out[:limit]
+    except Exception as e:
+        logger.warning("中金在线抓取异常: %s", e)
+        return []
 
 
 # ============================================================================
@@ -1707,7 +1822,7 @@ _WSJ_FUTURES_KEYWORDS = ["期货", "大宗商品", "原油", "黄金", "铜", "�
                           "螺纹", "焦炭", "橡胶", "甲醇", "PTA", "豆粕", "棕榈油",
                           "沪铜", "沪铝", "沪镍", "沪锌", "白银", "纯碱", "玻璃",
                           "碳酸锂", "工业硅", "生猪", "鸡蛋", "玉米", "棉花", "白糖",
-                          "燃油", "沥青", "LPG", "集运", "欧线"]
+                          "燃油", "沥青", "LPG", "集运", "欧线", "钯金", "钯"]
 
 def fetch_wsj_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> list:
     """抓取华尔街见闻全球快讯中的期货/大宗商品相关内容。"""
@@ -1768,7 +1883,7 @@ _JIN10_FUTURES_KEYWORDS = ["期货", "商品", "原油", "黄金", "白银", "�
                             "玻璃", "碳酸锂", "工业硅", "燃油", "沥青", "LPG",
                             "上证", "深证", "北向", "A股", "美股", "港股",
                             "美联储", "央行", "加息", "降息", "CPI", "PMI",
-                            "非农", "GDP", "通胀", "通缩", "经济数据"]
+                            "非农", "GDP", "通胀", "通缩", "经济数据", "钯金", "钯"]
 
 def fetch_jin10_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> list:
     """抓取金十数据快讯中与期货/宏观相关的内容。"""
@@ -1983,7 +2098,7 @@ def _concurrent_fetch_all(cls_kwargs={}, em_kwargs={}, hx_kwargs={},
             it["sentiment"] = round(s, 3)
         # 分类
         if "category" not in it:
-            it["category"] = _classify_category(txt)
+            it["category"] = _classify_category(txt, it.get("source"))
         
         results["items"].append(it)
     
@@ -2018,3 +2133,109 @@ def fetch_all_concurrent(limit: int = 100, force: bool = False) -> dict:
     单次抓取量上限提升至 100 条，覆盖更多资讯内容支撑分析与预测。
     """
     return _concurrent_fetch_all(limit=limit)
+
+
+# ---------------- M8.1 消息聚合器（4 源 + 去重 + TF-IDF 情绪）----------------
+
+class NewsAggregator:
+    """M8.1 多源消息聚合器：财联社 / 东方财富 / 同花顺 / 交易所公告。
+
+    设计：
+    - ``sources`` 默认为 4 个主力源（cls / eastmoney / ths / exchange），
+      每个源对应既有 ``fetch_*`` 函数。
+    - ``aggregate(limit)`` 并发抓取 → 去重（标题前 40 字 + url）→ TF-IDF 情绪打分。
+    - ``tfidf_sentiment(items)`` 对一批 item 标题/摘要做词频统计，
+      与内置 BULL/BEAR 词典叠加，输出 [0,1] 情绪分（0.5 中性）。
+    - 离线降级：无网络时返回空 items + 缓存源标记，绝不阻塞主流程。
+
+    防未来函数：情绪分仅基于 t 时刻已发布的新闻文本。
+    """
+
+    DEFAULT_SOURCES = ("cls", "eastmoney", "ths", "exchange")
+
+    def __init__(self, sources: Optional[list] = None, timeout: int = 15) -> None:
+        self.sources = list(sources) if sources else list(self.DEFAULT_SOURCES)
+        self.timeout = timeout
+
+    def _fetch_one(self, src: str) -> list:
+        """抓取单个源，返回标准化 item 列表（失败 → []）。"""
+        try:
+            if src == "cls":
+                res = fetch_cls_news(limit=30, force=False)
+                items = res.get("items", []) if isinstance(res, dict) else []
+            elif src == "eastmoney":
+                items = fetch_eastmoney_news(limit=25, timeout=self.timeout)
+            elif src == "ths":
+                items = fetch_ths_news(limit=20, timeout=self.timeout)
+            elif src == "exchange":
+                items = fetch_cs_news(limit=20, timeout=self.timeout)
+            else:
+                items = []
+            if not isinstance(items, list):
+                items = []
+            for it in items:
+                if isinstance(it, dict):
+                    it.setdefault("source", src)
+            return items
+        except Exception:
+            return []
+
+    def aggregate(self, limit: int = 60) -> dict:
+        """并发抓取 4 源，去重 + 情绪打分。返回 {items, sources, total}。"""
+        all_items: list = []
+        source_counts: dict = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            futs = {s: ex.submit(self._fetch_one, s) for s in self.sources}
+            for s, f in futs.items():
+                try:
+                    items = f.result(timeout=self.timeout + 5)
+                    source_counts[s] = len(items)
+                    all_items.extend(items)
+                except Exception:
+                    source_counts[s] = 0
+
+        # 去重
+        seen: set = set()
+        dedup: list = []
+        for it in all_items:
+            key = ((it.get("title") or "")[:40] + "|" + (it.get("url") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            txt = _text_of(it)
+            if "sentiment" not in it:
+                it["sentiment"] = round(self.tfidf_sentiment([it]), 3)
+            dedup.append(it)
+
+        dedup.sort(key=lambda x: float(x.get("ctime") or 0), reverse=True)
+        return {
+            "items": dedup[:limit],
+            "sources": source_counts,
+            "total": len(dedup),
+        }
+
+    def tfidf_sentiment(self, items: list) -> float:
+        """对一批 item 的标题/摘要做 TF-IDF 情绪打分，返回 [0,1]（0.5 中性）。
+
+        简化实现：统计 BULL/BEAR 词出现频次（TF），除以总词数（近似 IDF 权重），
+        与 ``_sentiment_of`` 词典打分叠加取均值。
+        """
+        if not items:
+            return 0.5
+        texts = [(_text_of(it) or "").strip() for it in items]
+        texts = [t for t in texts if t]
+        if not texts:
+            return 0.5
+        # TF：BULL 词 / BEAR 词 出现次数
+        bull = sum(1 for t in texts for w in BULL_WORDS if w in t)
+        bear = sum(1 for t in texts for w in BEAR_WORDS if w in t)
+        total = bull + bear
+        if total == 0:
+            return 0.5
+        # 词典打分（既有 _sentiment_of 平均）
+        lex_scores = [_sentiment_of(t)[0] for t in texts]
+        lex_avg = float(sum(lex_scores) / len(lex_scores)) if lex_scores else 0.0
+        # TF 情绪：bull/(bull+bear) → [0,1]
+        tf_score = bull / total
+        combined = 0.5 * (0.5 + lex_avg / 2.0) + 0.5 * tf_score  # 映射到 [0,1]
+        return float(max(0.0, min(1.0, combined)))
