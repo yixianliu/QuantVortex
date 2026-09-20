@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 import numpy as np
-from ai.garch import GARCH
+from futures_quant.ai.garch import GARCH
 
 def test_garch():
     # 生成一些假设的收益率数据

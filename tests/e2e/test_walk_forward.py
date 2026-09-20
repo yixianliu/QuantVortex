@@ -14,7 +14,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 import numpy as np
-from ai.validation import WalkForward
+from futures_quant.ai.validation import WalkForward
 
 
 def _mean_model(train: np.ndarray, target: np.ndarray):

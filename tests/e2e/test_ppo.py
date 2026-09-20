@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 import numpy as np
-from ai.ppo import PPO, ACTIONS
+from futures_quant.ai.ppo import PPO, ACTIONS
 
 
 def _make_env(n_state: int, reward_rule: str = "plus"):

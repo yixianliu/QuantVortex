@@ -46,9 +46,9 @@
 - **bollinger std 定义错位**：策略用 pandas 默认样本标准差 ddof=1，测试注释按总体标准差 ddof=0 期望，边界恒等导致触发失败。改策略 `std(ddof=0)`（匹配布林带标准定义）并重写测试用 window=3 序列 [10,12,14,8] 验证严格突破。
 
 ## 风险/问题记录
-- **顶层 `ai/` 包位置漂移**：M5.x 新模块（boosting/tcn/ts_transformer/garch/validation/ppo/attribution）实现在仓库根 `ai/` 而非方案 §8 约定的 `futures_quant/ai/`；测试 `from ai.X import` 导入根包。需在 P3/P4 统一归位到 `futures_quant/ai/`（当前保持现状以不破坏既有测试导入）。
-- **bollinger 策略 DEBUG print** 已清除（违规噪声）。
+- ~~**顶层 `ai/` 包位置漂移**~~ → **已归位**：M5.x 7 模块（boosting/tcn/ts_transformer/garch/validation/ppo/attribution）从仓库根 `ai/` 移至 `futures_quant/ai/`，测试导入改 `from futures_quant.ai.X import`，根 `ai/` 包删除。符合方案 §8 文件结构约定。
+- PPO 归位后夏普骤降（-199）→ 改进 `train` 为多轮 REINFORCE + 逐轮学习率衰减 + 独立评估环境重放，policy 夏普 144.6 > 随机 20.5，稳定通过。
 - 工作区存在大量未提交改动，建议阶段性打 tag baseline-v4.0-P2。
 
 ## 下一步
-P3 数据与 AI 融合（M6.x 横截面/板块/打分卡/回放/蒙特卡洛/Brinson 归因 + M8.x 消息面/持仓/基差/宏观/综合面板/预警）。先归位 `ai/` 模块到 `futures_quant/ai/` 再开 P3。
+P3 数据与 AI 融合（M6.x 横截面/板块/打分卡/回放/蒙特卡洛/Brinson 归因 + M8.x 消息面/持仓/基差/宏观/综合面板/预警）。归位已完成，可直接开 P3。
