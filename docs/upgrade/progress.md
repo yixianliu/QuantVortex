@@ -78,3 +78,35 @@ P4 UI 与进化（M1.1~M1.6 UI/交互 + M7.1~M7.6 进化/自学习）。P3 已�
 
 ### 修复的既有缺陷
 - **build_features 契约错位（M5.1 遗留）**：`ai/features.py::build_features` 曾返回 2 元组 `(F, names)`，但 `predictor._features` / `ensemble` 按 3 元组 `(ind, F, names)` 解包，致 test_calibration_replay / test_features_no_lookahead / test_predictor_model ImportError。统一为 3 元组并同步 3 个测试。
+
+## P4 UI 与自进化（本轮完成 2026-09-20）
+
+### M7 进化 / 自学习
+- [x] M7.1 三轨基因进化 - `strategy/evolver.py`（Genome strategy/model/risk，random/mutate/crossover/run，tournament 双亲），test_evolver.py 全绿
+- [x] M7.2 适应度函数 - `strategy/evolver.py::compute_fitness`（0.4·sharpe+0.3·calmar-0.2·max_dd-0.1·dd_dur，跨品种稳定性罚项），test_fitness.py 全绿
+- [x] M7.3 进化存档 - `storage/evolution_store.py`（原子 JSON + .bak 崩溃恢复、load_with_fallback、收敛度、list_runs、体量截断），test_evolution_store.py 全绿
+- [x] M7.4 反馈闭环 - `ai/feedback.py`（record_trade_feedback + trigger_retrain 阈值门控）+ `app/scheduler.py`（FeedbackScheduler 周期/按需触发），test_feedback_loop.py 全绿
+- [x] M7.5 漂移检测 - `ai/drift.py`（近 60 日命中率 vs 训练基线偏差、pearson、no_data 降级），test_drift.py 全绿
+- [x] M7.6 知识蒸馏 - `strategy/distill.py`（最优基因 → 可读规则 rules.json，fidelity ≤10% sharpe 衰减，select_top），test_distill.py 全绿
+
+### M1 UI / 交互
+- [x] M1.1 图表引擎抽象 - `ui/chart_engine.py`（ChartData + PainterKLineBackend/PyQtGraphBackend + make_chart 自动回退），test_chart_engine.py 全绿
+- [x] M1.2 设计系统 - `ui/design_system.py`（规范色板 #1e1e2e/#dcdcdc/#ff4757/#2ed573 + apply_design 一键全量刷新 + reset_design 回归护栏），`main_window._apply_theme` 接入 apply_design，test_design_system.py 全绿
+- [x] M1.3 画线工具 - `ui/draw_tools.py`（水平/垂直/斐波那契/趋势/矩形/文本 + AtomicJSON 持久化 .bak 崩溃恢复），test_draw_persistence.py 全绿
+- [x] M1.4 多周期对照 - `ui/multi_period_widget.py`（4 图纵向堆叠 + MultiPeriodSync 同步缩放 20~200 + 跨图十字对齐 + Ctrl+滚轮 + 主题），test_multi_period.py 全绿
+- [x] M1.5 持仓模拟 - `broker/paper_portfolio.py`（资金/保证金/风险度 >80%告警/强平100%）+ `ui/paper_trading_page.py`（BasePage 契约 + StatCard 仪表盘 + 开平仓/盯市），test_paper_trading.py 全绿
+- [x] M1.6 报告导出 - `app/report_service.py`（ReportBundle + reportlab PDF + openpyxl Excel，缺库优雅降级，页脚风险声明），test_report_export.py 全绿
+
+### P4 阶段门禁（全部通过）
+- [x] `python -m py_compile` 全 P4 源文件绿
+- [x] `test_all_pages.py` 全绿（rc=0）
+- [x] `build_tools/secret_scan.py` 绿（exit 0，无密钥泄露）
+- [x] P4 全 12 个模块 e2e 测试 rc=0（evolver/fitness/evolution_store/feedback_loop/drift/distill/chart_engine/draw_persistence/multi_period/paper_trading/report_export/design_system）
+
+### 修复的既有缺陷
+- **PaperTradingPage BasePage 契约错位**：UI 壳初版按 `BasePage(parent)` 构造，但 `BasePage.__init__(mdm, store, config, session)`；且 `color_pnl` 面向 QTableWidgetItem 被误用于 StatCard。改为 `super().__init__(mdm, store, config, session)` + `StatCard.set_value(text, color=...)`（涨跌色取 pal up/down，风险度 safe/warn/danger 映射 绿/黄/红）。
+- **MultiPeriodSync zoom_step 误引用**：wheelEvent 初版含无效 `self._sync.zoom_step()` 表达式，清理为 Ctrl+滚轮 → zoom_in/zoom_out，普通滚轮回退默认行为。
+- **report_service 空 bundle Excel sheet 断言**：空 sections 不建「说明」sheet，测试断言对齐实现。
+
+## 下一步
+P4 完成，v4.0 全部四阶段（P1~P4）交付。建议打 tag `baseline-v4.0` 并（可选）按 §8 跑一次 `build_tools/build_exe.py` 验证产物无密钥 + EXE offscreen 冒烟。

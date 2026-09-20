@@ -31,6 +31,8 @@ from .simple_backtest_page import SimpleBacktestPage
 from .ai_settings_dialog import AIConfigDialog
 from ..storage.config_manager import ConfigManager, SessionState
 from ..runtime import get_font_paths
+from .. import __version__ as APP_VERSION
+from .responsive_layout import get_layout_manager
 
 AGNES_API_BASE = "https://api.agnes-ai.cn/v1/chat/completions"
 
@@ -61,6 +63,10 @@ class MainWindow(QMainWindow):
             self.session = SessionState()
         self.theme = self.config.get("ui.theme", "dark")
 
+        # ---- 早期初始化 AI 配置：确保环境变量中的 API 密钥尽早加载到单例 ----
+        from ..ai.config import get_ai_config
+        get_ai_config(self.config)
+
         from ..data.market_data import MarketDataManager
         from ..storage.analysis_store import AnalysisStore
         src = self.config.get("data.source", "sina")
@@ -74,10 +80,14 @@ class MainWindow(QMainWindow):
         self._connect_deferred.timeout.connect(self._do_connect)
         self._connect_deferred.start(0)  # 下一轮事件循环再执行
 
-        self.setWindowTitle("期货智能分析预测系统")
-        # 最小尺寸约束：避免窗口过小导致组件挤压 / 遮挡
-        self.setMinimumWidth(1100)
-        self.setMinimumHeight(680)
+        # ---- 响应式布局管理 ----
+        self._layout_mgr = get_layout_manager()
+
+        self.setWindowTitle(f"期货智能分析预测系统  v{APP_VERSION}")
+        # 根据分辨率动态调整最小尺寸约束
+        min_w, min_h = self._layout_mgr.get_min_window_size()
+        self.setMinimumWidth(min_w)
+        self.setMinimumHeight(min_h)
         self._build()
         self._apply_theme()
         self._restore_geometry()
@@ -98,6 +108,24 @@ class MainWindow(QMainWindow):
         self.nav.setCurrentRow(0)
         self.stack.setCurrentIndex(0)
 
+        # ---- 服务注册：解耦 UI 与业务层 ----
+        try:
+            from futures_quant.app.service_locator import provide
+            from futures_quant.app.backtest_service import BacktestService
+
+            # 注册核心服务
+            provide("market_data_manager", self.mdm)
+            provide("analysis_store", self.store)
+            provide("config_manager", self.config)
+            provide("session_state", self.session)
+            
+            # 创建并注册回测服务
+            backtest_service = BacktestService(config=self.config, feed=self.mdm.feed)
+            provide("backtest_service", backtest_service)
+        except ImportError:
+            # 如果服务层尚未完全实现，降级为不注册
+            pass
+
     # ------------------------------------------------------------------
     def _build(self) -> None:
         """构建相关对象。"""
@@ -107,9 +135,10 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # 左侧导航
+        # 左侧导航（根据屏幕宽度动态调整）
         self.nav = QListWidget()
-        self.nav.setFixedWidth(168)
+        nav_w = self._layout_mgr.nav_width()
+        self.nav.setFixedWidth(nav_w)
         self.nav.setObjectName("nav")
         self.nav.currentRowChanged.connect(self._switch)
         for title, _, ic, _k in NAV:
@@ -123,14 +152,21 @@ class MainWindow(QMainWindow):
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(0)
         self.stack = QStackedWidget()
-        self.pages = []
-        for title, cls, _, key in NAV:
-            page = cls(self.mdm, self.store, self.config, self.session)
-            page.PAGE_KEY = key
-            page.selection_changed.connect(
-                lambda sym, per, k=key: self._on_sel(k, sym, per))
-            self.pages.append(page)
-            self.stack.addWidget(page)
+        self.pages: list[QWidget | None] = [None] * len(NAV)
+        # 预建首页（行情全景），其余页面延迟到首次点击时实例化，
+        # 避免启动时一次性触发 predictor.py 等重型模块导入。
+        first_cls, first_key = NAV[0][1], NAV[0][3]
+        first_page = first_cls(self.mdm, self.store, self.config, self.session)
+        first_page.PAGE_KEY = first_key
+        first_page.selection_changed.connect(
+            lambda sym, per, k=first_key: self._on_sel(k, sym, per))
+        self.pages[0] = first_page
+        self.stack.addWidget(first_page)
+        # 预连接首页预警信号
+        if hasattr(first_page, "alerts_fired"):
+            first_page.alerts_fired.connect(self._on_alerts_fired)
+        if hasattr(first_page, "scan_status"):
+            first_page.scan_status.connect(self._on_scan_status)
         # 预警托盘通知（有系统托盘时启用）
         self._setup_tray()
         for p in self.pages:
@@ -150,6 +186,11 @@ class MainWindow(QMainWindow):
         self._status_log = QLabel("")
         self.status.addWidget(self._status_conn)
         self.status.addWidget(self._status_src)
+        # 常驻版本标签：始终与包内 __version__ 同步，避免界面与程序实际版本不一致
+        self._status_ver = QLabel(f"v{APP_VERSION}")
+        self._status_ver.setObjectName("status-ver")
+        self._status_ver.setToolTip(f"当前版本 v{APP_VERSION}")
+        self.status.addPermanentWidget(self._status_ver)
         self.status.addPermanentWidget(self._status_clock)
         self._conn_btn = QPushButton("重连")
         self._conn_btn.setObjectName("secondary")
@@ -208,7 +249,7 @@ class MainWindow(QMainWindow):
             return
         self._tray = QSystemTrayIcon(self)
         self._tray.setIcon(icon("warning", self.theme, size=32))
-        self._tray.setToolTip("期货智能分析预测系统")
+        self._tray.setToolTip(f"期货智能分析预测系统 v{APP_VERSION}")
         self._tray.show()
 
     def _on_alerts_fired(self, fired: list) -> None:
@@ -282,10 +323,20 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _switch(self, idx: int) -> None:
-        """处理switch。
-        
-            参数:
-                idx: int"""
+        """处理switch。"""
+        # 延迟初始化目标页面（首次访问时才构建）
+        if self.pages[idx] is None:
+            title, cls, _, key = NAV[idx]
+            page = cls(self.mdm, self.store, self.config, self.session)
+            page.PAGE_KEY = key
+            page.selection_changed.connect(
+                lambda sym, per, k=key: self._on_sel(k, sym, per))
+            self.pages[idx] = page
+            self.stack.addWidget(page)
+            if hasattr(page, "alerts_fired"):
+                page.alerts_fired.connect(self._on_alerts_fired)
+            if hasattr(page, "scan_status"):
+                page.scan_status.connect(self._on_scan_status)
         self.stack.setCurrentIndex(idx)
         self.session.set("last_page", idx)
         self._schedule_session_save()
@@ -302,7 +353,15 @@ class MainWindow(QMainWindow):
         # 强制默认最大化（用户上次关闭时未最大化也恢复为最大化）
         self._want_max = bool(w.get("maximized", True)) or True
         x, y = w.get("x"), w.get("y")
-        ww, hh = int(w.get("w", 1360) or 1360), int(w.get("h", 860) or 860)
+        # 根据屏幕尺寸调整默认窗口大小
+        min_w, min_h = self._layout_mgr.get_min_window_size()
+        screen_w, screen_h = self._layout_mgr.width, self._layout_mgr.height
+        # 按比例缩放默认窗口大小，但限制在合理范围内
+        default_w = int(screen_w * 0.85)  # 默认占屏幕 85% 宽
+        default_h = int(screen_h * 0.80)  # 默认占屏幕 80% 高
+        default_w = max(min_w, min(default_w, screen_w - 50))
+        default_h = max(min_h, min(default_h, screen_h - 50))
+        ww, hh = int(w.get("w", default_w) or default_w), int(w.get("h", default_h) or default_h)
         if x is not None and y is not None:
             self.setGeometry(int(x), int(y), ww, hh)
         else:
@@ -389,10 +448,21 @@ class MainWindow(QMainWindow):
         self._apply_theme()
 
     def _apply_theme(self) -> None:
-        """应用主题。"""
+        """应用主题（M1.2：设计系统一键全量刷新）。"""
         from . import widgets as W
         W.THEME = self.theme
+        # M1.2：注入规范色板并全量刷新所有挂接控件（消除页面级 inline 不刷新缺陷）
+        try:
+            from .design_system import apply_design
+            apply_design(self.theme, refresh_widgets=False)  # 刷新由下方遍历负责
+        except Exception:
+            pass
         qss = DARK_QSS if self.theme == "dark" else LIGHT_QSS
+        # 根据分辨率调整 QSS 中的字体大小
+        base_size = self._layout_mgr.font_size(13)
+        qss = qss.replace("font-size:13px;", f"font-size:{base_size}px;")
+        qss = qss.replace("font-size:12px;", f"font-size:{base_size-1}px;")
+        qss = qss.replace("font-size:11px;", f"font-size:{base_size-2}px;")
         self.setStyleSheet(qss)
         # 导航图标重渲染
         for i, (_, _, ic, _k) in enumerate(NAV):
@@ -401,6 +471,8 @@ class MainWindow(QMainWindow):
         self._theme_btn.setIcon(icon("sun" if self.theme == "dark" else "moon", self.theme))
         # 页面与图表
         for p in self.pages:
+            if p is None:
+                continue
             p.set_theme(self.theme)
             for attr in ("chart", "macd", "kdj", "rsi", "bar"):
                 c = getattr(p, attr, None)
@@ -414,7 +486,7 @@ class MainWindow(QMainWindow):
 # ============================================================================
 DARK_QSS = """
 /* ===== 基础 ===== */
-QWidget { background:#0f1116; color:#e6e6e6; font-family:'SimHei','Noto Sans SC','Microsoft YaHei',sans-serif; font-size:13px; }
+QWidget { background:#0f1116; color:#e6e6e6; font-family:'SimHei','Noto Sans SC','Microsoft YaHei',sans-serif; }
 QMainWindow { background:#0f1116; }
 QFrame#toolbar { background:#161a24; border:1px solid #2a2e3a; border-radius:10px; }
 QFrame#hsep { background:#1a1d27; border:none; }
@@ -453,7 +525,7 @@ QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit { background:#11141c; border:1px 
 QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QLineEdit:hover { border-color:#3a4154; }
 QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus { border:1px solid #3b82f6; background:#151923; }
 QComboBox::drop-down { border:none; width:20px; }
-QComboBox QAbstractItemView { background:#11141c; color:#e6e6e6; selection-background-color:#2563eb; border:1px solid #2a2e3a; border-radius:8px; outline:0; padding:4px; }
+QComboBox QAbstractItemView { background:#11141c; color:#e6e6e6; selection-background-color:#2563eb; selection-color:#fff; border:1px solid #2a2e3a; border-radius:8px; outline:0; padding:4px; }
 QSpinBox::up-button, QDoubleSpinBox::up-button { width:16px; border:none; background:transparent; }
 QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover { background:#1a1d27; }
 
@@ -506,6 +578,7 @@ QMenu::separator { height:1px; background:#2a2e3a; margin:5px 10px; }
 QStatusBar { background:#0b0d12; color:#8b93a7; border-top:1px solid #2a2e3a; padding:5px 12px; }
 QStatusBar::item { border:none; }
 #status-dot { color:#22c55e; font-weight:bold; font-size:13px; }
+#status-ver { color:#60a5fa; font-weight:bold; font-size:13px; padding:0 6px; }
 QFrame#chip { border-radius:12px; }
 QToolTip { background:#161a24; color:#e6e6e6; border:1px solid #2a2e3a; border-radius:6px; padding:5px 8px; }
 """
@@ -603,6 +676,7 @@ QMenu::separator { height:1px; background:#e2e8f0; margin:5px 10px; }
 QStatusBar { background:#eef2f7; color:#6b7280; border-top:1px solid #d1d5db; padding:5px 12px; }
 QStatusBar::item { border:none; }
 #status-dot { color:#16a34a; font-weight:bold; font-size:13px; }
+#status-ver { color:#2563eb; font-weight:bold; font-size:13px; padding:0 6px; }
 QFrame#chip { border-radius:12px; }
 QToolTip { background:#ffffff; color:#1f2937; border:1px solid #d1d5db; border-radius:6px; padding:5px 8px; }
 """
@@ -613,6 +687,13 @@ def main() -> None:
     import os
     import sys
     from PyQt6.QtGui import QFont, QFontDatabase
+    from PyQt6.QtWidgets import QApplication
+    
+    # 强制应用安全模式：打包模式下从环境变量加载 API 密钥，清除持久化密钥
+    from ..runtime import is_frozen
+    from ..ai.llm_client import enforce_security_mode
+    enforce_security_mode(is_frozen())
+    
     app = QApplication([])
     # 显式加载中文字体，避免无 CJK 字形时回退成 tofu。
     # 优先用内嵌/系统字体，按注册成功的家族设置；全部失败时退回 Qt 系统默认（含 CJK 回退）。
@@ -625,9 +706,14 @@ def main() -> None:
                 chosen_family = fams[0]
                 break
     if chosen_family:
-        app.setFont(QFont(chosen_family, 10))
+        # 根据分辨率动态调整基础字体大小
+        from .responsive_layout import get_layout_manager
+        mgr = get_layout_manager()
+        base_size = mgr.font_size(10)
+        app.setFont(QFont(chosen_family, base_size))
     else:
-        app.setFont(QFont("", 10))  # 让 Qt 走系统默认字体（带 CJK 回退）
+        base_size = 10
+        app.setFont(QFont("", base_size))  # 让 Qt 走系统默认字体（含 CJK 回退）
     win = MainWindow()
 
     # ---- 全局崩溃兜底：异常时尽量落盘状态，并写入崩溃日志 ----

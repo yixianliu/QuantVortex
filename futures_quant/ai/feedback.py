@@ -319,3 +319,82 @@ def recommend_text(store) -> str:
     # 可靠性校准（样本外实证）：模型概率 → 真实命中率 的映射状态
     lines.append(reliability_summary(store))
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# M7.4 用户反馈闭环：实盘/回测交易结果写回 → 触发再训练
+# ---------------------------------------------------------------------------
+def record_trade_feedback(store, trades: list, symbol: str, period: str = "D",
+                          source: str = "backtest") -> dict:
+    """把实盘/回测交易结果写回反馈样本库，作为再训练监督信号。
+
+    参数:
+        store: 需具备 ``append_feedback_sample(dict)`` 接口（见 analysis_store）。
+        trades: 交易记录列表，每条含 pnl（绝对盈亏）与可选 close。
+        symbol / period: 品种与周期。
+        source: 数据来源（"backtest" / "live"）。
+
+    返回:
+        ``{count, avg_pnl, win_rate, total_pnl, source, symbol}``。
+    离线安全：store 缺接口时返回 count=0，不抛错。
+    """
+    total = 0.0
+    wins = 0
+    n = 0
+    try:
+        for t in (trades or []):
+            pnl = float(t.get("pnl") or 0.0)
+            total += pnl
+            if pnl > 0:
+                wins += 1
+            n += 1
+            sample = {
+                "ts": str(dt.datetime.now()),
+                "symbol": symbol,
+                "period": period,
+                "source": source,
+                "pnl": round(pnl, 4),
+                "closed": t.get("close"),
+            }
+            store.append_feedback_sample(sample)
+    except Exception:
+        return {"count": 0, "avg_pnl": 0.0, "win_rate": 0.0,
+                "total_pnl": 0.0, "source": source, "symbol": symbol}
+    return {
+        "count": n,
+        "avg_pnl": (total / n) if n else 0.0,
+        "win_rate": (wins / n) if n else 0.0,
+        "total_pnl": round(total, 4),
+        "source": source,
+        "symbol": symbol,
+    }
+
+
+def trigger_retrain(feedback_fn, store, symbol: str, min_samples: int = 20,
+                    should_retrain=None) -> dict:
+    """满足条件时触发一次再训练（手动/反馈闭环，不定时——决策门 D7.1）。
+
+    参数:
+        feedback_fn: 再训练回调 ``fn(symbol, store) -> dict``（内部调 predictor.fit 等）。
+        store: 反馈样本库。
+        symbol: 品种。
+        min_samples: 触发再训练所需最小反馈样本数。
+        should_retrain: 可选谓词 ``(n_samples, symbol) -> bool``，覆盖默认阈值逻辑。
+
+    返回:
+        ``{triggered: bool, n_samples: int, result: dict|None, reason: str}``。
+    """
+    try:
+        n = int((store.feedback_sample_count(symbol) if hasattr(store, "feedback_sample_count") else 0))
+    except Exception:
+        n = 0
+    if should_retrain is not None:
+        do = bool(should_retrain(n, symbol))
+    else:
+        do = n >= min_samples
+    if not do:
+        return {"triggered": False, "n_samples": n, "result": None,
+                "reason": f"反馈样本 {n} < 阈值 {min_samples}，未触发"}
+    result = feedback_fn(symbol, store)
+    return {"triggered": True, "n_samples": n, "result": result,
+            "reason": f"反馈样本 {n} ≥ 阈值 {min_samples}，已触发再训练"}
