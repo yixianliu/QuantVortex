@@ -293,8 +293,11 @@ class BacktestPerfChart(QWidget):
         # 内联指标注解（右上）
         if self._metrics:
             parts = []
-            if "sharpe" in self._metrics:
-                parts.append(f"夏普 {float(self._metrics['sharpe']):.2f}")
+            # 防御 None 值：手动回测/交割强平后 sharpe 等指标可能为 None，
+            # paintEvent 内抛异常会触发 qFatal 直接杀进程（rc=127 无栈闪退）
+            sharpe = self._metrics.get("sharpe")
+            if sharpe is not None:
+                parts.append(f"夏普 {float(sharpe):.2f}")
             if "annual_return" in self._metrics:
                 ar = self._metrics["annual_return"]
                 parts.append(f"年化 {ar * 100:.1f}%" if isinstance(ar, (int, float)) else f"年化 {ar}")

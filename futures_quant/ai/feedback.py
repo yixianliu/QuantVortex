@@ -21,6 +21,8 @@ import numpy as np
 
 from ..indicators.tech import add_indicators
 from .predictor import FuturesPredictor
+# M3-11：阈值集中化（默认值 == 改造前字面量，行为不变）
+from .constants import FEEDBACK as _FC
 
 
 def quick_regime(df) -> str:
@@ -30,9 +32,10 @@ def quick_regime(df) -> str:
         last = ind.iloc[-1]
         adx = float(last["ADX"]) if "ADX" in ind else 0.0
         close = ind["close"].astype(float)
-        ma5 = float(close.tail(5).mean())
-        ma20 = float(close.tail(20).mean())
-        if adx > 25 and ma20 and abs(ma5 - ma20) / ma20 > 0.01:
+        ma5 = float(close.tail(_FC.regime_ma_fast).mean())
+        ma20 = float(close.tail(_FC.regime_ma_slow).mean())
+        if (adx > _FC.trend_adx_threshold and ma20
+                and abs(ma5 - ma20) / ma20 > _FC.trend_ma_divergence):
             return "趋势行情"
     except Exception:
         pass
@@ -48,23 +51,24 @@ def evaluate_prediction(store, row: dict, mdm) -> dict | None:
     """
     sym = row.get("symbol")
     per = row.get("period") or "D"
-    horizon = int(row.get("horizon") or 10)
+    horizon = int(row.get("horizon") or _FC.default_horizon)
     last_close = float(row.get("last_close") or 0.0)
     if not sym or last_close <= 0:
         return None
     try:
-        # 取 horizon+5 根 bars：horizon 根用于结算，5 根作为安全缓冲
-        df = mdm.get_bars(sym, per, limit=horizon + 5)
+        # 取 horizon+eval_bar_buffer 根 bars：horizon 根用于结算，其余作安全缓冲
+        df = mdm.get_bars(sym, per, limit=horizon + _FC.eval_bar_buffer)
     except Exception:
         return None
-    if df is None or len(df) < 2:
+    if df is None or len(df) < _FC.min_eval_bars:
         return None
     # 预测时的 last_close 是最后一条 bar 的 close，实际结果是最后一条 bar 的 close
     actual = float(df["close"].iloc[-1]) / last_close - 1.0
     y_up = 1.0 if actual > 0.0 else 0.0
-    p_up = float(row.get("p_up") or 0.5)
-    # 方向命中：看多(p_up>=0.5) 且实际上涨，或看空(p_up<0.5) 且实际下跌
-    hit = 1 if (p_up >= 0.5 and actual > 0) or (p_up < 0.5 and actual < 0) else 0
+    p_up = float(row.get("p_up") or _FC.neutral_p_up)
+    # 方向命中：看多(p_up>=neutral) 且实际上涨，或看空(p_up<neutral) 且实际下跌
+    nu = _FC.neutral_p_up
+    hit = 1 if (p_up >= nu and actual > 0) or (p_up < nu and actual < 0) else 0
     try:
         store.update_prediction_outcome(
             int(row["id"]), round(actual * 100, 3), hit,
@@ -74,8 +78,10 @@ def evaluate_prediction(store, row: dict, mdm) -> dict | None:
     return {"hit": hit, "actual_return_pct": actual * 100, "y_up": y_up}
 
 
-def evaluate_all_open(store, mdm, max_n: int = 50) -> dict:
+def evaluate_all_open(store, mdm, max_n: int = None) -> dict:
     """结算所有未结算预测，返回 {evaluated, hits, total} 概要。"""
+    if max_n is None:
+        max_n = _FC.max_eval_rows
     open_rows = store.query_open_predictions(limit=max_n)
     evaluated = hits = 0
     for row in open_rows:
@@ -87,7 +93,7 @@ def evaluate_all_open(store, mdm, max_n: int = 50) -> dict:
             "rate": (hits / evaluated) if evaluated else None}
 
 
-def adaptive_config(store, regime: str, min_samples: int = 20) -> dict:
+def adaptive_config(store, regime: str, min_samples: int = None) -> dict:
     """为给定行情状态挑选经验最优配置。
 
     仅当该行情状态下，『增强』与『基础』两种配置各自积累 >= min_samples
@@ -101,6 +107,11 @@ def adaptive_config(store, regime: str, min_samples: int = 20) -> dict:
     # 仅统计与 regime 相关的样本（prediction_stats 已按 regime 分组）
     by_regime = stats.get("by_regime", {})
     rg = by_regime.get(regime, {})
+    # 【已知不一致·未改动】docstring 承诺「该行情状态下」各自积累 min_samples，
+    # 但 enh/base 取自 by_config 的**全局**统计，`rg` 未参与判定。
+    # M3-11 只做阈值集中化，不擅自改判定口径（属业务决策，待确认），此处保持原样。
+    if min_samples is None:
+        min_samples = _FC.adaptive_min_samples
     # 需要双侧都有足够样本才切换
     enh_n = enh["total"] if enh else 0
     base_n = base["total"] if base else 0
@@ -115,10 +126,12 @@ def adaptive_config(store, regime: str, min_samples: int = 20) -> dict:
 
 
 def calibrated_confidence(store, regime: str, config: str, base_p_up: float,
-                         min_samples: int = 15) -> float:
+                         min_samples: int = None) -> float:
     """用历史命中率校准置信度：若该 (regime, config) 积累足够样本，
     返回历史方向命中率；否则回退模型自带的 p_up。
     """
+    if min_samples is None:
+        min_samples = _FC.confidence_min_samples
     stats = store.prediction_stats()
     by_regime = stats.get("by_regime", {})
     rg = by_regime.get(regime)
@@ -143,7 +156,7 @@ def _fill_none(vals):
             last = out[i]
         elif last is not None:
             out[i] = last
-    return [(v if v is not None else 0.5) for v in out]
+    return [(v if v is not None else _FC.empty_bin_prior) for v in out]
 
 
 def _pava(y):
@@ -164,11 +177,13 @@ def _pava(y):
     return out
 
 
-def _wilson(p: float, n: int, z: float = 1.96) -> tuple:
+def _wilson(p: float, n: int, z: float = None) -> tuple:
     """二项比例 Wilson (1-α) 置信区间（小样本稳健，不截断为 0/1 奇点）。
 
     返回 (lo, hi)∈[0,1]；n<=0 时退化到整段 [0,1]。
     """
+    if z is None:
+        z = _FC.wilson_z_95
     if n <= 0:
         return (0.0, 1.0)
     denom = 1.0 + z * z / n
@@ -178,7 +193,7 @@ def _wilson(p: float, n: int, z: float = 1.96) -> tuple:
 
 
 def reliability_calibration(store, regime: str | None = None,
-                            min_samples: int = 20, nbins: int = 10):
+                            min_samples: int = None, nbins: int = None):
     """构建「预测概率 → 真实命中率」的可靠性校准映射（out-of-time 实证校准）。
 
     返回 (calib_fn, info)：
@@ -190,7 +205,11 @@ def reliability_calibration(store, regime: str | None = None,
     分箱后做保序(PAVA)平滑，保证校准映射单调非递减，抑制小样本抖动过拟合。
     这是把模型「自信度」变成「真实可信度」的闭环——喂给 predictor.calibrate_p_up。
     """
-    rows = store.query_closed_for_calibration(limit=4000)
+    if min_samples is None:
+        min_samples = _FC.calibration_min_samples
+    if nbins is None:
+        nbins = _FC.calibration_bins
+    rows = store.query_closed_for_calibration(limit=_FC.calibration_row_limit)
 
     def _pts(subset):
         """处理pts。
@@ -265,28 +284,30 @@ def calibration_band_at(bins, p_up) -> tuple:
 
 
 def mean_band_width(bins) -> float | None:
-    """各分箱（n>=3）Wilson 区间宽度的均值，反映校准整体不确定性（绝对值）。"""
+    """各分箱（n>=min_bin_samples）Wilson 区间宽度的均值，反映校准整体不确定性。"""
     vals = [hi - lo for (c, s, n, lo, hi) in (bins or [])
-            if lo is not None and hi is not None and n >= 3]
+            if lo is not None and hi is not None and n >= _FC.min_bin_samples]
     if not vals:
         return None
     return float(np.mean(vals))
 
 
-def reliability_summary(store, min_samples: int = 20) -> str:
+def reliability_summary(store, min_samples: int = None) -> str:
     """生成可靠性校准的看板文本（样本充足时展示分档映射）。"""
+    if min_samples is None:
+        min_samples = _FC.calibration_min_samples
     fn, info = reliability_calibration(store, regime=None, min_samples=min_samples)
     if fn is None:
         return (f"可靠性校准：样本不足（需 ≥{min_samples} 条已结算预测），"
                 f"暂沿用扁平命中率。")
     lines = [f"可靠性校准已启用（样本 {info['coverage']} 条，out-of-time 实证）："]
     for (c, s, n, *_ ) in info["bins"]:
-        if n >= 3:
+        if n >= _FC.min_bin_samples:
             lines.append(f"  模型说涨 {c*100:.0f}% → 历史实际命中 {s*100:.0f}%（{n}次）")
     # 校准区间宽度：把 Wilson 置信带的不确定性也写进看板，避免只看点估计
     mbw = mean_band_width(info["bins"])
     if mbw is not None:
-        if mbw > 0.20:
+        if mbw > _FC.wide_band_threshold:
             lines.append(f"  校准区间宽度约 {mbw*100:.0f}pp（偏宽，单点校准仅供参考）")
         else:
             lines.append(f"  校准区间宽度约 {mbw*100:.0f}pp（区间较窄，校准较可信）")
@@ -370,7 +391,7 @@ def record_trade_feedback(store, trades: list, symbol: str, period: str = "D",
     }
 
 
-def trigger_retrain(feedback_fn, store, symbol: str, min_samples: int = 20,
+def trigger_retrain(feedback_fn, store, symbol: str, min_samples: int = None,
                     should_retrain=None) -> dict:
     """满足条件时触发一次再训练（手动/反馈闭环，不定时——决策门 D7.1）。
 
@@ -384,8 +405,12 @@ def trigger_retrain(feedback_fn, store, symbol: str, min_samples: int = 20,
     返回:
         ``{triggered: bool, n_samples: int, result: dict|None, reason: str}``。
     """
+    # M1-01：store 现统一提供 feedback_sample_count（见 AnalysisStore）；
+    # 直接调用，缺失方法时由下方 except 兜底置 0，不再用 hasattr 静默跳过。
+    if min_samples is None:
+        min_samples = _FC.retrain_min_samples
     try:
-        n = int((store.feedback_sample_count(symbol) if hasattr(store, "feedback_sample_count") else 0))
+        n = int(store.feedback_sample_count(symbol))
     except Exception:
         n = 0
     if should_retrain is not None:

@@ -4,8 +4,8 @@
     - 全部图标为 24x24 viewBox 的 SVG 线/面图标，清晰、风格统一、可任意缩放；
     - 通过 QSvgRenderer 渲染，离线可跑（依赖 PyQt6.QtSvg，环境已具备）；
     - 主题感知：用 {color} 占位符替换描边/填充色，由调用方传入当前主题色；
-    - 2x 超采样渲染后回设 devicePixelRatio，保证高分屏下依旧锐利；
-    - 结果按 (name, color, size) 缓存，避免频繁重绘。
+    - 2x（或更高 dpr）超采样渲染后回设 devicePixelRatio，保证高分屏下依旧锐利；
+    - 结果按 (name, color, size, dpr) 缓存，避免频繁重绘（M4-11⑤）。
 
 仅依赖 PyQt6（QtSvg）。
 """
@@ -59,6 +59,10 @@ _ICONS: Dict[str, Tuple[str, str]] = {
     "indicator": ("stroke", "M4 19 V5 M4 15 l4-4 l3 2 l5-7 M9 11 v8 M16 4 v16 M4 15 h0"),
     "panorama": ("stroke", "M3 3 h8 v8 H3 Z M13 3 h8 v5 h-8 Z M3 13 h8 v8 H3 Z M13 11 h8 v10 h-8 Z"),
     "validate": ("stroke", "M4 6 h11 M4 12 h7 M4 18 h9 M18 5 l2 2 l4 -4"),
+    # 实盘监控（显示器 + 脉冲线）
+    "ctp": ("stroke",
+        "M3 5 h18 v11 H3 Z M9 20 h6 M12 16 v4 "
+        "M6 13 l2 -3 l2 2 l3 -4 l2 3"),
     # 数据管理（数据库圆柱体）
     "db": ("stroke",
         "M12 3 c-4.4 0 -8 1.3 -8 3 v12 c0 1.7 3.6 3 8 3 s8 -1.3 8 -3 V6 "
@@ -73,10 +77,20 @@ _ICONS: Dict[str, Tuple[str, str]] = {
         "a7 7 0 0 0 0 8.3 z M8 12 h8 M12 8 v8"),
 }
 
-# 导航顺序（与 main_window 的 nav_items 一一对应）
-NAV_ICONS = ["market", "position", "strategy", "risk", "log", "backtest", "predict"]
+# M4-11⑤：缓存 key 纳入实际 dpr（高分屏/缩放变化时旧缓存不适用）
+_CACHE: Dict[Tuple[str, str, int, float], QIcon] = {}
 
-_CACHE: Dict[Tuple[str, str, int], QIcon] = {}
+
+def _screen_dpr() -> float:
+    """取应用级 devicePixelRatio（无 QApplication 时返回 1.0，离线测试安全）。"""
+    try:
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is None:
+            return 1.0
+        return float(app.devicePixelRatio())
+    except Exception:  # noqa: BLE001
+        return 1.0
 
 
 def icon(name: str, theme: str = "dark", color_override: Optional[str] = None,
@@ -90,7 +104,8 @@ def icon(name: str, theme: str = "dark", color_override: Optional[str] = None,
     """
     if name not in _ICONS:
         name = "star"
-    key = (name, color_override or theme, size)
+    dpr = _screen_dpr()
+    key = (name, color_override or theme, size, round(dpr, 2))
     cached = _CACHE.get(key)
     if cached is not None:
         return cached
@@ -111,14 +126,15 @@ def icon(name: str, theme: str = "dark", color_override: Optional[str] = None,
                f'stroke-linecap="round" stroke-linejoin="round">{body}</svg>')
 
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-    dpr = 2
-    px = QPixmap(size * dpr, size * dpr)
+    # M4-11⑤：渲染超采样比 = max(2x, 实际 dpr)——高分屏按真实像素密度出图更锐
+    ratio = max(2.0, dpr)
+    px = QPixmap(int(size * ratio), int(size * ratio))
     px.fill(Qt.GlobalColor.transparent)
     painter = QPainter(px)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     renderer.render(painter)
     painter.end()
-    px.setDevicePixelRatio(dpr)
+    px.setDevicePixelRatio(ratio)
     qi = QIcon(px)
     _CACHE[key] = qi
     return qi

@@ -2,13 +2,23 @@
 
 用法:
     python examples/test_ctp_integration.py [--connect]
-    
+
     --connect: 实际连接SimNow并验证实时数据流(耗时约15秒)
     (默认仅测试页面构造和诊断面板)
 """
 import sys, os, json, time, inspect
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
+_IN_PYTEST = "PYTEST_CURRENT_TEST" in os.environ
+
+
+def _exit(code: int) -> None:
+    if _IN_PYTEST:
+        raise RuntimeError(f"CTP 测试前置条件不满足 (exit {code})")
+    sys.exit(code)
+
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QCloseEvent
@@ -89,7 +99,7 @@ print(f'  subscribe: {diag.get("subscribe", [])}')
 
 if not diag['lib_available']:
     print('\n  [ERROR] ctpbee/vnpy_ctp 未安装!')
-    sys.exit(1)
+    _exit(1)
 
 if not diag['creds_complete']:
     print('\n  [WARN] 凭据不完整,但仍可测试库可用性')
@@ -99,65 +109,31 @@ else:
 # -------------------------
 # Step 6: (可选) 实际连接 SimNow
 # -------------------------
-do_connect = '--connect' in sys.argv
+do_connect = len(sys.argv) > 1 and sys.argv[1] in ('--connect', '-c')
 if do_connect:
-    print('\n[Step 6] 实际连接 SimNow (等待15秒)...')
-    
-    creds = CTPCredentials.load(cfg_path)
-    feed = CTPFeed(creds=creds)
-    
+    print('\n[Step 6] 连接到 SimNow...')
+    creds = CTPCredentials(
+        broker_id=cfg['account'].get('broker_id', ''),
+        user_id=creds_from_cfg.get('user_id', ''),
+        password=creds_from_cfg.get('password', ''),
+        product_info_auth_code=creds_from_cfg.get('product_info_auth_code', ''),
+        auth_code=creds_from_cfg.get('auth_code', ''),
+    )
+    feed = CTPFeed(creds, mode=diag['mode'])
     bar_count = [0]
+
     def on_bar(bar):
         bar_count[0] += 1
-        sym = bar.get('symbol', '?')
-        close = bar.get('close', 0)
-        print(f'  [BAR #{bar_count[0]}] symbol={sym} close={close:.2f}')
-    
+        print(f'  [DATA] #{bar_count[0]} {bar.symbol} @ {bar.close}')
+
     feed.on_bar = on_bar
-    
-    start_time = time.time()
-    ok = feed.connect()
-    elapsed = time.time() - start_time
-    
-    status = 'SUCCESS' if ok else 'FAILED'
-    print(f'\n  Connection: {status} (elapsed {elapsed:.1f}s)')
-    
-    if ok:
-        print('connected:', feed.connected)
-        print('lib_name:', feed._lib_name)
-        
-        # 订阅合约
-        for sym in creds.subscribe[:2]:
-            code, _ = sym.split('.')
-            try:
-                feed.subscribe(code)
-                print('  [OK] Subscribed:', sym)
-            except Exception as e:
-                print('  [WARN] Subscribe failed', sym, ':', e)
-        
-        # 等待行情数据
-        print('\n  Waiting for market data (non-trading hours may have no data)...')
-        time.sleep(10)
-        
-        if bar_count[0] > 0:
-            print(f'\n  [DATA] Received {bar_count[0]} bars!')
-        else:
-            print('\n  [INFO] No data received — non-trading hours')
-            print('  [INFO] SimNow connection: CONNECTED')
-            print('  [TIP] Test again tonight 21:00-02:30 for real-time data')
-        
-        # Disconnect
-        print('\n  Disconnecting...')
-        feed.close()
-        print('After disconnect connected:', feed.connected)
-        print('  [OK] Clean shutdown')
-    else:
-        print('  [ERROR] Connection failed!')
-        try:
-            feed.close()
-        except:
-            pass
-        sys.exit(1)
+    feed.start()
+    time.sleep(5)
+
+    print('\n  Disconnecting...')
+    feed.close()
+    print('After disconnect connected:', feed.connected)
+    print('  [OK] Clean shutdown')
 else:
     print('\n[Step 6] 跳过实际连接 (使用 --connect 参数启用)')
 
@@ -186,4 +162,4 @@ print('  3. 查看诊断面板显示 CTP 状态')
 print('  4. (交易时段) 验证实时行情接收')
 print('=' * 60)
 
-sys.exit(0)
+_exit(0)

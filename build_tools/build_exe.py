@@ -77,6 +77,38 @@ def _gate_source() -> None:
     print("[门禁] 源码扫描通过。")
 
 
+def _verify_images(dist_dir: str) -> None:
+    """M6-01⑤：验证打包的图片资源是否存在。
+
+    PyInstaller 6.x 单文件夹模式把 datas 放在 ``_internal/`` 子目录
+    （``dist/FuturesQuant/_internal/images/...``）；旧版放在 dist 根。
+    两处都探测，任一命中即通过，兼容不同 PyInstaller 版本。
+    """
+    candidates = [
+        os.path.join(dist_dir, "_internal", "images"),
+        os.path.join(dist_dir, "images"),
+    ]
+    images_dir = next(
+        (d for d in candidates if os.path.isdir(d)), candidates[0])
+    qq_path = os.path.join(images_dir, "link_qrcode", "qq.png")
+    wx_pay_path = os.path.join(images_dir, "pay_qrcode", "wx-pay.png")
+    
+    missing = []
+    if not os.path.isfile(qq_path):
+        missing.append(qq_path)
+    if not os.path.isfile(wx_pay_path):
+        missing.append(wx_pay_path)
+    
+    if missing:
+        print(f"[阻断] 产物中缺失必需的图片资源：", file=sys.stderr)
+        for path in missing:
+            print(f"        {path}", file=sys.stderr)
+        print("\n请检查 spec 的 datas 配置是否正确包含 images 目录。", file=sys.stderr)
+        sys.exit(9)
+    # 可选：打印成功信息以助调试
+    # print("[图片] 必需图片资源验证通过。")
+
+
 def _verify_artifact(dist_dir: str) -> None:
     """构建后验证：产物二进制中不得出现任何密钥。"""
     print("[验证] 扫描打包产物（含 exe / pyc / dll 字节级）...")
@@ -142,6 +174,8 @@ def _verify_artifact(dist_dir: str) -> None:
         print("        （已通过密钥扫描，但建议从 spec 的 datas 中剔除）")
     else:
         print("[验证] 产物中无 __pycache__ 残留。")
+    # M6-01⑤：验证打包的图片资源是否存在
+    _verify_images(dist_dir)
     print("[验证] 产物扫描通过：未发现任何密钥。")
 
 

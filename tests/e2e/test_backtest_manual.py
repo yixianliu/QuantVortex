@@ -16,6 +16,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
+_IN_PYTEST = "PYTEST_CURRENT_TEST" in os.environ
+
+
+def _exit(code: int) -> None:
+    if _IN_PYTEST:
+        raise RuntimeError(f"回测手动模式 e2e 测试失败 (exit {code})")
+    sys.exit(code)
+
+
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication(sys.argv)
@@ -55,8 +64,8 @@ check(page._manual_group.isVisible(), "[1] 手动回测面板已展开")
 check(not page._rb_auto.isChecked(), "[1] 自动进化单选已取消")
 
 # ---- [2] 选择品种与策略，运行手动回测 ----
-idx = page._manual_sym_cb.findData("rb.SHFE")
-check(idx >= 0, "[2] 品种下拉含 rb.SHFE")
+idx = page._manual_sym_cb.findData("RB.SHFE")
+check(idx >= 0, "[2] 品种下拉含 RB.SHFE")
 page._manual_sym_cb.setCurrentIndex(idx if idx >= 0 else 0)
 page._manual_strat_cb.setCurrentIndex(0)  # ma_cross（多空）
 app.processEvents()
@@ -89,7 +98,7 @@ print(f"    夏普={sh_txt} 年化={page._perf_chips['pf_annual']._val.text()} "
 # ---- [4] 持久化：写入历史记录表（MANUAL_GEN 哨兵）----
 hist = page._bt_store.recent_history(50)
 manual_rows = [r for r in hist
-               if r.get("generation") == MANUAL_GEN and r.get("symbol") == "rb.SHFE"]
+               if r.get("generation") == MANUAL_GEN and r.get("symbol") == "RB.SHFE"]
 check(len(manual_rows) >= 1,
       f"[4] 手动回测已写入历史记录（generation={MANUAL_GEN} 哨兵，"
       f"命中 {len(manual_rows)} 条）")
@@ -104,7 +113,9 @@ check(page._last_snapshot is None or page._engine.generation == gen_before,
       "[4] 手动模式下自动进化已暂停（代数未推进）")
 
 # ---- [5] 交割日强平：设置交割日，重跑并验证强制平仓 ----
-page._futures_params["delivery_date"] = "2020-01-10"  # 远早于行情中段
+# 行情 720 根日线（2020-01-01 ~ 2021-12-20），warmup=60（前60根不驱动引擎）。
+# 交割日须设置在 warmup 之后（行情中段），否则交割检查永不触发。
+page._futures_params["delivery_date"] = "2020-06-15"  # 行情中段，warmup 之后
 mi = page._manual_strat_cb.findData("momentum")
 page._manual_strat_cb.setCurrentIndex(mi if mi >= 0 else 0)
 app.processEvents()
@@ -127,7 +138,8 @@ delivery_logged = any("交割" in m for _, m in (logger.msgs if logger else []))
 check(delivery_logged, "[5] 到达交割日触发强制平仓（日志含「交割」告警）")
 
 trades = page._last_manual["res"]["trades"]
-close_trades = [t for t in trades if t.offset == Offset.CLOSE]
+CLOSE_OFFSETS = {Offset.CLOSE, Offset.CLOSE_TODAY, Offset.CLOSE_YESTERDAY}
+close_trades = [t for t in trades if t.offset in CLOSE_OFFSETS]
 check(len(close_trades) > 0, f"[5] 回测产生平仓成交（{len(close_trades)} 笔平仓）")
 
 # 还原：切回自动进化模式，确认可恢复
@@ -142,4 +154,4 @@ if fails == 0:
     print("回测中心「手动回测」模式端到端验证：全部通过")
 else:
     print(f"回测中心「手动回测」模式端到端验证：{fails} 项失败")
-    sys.exit(1)
+    _exit(1)

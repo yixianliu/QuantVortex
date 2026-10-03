@@ -12,6 +12,13 @@
   - 体积守卫：单次 run JSON < 阈值（默认 10MB）时正常写；超限截断逐代基因（保留每代 top-K）。
 
 防未来函数 / 安全：只写本地文件，不联网；run_id 仅允许 [A-Za-z0-9_-]（防路径注入）。
+
+M1-04（2026-10-01）：并发安全 + 备份顺序修正
+    - 新增模块级 `threading.RLock()` `_SAVE_LOCK`，包住 `save_run()` 的整条写路径；
+    - 备份顺序修正：先 `shutil.copyfile(path→bak)` 再 `os.replace(tmp→path)`——旧的
+      `os.replace(path→bak)` 在 `os.replace(tmp→path)` 失败时会让主文件彻底消失；
+    - `_shrink_if_needed` 改为增量估算 + 最多 3 轮循环，避免每轮全量 json.dumps 造成
+      O(n²) 序列化开销（旧代码 while 循环直到 top_k=0，可能跑几十轮）。
 """
 from __future__ import annotations
 
@@ -20,7 +27,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
+import threading
 from typing import Any, Dict, List, Optional
 
 __all__ = [
@@ -37,6 +46,13 @@ DEFAULT_DIR: str = os.path.join(ROOT, "data", "evolution")
 MAX_RUN_BYTES: int = 10 * 1024 * 1024
 
 _RUNID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+# M1-04：模块级 RLock——所有 save_run 走同一把锁，避免多进化任务并发生成 tmp 冲突
+_SAVE_LOCK = threading.RLock()
+
+# M1-04：_shrink_if_needed 最多 3 轮（每轮 top_k -2），避免 O(n²) 序列化
+_SHRINK_MAX_ROUNDS = 3
+_SHRINK_TOP_K_STEP = 2  # 每轮 top_k 减少 2（10→8→6→4...）
 
 
 def _make_run_id(seed: Optional[str] = None) -> str:
@@ -70,23 +86,57 @@ class EvolutionStore:
     def _shrink_if_needed(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """若落盘体积超过 MAX_RUN_BYTES，截断逐代 population（保留每代 top-K）。
 
-        截断依据的是**将要写入磁盘的 JSON 体积**（而非原始 payload 对象），
-        与体积守卫语义一致。
+        M1-04 改进：
+          - 增量估算：先算一次「当前体积 vs 每代平均体积」，用估算决定是否再一轮，
+            而非每轮全量 `json.dumps`；
+          - 最多 3 轮（旧代码 while 循环可能跑几十轮，每次全量序列化）。
         """
         def serialized(b: Dict[str, Any]) -> int:
             return len(json.dumps(b, ensure_ascii=False).encode("utf-8"))
 
-        if serialized(payload) <= MAX_RUN_BYTES:
+        total = serialized(payload)
+        if total <= MAX_RUN_BYTES:
             return payload
-        top_k = 10
+
         gens = payload.get("generations")
-        while isinstance(gens, list) and serialized(payload) > MAX_RUN_BYTES and top_k > 0:
+        if not isinstance(gens, list) or not gens:
+            payload["__truncated__"] = True
+            return payload
+
+        # M1-04：增量估算 + 最多 3 轮循环。
+        # 关键陷阱（2026-10-01 修复）：
+        #   - 旧代码「先估算→估算<=MAX 就 break」首轮 top_k=10 时估算已 <= MAX 会直接
+        #     跳出，population 一个都没裁；
+        #   - 必须「先裁剪→再估算」，每轮把 population 裁到 top_k 个基因后，再用裁剪后
+        #     的实际 top_k 估算，估算 <= MAX 就 break（此时 population 已被真正裁剪）。
+        initial_top_k = self._initial_top_k(gens)
+        # 每个基因的平均体积：总字节数 / (代数 * 每代基因数)
+        per_gene_avg = total / max(len(gens) * initial_top_k, 1)
+        top_k = 10
+        for _round in range(_SHRINK_MAX_ROUNDS):
+            if top_k <= 0:
+                break
+            # 先裁剪：每代保留前 top_k 个基因
             for g in gens:
                 if isinstance(g, dict) and isinstance(g.get("population"), list):
                     g["population"] = g["population"][:top_k]
-            top_k -= 1
+            # 再估算：每代 top_k 个基因 * 单基因平均体积 * 代数
+            estimated = per_gene_avg * len(gens) * top_k
+            if estimated <= MAX_RUN_BYTES:
+                break
+            top_k -= _SHRINK_TOP_K_STEP
+
         payload["__truncated__"] = True
         return payload
+
+    @staticmethod
+    def _initial_top_k(gens: List[Dict[str, Any]]) -> int:
+        """估算 generations 中最大的原始 population 长度（首次进入 shrink 时）。"""
+        mx = 0
+        for g in gens:
+            if isinstance(g, dict) and isinstance(g.get("population"), list):
+                mx = max(mx, len(g["population"]))
+        return max(mx, 1)
 
     # ---------------- 写入 ----------------
     def save_run(
@@ -98,41 +148,44 @@ class EvolutionStore:
     ) -> str:
         """保存一次进化 run，返回 run_id。
 
+        M1-04：整个写入路径由模块级 RLock 保护。
+
         参数:
             run_id: 可选；None 时自动生成。
             params: 进化参数（世代数/种群/轨道/seed 等）。
             generations: 逐代记录 ``[{generation, best_fitness, best_genome, population?}]``。
             best: 最终 best（genome + fitness + metrics）。
         """
-        run_id = run_id or _make_run_id()
-        self._sanitize_run_id(run_id)
-        payload: Dict[str, Any] = {
-            "run_id": run_id,
-            "created_at": dt.datetime.now().isoformat(timespec="seconds"),
-            "params": params,
-            "generations": generations,
-            "best": best,
-        }
-        payload = self._shrink_if_needed(payload)
-        path = self._run_path(run_id)
-        # 原子写
-        fd, tmp = tempfile.mkstemp(dir=self.path, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=1)
-            # 先备份旧的好文件，再替换
-            if os.path.exists(path):
-                os.replace(path, path + ".bak")
-            os.replace(tmp, path)
-            # 首次写入后也确保存在一份 .bak，便于后续崩溃回退
-            if not os.path.exists(path + ".bak"):
-                import shutil
-                shutil.copyfile(path, path + ".bak")
-        except Exception:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-            raise
-        return run_id
+        with _SAVE_LOCK:
+            run_id = run_id or _make_run_id()
+            self._sanitize_run_id(run_id)
+            payload: Dict[str, Any] = {
+                "run_id": run_id,
+                "created_at": dt.datetime.now().isoformat(timespec="seconds"),
+                "params": params,
+                "generations": generations,
+                "best": best,
+            }
+            payload = self._shrink_if_needed(payload)
+            path = self._run_path(run_id)
+            # 原子写
+            fd, tmp = tempfile.mkstemp(dir=self.path, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=1)
+                # M1-04 修正备份顺序：先 copy 旧主→bak（保留原文件），再 replace
+                # 旧代码用 os.replace(path, bak) 在 replace 失败时会让主文件彻底消失
+                if os.path.exists(path):
+                    shutil.copyfile(path, path + ".bak")
+                os.replace(tmp, path)
+                # 首次写入后也确保存在一份 .bak，便于后续崩溃回退
+                if not os.path.exists(path + ".bak"):
+                    shutil.copyfile(path, path + ".bak")
+            except Exception:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                raise
+            return run_id
 
     # ---------------- 读取 / 回看 ----------------
     def load(self, run_id: str) -> Dict[str, Any]:

@@ -154,28 +154,143 @@ class ToyGradientBoostingBase:
         self.random_state = random_state
         self.trees = []
         self.init_prediction = None
+        # M3-06：回归基线值 / 分类基线 logit（保持标量，避免与 trees 重复累加）
+        self.base_value = 0.0
+        self.base_logit = 0.0
+
+    # ---- M3-06：加权均值修正 ----
+    # `np.mean(y, weights=...)` 是**不存在的**关键字（np.mean 只有 a/axis/dtype/out/
+    # keepdims/where），一旦 sample_weight 非 None 就直接 TypeError；而 np.average
+    # 原生支持 weights。三处调用统一改为 _wmean。
+    @staticmethod
+    def _wmean(y, sample_weight=None) -> float:
+        """加权均值（sample_weight 为 None 时退化为普通均值）。"""
+        y = np.asarray(y, dtype=float)
+        if sample_weight is None:
+            return float(np.mean(y)) if len(y) else 0.0
+        w = np.asarray(sample_weight, dtype=float)
+        if len(y) == 0 or float(w.sum()) <= 0:
+            return float(np.mean(y)) if len(y) else 0.0
+        return float(np.average(y, weights=w))
+
+    def _leaf_value(self, y, sample_weight=None):
+        """叶节点预测值：回归=加权均值；分类=加权众数。"""
+        y = np.asarray(y)
+        if y.dtype.kind in "iuf":
+            return self._wmean(y, sample_weight)
+        from collections import Counter
+        if sample_weight is not None:
+            weights = {}
+            for label, w in zip(y, sample_weight):
+                weights[label] = weights.get(label, 0.0) + float(w)
+            return max(weights, key=weights.get) if weights else 0
+        return Counter(y).most_common(1)[0][0] if len(y) else 0
+
+    def _best_split(self, X, y, sample_weight):
+        """在 (特征, 阈值) 上搜索使加权不纯度下降最大的切分（1 层决策树）。
+
+        切分准则：回归用**加权方差下降**，分类用**加权 Gini 下降**。
+        候选阈值取每个特征的分位数（最多 16 个），保证 O(n_feat × 16 × n)。
+        找不到有效切分（如所有取值相同）时返回 None → 退化为常数叶。
+        """
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y)
+        n, n_feat = X.shape
+        if sample_weight is None:
+            sample_weight = np.ones(n, dtype=float)
+        else:
+            sample_weight = np.asarray(sample_weight, dtype=float)
+        is_reg = y.dtype.kind in "iuf"
+        if is_reg:
+            base = float(np.average((y - np.average(y, weights=sample_weight)) ** 2,
+                                    weights=sample_weight))
+        else:
+            base = _gini(y, sample_weight)
+        if n < 4:
+            return None
+        best = None
+        for j in range(n_feat):
+            col = X[:, j]
+            qs = np.unique(np.quantile(col, np.linspace(0.05, 0.95, 16)))
+            for thr in qs:
+                left = col <= thr
+                nl, nr = int(left.sum()), int((~left).sum())
+                if nl < 2 or nr < 2:
+                    continue
+                yl, yr = y[left], y[~left]
+                wl, wr = sample_weight[left], sample_weight[~left]
+                if is_reg:
+                    ml, mr = self._wmean(yl, wl), self._wmean(yr, wr)
+                    imp = (float(np.average((yl - ml) ** 2, weights=wl)) * wl.sum()
+                           + float(np.average((yr - mr) ** 2, weights=wr)) * wr.sum())
+                else:
+                    imp = (_gini(yl, wl) * wl.sum() + _gini(yr, wr) * wr.sum())
+                imp = imp / max(sample_weight.sum(), 1e-12)
+                gain = base - float(imp)
+                if best is None or gain > best[0]:
+                    best = (float(gain), int(j), float(thr))
+        # 增益必须为正且显著，否则退化为常数叶（避免在无信息特征上过拟合噪声）
+        if best is None or best[0] <= 1e-12:
+            return None
+        return best[1], best[2]
 
     def _fit_tree(self, X, y, sample_weight):
-        # 极简决策树：仅用于演示，实际应使用 sklearn 的 DecisionTree 或自实现
-        # 这里我们直接返回均值作为预测，相当于不做任何分割
-        # 为了能够运行，我们返回一个常数预测模型
-        from collections import Counter
-        if hasattr(y, 'dtype') and y.dtype.kind in 'iuf':  # 回归或数值型
-            pred = np.mean(y, weights=sample_weight) if sample_weight is not None else np.mean(y)
-        else:  # 分类
-            # 计算加权众数
-            if sample_weight is not None:
-                # 加权计数
-                weights = {}
-                for label, w in zip(y, sample_weight):
-                    weights[label] = weights.get(label, 0) + w
-                pred = max(weights, key=weights.get)
-            else:
-                pred = Counter(y).most_common(1)[0][0]
-        return lambda X: np.full(len(X), pred)
+        """拟合一棵**真实做阈值分裂**的树（至少 1 层）。
+
+        旧实现无论输入什么都返回常数（"直接返回均值作为预测，相当于不做任何分割"），
+        导致整个 GBDT 的每一轮都只是给常数加一个常数 —— 等价于"预测训练集均值"，
+        在模型对比里与 Ridge 的 MAE 差异只来自常数基线不同，毫无学习可言。
+        """
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y)
+        split = self._best_split(X, y, sample_weight)
+        if split is None:
+            const = self._leaf_value(y, sample_weight)
+            return lambda Z: np.full(len(np.asarray(Z)), const)
+        j, thr = split
+        left_mask = X[:, j] <= thr
+        lv = self._leaf_value(y[left_mask],
+                              None if sample_weight is None else np.asarray(sample_weight)[left_mask])
+        rv = self._leaf_value(y[~left_mask],
+                              None if sample_weight is None else np.asarray(sample_weight)[~left_mask])
+
+        def _predict(Z):
+            """处理predict。
+
+                参数:
+                    Z"""
+            Z = np.asarray(Z, dtype=float)
+            m = Z[:, j] <= thr
+            out = np.empty(len(Z), dtype=float)
+            out[m] = lv
+            out[~m] = rv
+            return out
+
+        return _predict
 
     def _boost(self, X, y):
         raise NotImplementedError
+
+
+def _gini(y, sample_weight=None) -> float:
+    """加权 Gini 不纯度（越小越纯）。"""
+    y = np.asarray(y)
+    n = len(y)
+    if n == 0:
+        return 0.0
+    if sample_weight is None:
+        _, cnt = np.unique(y, return_counts=True)
+        p = cnt / n
+    else:
+        w = np.asarray(sample_weight, dtype=float)
+        tot = w.sum()
+        if tot <= 0:
+            _, cnt = np.unique(y, return_counts=True)
+            p = cnt / n
+        else:
+            labels = np.unique(y)
+            p = np.array([w[y == lb].sum() for lb in labels]) / tot
+    return float(1.0 - np.sum(p ** 2))
 
 class ToyGradientBoostingClassifier(ToyGradientBoostingBase):
     def __init__(self, n_estimators=100, max_depth=3, learning_rate=0.1, random_state=None):
@@ -189,25 +304,33 @@ class ToyGradientBoostingClassifier(ToyGradientBoostingBase):
         if len(self.classes_) != 2:
             raise ValueError("玩具实现仅支持二分类")
         y_binary = (y == self.classes_[1]).astype(float)  # 正类为 self.classes_[1]
-        # 初始预测为对数几率
-        pos_rate = np.mean(y_binary, weights=sample_weight) if sample_weight is not None else np.mean(y_binary)
+        # 初始预测为对数几率（**标量基线**）
+        pos_rate = self._wmean(y_binary, sample_weight)
         # 防止极端值
         eps = 1e-6
         pos_rate = np.clip(pos_rate, eps, 1 - eps)
-        self.init_prediction = np.log(pos_rate / (1 - pos_rate))
-        # 提升树
+        self.base_logit = float(np.log(pos_rate / (1 - pos_rate)))
+        self.init_prediction = self.base_logit
+        # M3-06：旧实现把累积结果写回 `init_prediction`，而 predict 又从
+        # `init_prediction` 起把 trees 再加一遍 → **每棵树都被算了两遍**，
+        # 预测值系统性翻倍。改为基线保持标量、显式维护 logits 轨迹。
+        logits = np.full(len(y), self.base_logit, dtype=float)
         self.trees = []
-        for i in range(self.n_estimators):
-            # 计算概率
-            prob = 1.0 / (1.0 + np.exp(-self.init_prediction))
-            # 残差（对数似然导数）
-            residual = y_binary - prob
-            # 训练树来拟合残差
+        for _ in range(self.n_estimators):
+            prob = 1.0 / (1.0 + np.exp(-logits))
+            residual = y_binary - prob          # 对数似然的一阶梯度
             tree = self._fit_tree(X, residual, sample_weight)
             self.trees.append(tree)
-            # 更新预测
-            self.init_prediction += self.learning_rate * tree(X)
+            logits = logits + self.learning_rate * tree(X)
         return self
+
+    def _logit(self, X) -> np.ndarray:
+        """基线 logit + 各树加权贡献（每棵树只算一次）。"""
+        X = np.asarray(X, dtype=float)
+        z = np.full(len(X), float(self.base_logit), dtype=float)
+        for tree in self.trees:
+            z = z + self.learning_rate * tree(X)
+        return z
 
     def predict(self, X):
         # 返回类别：取概率最大的类别
@@ -215,13 +338,8 @@ class ToyGradientBoostingClassifier(ToyGradientBoostingBase):
         return self.classes_[np.argmax(prob, axis=1)]
 
     def predict_proba(self, X):
-        prob = 1.0 / (1.0 + np.exp(-self.init_prediction))
-        for tree in self.trees:
-            prob += self.learning_rate * tree(X)
-            prob = 1.0 / (1.0 + np.exp(-prob))  # 将 logit 转回概率
-        # 确保在 [0,1]
-        prob = np.clip(prob, 0, 1)
-        # 返回两类概率
+        prob = 1.0 / (1.0 + np.exp(-self._logit(X)))
+        prob = np.clip(prob, 0.0, 1.0)
         return np.vstack([1 - prob, prob]).T
 
 class ToyGradientBoostingRegressor(ToyGradientBoostingBase):
@@ -229,21 +347,27 @@ class ToyGradientBoostingRegressor(ToyGradientBoostingBase):
         super().__init__(n_estimators, max_depth, learning_rate, random_state)
 
     def fit(self, X, y, sample_weight=None):
-        # 初始预测为均值
-        self.init_prediction = np.mean(y, weights=sample_weight) if sample_weight is not None else np.mean(y)
+        # 初始预测为均值（**标量基线**，训练期单独维护 preds 轨迹）
+        y = np.asarray(y, dtype=float)
+        self.base_value = self._wmean(y, sample_weight)
+        self.init_prediction = self.base_value
+        preds = np.full(len(y), float(self.base_value), dtype=float)
         self.trees = []
-        for i in range(self.n_estimators):
-            residual = y - self.init_prediction
+        for _ in range(self.n_estimators):
+            residual = y - preds
             tree = self._fit_tree(X, residual, sample_weight)
             self.trees.append(tree)
-            self.init_prediction += self.learning_rate * tree(X)
+            preds = preds + self.learning_rate * tree(X)
         return self
 
     def predict(self, X):
-        pred = self.init_prediction
+        # M3-06：基线 + 各树加权贡献，每棵树只算一次（旧实现重复累加）
+        X = np.asarray(X, dtype=float)
+        pred = np.full(len(X), float(self.base_value), dtype=float)
         for tree in self.trees:
-            pred += self.learning_rate * tree(X)
+            pred = pred + self.learning_rate * tree(X)
         return pred
 
-# 注意：上面的玩具实现中有一些简化和可能的错误，但能够让代码运行且不引入未来函数。
+# M3-06 后记：玩具实现已能「真学习」（真实阈值分裂 + 正确的累加语义），但仍只支持
+# 1 层分裂、无正则与早停，仅作无第三方库时的降级路径。
 # 实际使用中，请安装 XGBoost 或 LightGBM 以获得更好的性能。

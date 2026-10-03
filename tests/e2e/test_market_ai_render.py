@@ -13,6 +13,15 @@ _PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _PROJ_ROOT not in sys.path:
     sys.path.insert(0, _PROJ_ROOT)
 
+_IN_PYTEST = "PYTEST_CURRENT_TEST" in os.environ
+
+
+def _exit(code: int) -> None:
+    if _IN_PYTEST:
+        raise RuntimeError(f"AI 渲染回归测试失败 (exit {code})")
+    sys.exit(code)
+
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 
@@ -59,7 +68,7 @@ def main() -> None:
     except Exception as e:  # noqa: BLE001
         print(f"FAIL: _render_ai raised {type(e).__name__}: {e}")
         store.close()
-        sys.exit(1)
+        _exit(1)
 
     html = page.ai_view.toHtml()
     for marker in ("板块轮动", "活跃品种", "情报摘要", "可操作洞察"):

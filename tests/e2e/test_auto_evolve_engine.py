@@ -26,19 +26,25 @@ def main() -> None:
 
     rng = random.Random(7)
 
-    # 1) 基因操作
+    # 1) 基因操作（树形基因：type ∈ {factor,op}；factor 叶子须 name ∈ ENTRY_FACTORS）
     genes = [ae.random_gene(rng) for _ in range(20)]
     for g in genes:
-        assert g["entry"] in ae.ENTRY_FACTORS
-        if g["entry"] == "ma_cross":
-            assert g["params"]["fast"] < g["params"]["slow"]
+        assert g["type"] in ("factor", "op"), g
+        if g["type"] == "factor":
+            assert g["name"] in ae.ENTRY_FACTORS, g["name"]
+            if g["name"] == "ma_cross":
+                assert g["params"]["fast"] < g["params"]["slow"]
         d = ae.describe_gene(g)
         assert d and isinstance(d, str)
         sig = ae.gene_signature(g)
         assert len(sig) == 12
     child = ae.crossover(genes[0], genes[1], rng)
     mut = ae.mutate(genes[0], rng)
-    assert child["entry"] in ae.ENTRY_FACTORS and mut["entry"] in ae.ENTRY_FACTORS
+    # 树形基因断言（与上面同口径）
+    for g in (child, mut):
+        assert g["type"] in ("factor", "op"), g
+        if g["type"] == "factor":
+            assert g["name"] in ae.ENTRY_FACTORS, g.get("name")
     print("[1] 基因生成/变异/交叉 OK")
 
     # 2) 引擎一代进化（缩小种群与区间提速）

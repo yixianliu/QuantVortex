@@ -18,12 +18,13 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QTableWidget,
-    QTableWidgetItem, QHeaderView, QSplitter, QWidget, QAbstractItemView,
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QTableWidgetItem, QHeaderView, QSplitter, QWidget,
     QSizePolicy,
 )
 
 from .chart_widget import PriceChart
+from .states import DataGrid   # M4-08：统一表格能力（排序 / 右键菜单 / 列显隐 / 空态）
 from .widgets import pal
 
 _FONT = None  # 延迟初始化，使用系统字体
@@ -163,7 +164,8 @@ class _SummaryCard(QFrame):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(18)
         self._cells: Dict[str, QLabel] = {}
-        p = pal()
+        self._titles: Dict[str, QLabel] = {}
+        self._style_static()
         for key in ("symbol", "gen", "return", "drawdown",
                     "winrate", "sharpe", "trades"):
             box = QVBoxLayout()
@@ -172,27 +174,47 @@ class _SummaryCard(QFrame):
                             "drawdown": "最大回撤", "winrate": "胜率",
                             "sharpe": "夏普", "trades": "成交数"}[key])
             title.setFont(QFont(_get_font(), 9))
-            title.setStyleSheet(f"color: {p['sub']};")
             val = QLabel("—")
             val.setFont(QFont(_get_font(), 12, QFont.Weight.Bold))
-            val.setStyleSheet(f"color: {p['text']};")
             box.addWidget(title)
             box.addWidget(val)
             layout.addLayout(box)
             self._cells[key] = val
+            self._titles[key] = title
         layout.addStretch(1)
 
     def set_metric(self, key: str, text: str, color: str = "#e5e7eb") -> None:
-        """设置metric。
-        
+        """设置metric（数值 + 指定色）。
+
             参数:
                 key: str
                 text: str
                 color: str"""
         if key not in self._cells:
             return
-        self._cells[key].setText(text)
-        self._cells[key].setStyleSheet(f"color: {color};")
+        val = self._cells[key]
+        val.setText(text)
+        # 记录用户指定色，切主题时保留；未指定则回落主题文本色（M4-05②）
+        val.setProperty("_user_color", color or None)
+        val.setStyleSheet(f"color: {color or pal()['text']};")
+
+    def set_theme(self, t: str) -> None:
+        """M4-05②：摘要卡随主题重着色（消除构造期固定 dark 色不刷新缺陷）。
+
+            参数:
+                t: str"""
+        self._style_static()
+
+    def _style_static(self) -> None:
+        """重绘摘要卡主题色：卡片背景/边框 + 标题 + 数值（未指定色回落主题文本色）。"""
+        p = pal()
+        self.setStyleSheet(
+            f"QFrame#AttributionSummaryCard {{ background: {p['card']};"
+            " border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; }")
+        for key, val in self._cells.items():
+            user_color = val.property("_user_color")
+            val.setStyleSheet(f"color: {user_color or p['text']};")
+            self._titles[key].setStyleSheet(f"color: {p['sub']};")
 
 
 class AttributionDialog(QDialog):
@@ -213,13 +235,8 @@ class AttributionDialog(QDialog):
         self.setWindowTitle("回测详情 · 绩效归因")
         self.resize(960, 640)
         self.setMinimumSize(QSize(820, 540))
-        self.setStyleSheet(
-            "QDialog { background: #1a1d24; color: #e5e7eb; }"
-            " QHeaderView::section { background: #232730; color: #e5e7eb;"
-            " padding: 6px; border: 0px; }"
-            " QTableWidget { background: #14171c; gridline-color: #232730;"
-            " alternate-background-color: #181c22; selection-background-color: "
-            " #2b6cb0; }")
+        # M4-05②：对话框配色改由 pal() 单一事实来源（随主题刷新，不再写死 dark）
+        self._style_dialog()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)
@@ -248,16 +265,12 @@ class AttributionDialog(QDialog):
         charts_layout.addWidget(self._month_chart, 3)
         charts_layout.addWidget(self._hold_chart, 2)
 
-        # 右侧：分笔表
-        self._trade_tbl = QTableWidget(0, 7, splitter)
+        # 右侧：分笔表（M4-08：改用 DataGrid，自带行号隐藏/隔行色/空态/排序/右键导出）
+        self._trade_tbl = DataGrid(0, 7, splitter,
+                                   empty_title="暂无成交明细",
+                                   empty_subtitle="该策略在此区间无平仓记录")
         self._trade_tbl.setHorizontalHeaderLabels(
             ["开仓时间", "平仓时间", "方向", "手数", "持仓时长", "盈亏(元)", "手续费"])
-        self._trade_tbl.verticalHeader().setVisible(False)
-        self._trade_tbl.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._trade_tbl.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows)
-        self._trade_tbl.setAlternatingRowColors(True)
         self._trade_tbl.setShowGrid(False)
         h = self._trade_tbl.horizontalHeader()
         h.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
@@ -271,6 +284,30 @@ class AttributionDialog(QDialog):
         splitter.setSizes([360, 480])
 
         self._populate(detail)
+
+    def _style_dialog(self) -> None:
+        """M4-05②：对话框级 QSS 由 pal() 派生（随主题刷新，不写死 dark）。"""
+        p = pal()
+        self.setStyleSheet(
+            f"QDialog {{ background: {p['bg']}; color: {p['text']}; }}"
+            f" QHeaderView::section {{ background: {p['panel']}; color: {p['text']};"
+            " padding: 6px; border: 0px; }"
+            f" QTableWidget {{ background: {p['card']}; gridline-color: {p['border']};"
+            f" alternate-background-color: {p['row_alt']}; }}")
+
+    def set_theme(self, t: str) -> None:
+        """M4-05②：全量接管对话框主题刷新（卡片 + 图表 + 对话框 QSS）。
+
+            参数:
+                t: str"""
+        self._style_dialog()
+        self._summary.set_theme(t)
+        # M4-08：分笔表随主题刷新（DataGrid 自带隔行底色/选中色）
+        self._trade_tbl.set_theme(t)
+        for ch in ("_month_chart", "_hold_chart"):
+            c = getattr(self, ch, None)
+            if c is not None and hasattr(c, "set_theme"):
+                c.set_theme(t)
 
     # ------------------------------------------------------------------
     def _fill_summary(self, d: dict) -> None:
@@ -286,9 +323,11 @@ class AttributionDialog(QDialog):
         else:
             gen_text = f"#{gen}"
         ret = m.get("total_return")
-        ret_color = "#22c55e" if (isinstance(ret, (int, float))
-                                  and ret > 0) else "#ef4444" if (
-            isinstance(ret, (int, float)) and ret < 0) else "#e5e7eb"
+        # C5 中国惯例：正收益=红、负收益=绿、无数据=正文色（原为美式反向配色）
+        _p = pal()
+        ret_color = _p["up"] if (isinstance(ret, (int, float))
+                                 and ret > 0) else _p["down"] if (
+            isinstance(ret, (int, float)) and ret < 0) else _p["text"]
         dd = m.get("max_drawdown")
         wr = m.get("win_rate")
         sh = m.get("sharpe")
@@ -361,7 +400,9 @@ class AttributionDialog(QDialog):
         for r, rd in enumerate(rows):
             self._set_cell(r, 0, rd["open_dt"].strftime("%Y-%m-%d %H:%M"))
             self._set_cell(r, 1, rd["close_dt"].strftime("%Y-%m-%d %H:%M"))
-            side_color = "#22c55e" if rd["side"] == "long" else "#ef4444"
+            # C5 中国惯例：多=红、空=绿（原代码用美式反向配色，已纠正）
+            p_side = pal()
+            side_color = p_side["up"] if rd["side"] == "long" else p_side["down"]
             side_lbl = QTableWidgetItem(
                 "多" if rd["side"] == "long" else "空")
             side_lbl.setForeground(QColor(side_color))
@@ -376,8 +417,10 @@ class AttributionDialog(QDialog):
                 hold_str = f"{hold / (24 * 30):.1f} 月"
             self._set_cell(r, 4, hold_str)
             pnl = rd["pnl"]
-            pnl_color = QColor("#22c55e") if pnl > 0 else (
-                QColor("#ef4444") if pnl < 0 else QColor("#e5e7eb"))
+            # C5 中国惯例：盈利=红(up)、亏损=绿(down)、零=正文色
+            p_pnl = pal()
+            pnl_color = QColor(p_pnl["up"] if pnl > 0 else (
+                p_pnl["down"] if pnl < 0 else p_pnl["text"]))
             pnl_item = QTableWidgetItem(_fmt_num(pnl, 0))
             pnl_item.setForeground(pnl_color)
             self._trade_tbl.setItem(r, 5, pnl_item)
@@ -391,5 +434,5 @@ class AttributionDialog(QDialog):
                 col: int
                 text: str"""
         item = QTableWidgetItem(text)
-        item.setForeground(QColor("#e5e7eb"))
+        item.setForeground(QColor(pal()["text"]))
         self._trade_tbl.setItem(row, col, item)

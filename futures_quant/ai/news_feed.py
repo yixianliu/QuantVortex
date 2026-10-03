@@ -28,10 +28,12 @@ import json
 import logging
 import math
 import os
-import random
 import re
+import inspect
+import threading
 import time
 from threading import Lock
+from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,43 @@ try:
 except Exception:  # pragma: no cover
     _HAVE_BS4 = False
 
+try:
+    import chardet
+    _HAVE_CHARDET = True
+except Exception:  # pragma: no cover
+    _HAVE_CHARDET = False
+
+try:
+    from charset_normalizer import from_bytes as _cn_from_bytes
+    _HAVE_CHARSET_NORMALIZER = True
+except Exception:  # pragma: no cover
+    _HAVE_CHARSET_NORMALIZER = False
+
+# M5-09②：反爬识别多特征打分阈值（可被 CHALLENGE_THRESHOLD 环境变量覆盖）
+_CHALLENGE_THRESHOLD = float(os.environ.get("CHALLENGE_THRESHOLD", "2.0"))
+
+# M5-09②：常见反爬/挑战页特征（不区分大小写、计分制）
+_CHALLENGE_MARKERS = [
+    ("cf-browser-verification", 2.0),     # Cloudflare 验证
+    ("__cf_chl",                2.0),     # Cloudflare Challenge
+    ("just a moment",           2.0),     # Cloudflare 标题
+    ("cf-challenge-running",    2.0),     # 新版 CF Challenge
+    ("请完成下列验证",           1.5),     # 国内 WAF/JS 验证
+    ("captcha",                 1.5),     # 验证码
+    ("access denied",           1.0),     # 403/拒绝访问
+]
+
+# M5-09②：无目标标签 + script 过多的权重
+_CHALLENGE_SCRIPT_HEAVY = 1.5     # script>5 且目标标签 0 → 加分
+_CHALLENGE_SCRIPT_THRESHOLD = 5
+
 from ..runtime import get_data_dir
+from ..data.http_client import get_client as _get_http_client
+from .source_config import (
+    get_source_url,
+    source_enabled,
+    clear_settings_cache as _clear_source_settings,
+)
 
 # —— 请求会话（连接池复用 + 自动重试，显著提升爬取效率与稳定性）——
 try:
@@ -79,8 +117,9 @@ def _build_session() -> "requests.Session":
 _SESSION = _build_session() if _HAVE_REQUESTS else None
 
 # —— 财联社真实数据接口（Next.js 电报流，经页面 JS 逆向确认）——
-CLS_API = "https://www.cls.cn/api/cache"
-CLS_DETAIL = "https://www.cls.cn/detail/{id}"
+# M5-10③：URL 收敛到 source_config.SOURCES，可经 settings.json#news_sources 或 env 覆盖
+CLS_API = get_source_url("cls")
+CLS_DETAIL = get_source_url("cls_detail")
 # 电报流每次最多返回 20 条，分页以最后一条 ctime 为游标向前翻
 PAGE_SIZE = 20
 CACHE_FILE = os.path.join(get_data_dir(), "cls_news_cache.json")
@@ -301,6 +340,7 @@ def _normalize(raw: dict) -> dict | None:
         "url": CLS_DETAIL.format(id=cid),
         "ts": ts,
         "ctime": ctime,
+        "published_ts": (float(ctime) if ctime else None),
         "level": level,
         "reading_num": reading,
         "stock_list": _parse_stock_list(raw.get("stock_list")),
@@ -343,7 +383,7 @@ def _fetch_telegraph(limit: int = 40, timeout: int = 10) -> list:
     """
     if not _HAVE_REQUESTS:
         return []
-    sess = _SESSION or requests
+    client = _get_http_client()
     out: list = []
     seen: set = set()
     last = None
@@ -355,9 +395,9 @@ def _fetch_telegraph(limit: int = 40, timeout: int = 10) -> list:
             "name": "telegraph",
         }
         try:
-            resp = sess.get(CLS_API, params=params,
-                            headers=_API_HEADERS, timeout=timeout)
-            if resp.status_code != 200:
+            resp = client.get(CLS_API, params=params,
+                              headers=_API_HEADERS, timeout=timeout)
+            if resp is None or resp.status_code != 200:
                 break
             data = resp.json().get("data", {})
             chunk = data.get("roll_data", []) or []
@@ -381,7 +421,7 @@ def _fetch_telegraph(limit: int = 40, timeout: int = 10) -> list:
 
 
 # =========================== 对外主接口 ===========================
-def fetch_cls_news(limit: int = 40, force: bool = False) -> dict:
+def fetch_cls_news(limit: int = 40, force: bool = False, **_kwargs) -> dict:
     """抓取财联社电报快讯。返回 {ts, items:[...], source, cached}。
 
     source ∈ {"cls.cn"(实时抓取), "cache"(本地缓存), "none"(全失败)}。
@@ -622,14 +662,14 @@ def sentiment_summary(news: dict | None = None) -> dict:
 import html  # noqa: E402  （用于清洗文章正文 HTML）
 
 # —— 东方财富期货 ——
-EM_HOME = "https://futures.eastmoney.com/"
+EM_HOME = get_source_url("eastmoney")
 EM_ART_RE = re.compile(
     r'href="(https://finance\.eastmoney\.com/a/(\d+)\.html)"[^>]*>(.*?)</a>', re.S)
 EM_DATE_RE = re.compile(r'/a/(\d{4})(\d{2})(\d{2})\d+\.html')
 EM_BODY_RE = re.compile(r'<p[^>]*>(.*?)</p>', re.S)
 
 # —— 和讯期货 ——
-HX_HOME = "https://futures.hexun.com/"
+HX_HOME = get_source_url("hexun")
 HX_ART_RE = re.compile(
     r'href="(https://futures\.hexun\.com/(\d{4})-(\d{2})-(\d{2})/[^"]+\.html)"'
     r'[^>]*>(.*?)</a>', re.S)
@@ -645,24 +685,24 @@ _BROWSER_HEADERS = {
 
 
 def _get(url: str, timeout: int = 10, referer: str = None, retries: int = 3):
-    """带指数退避 + 抖动的 GET，吸收瞬时限频/网络抖动。
+    """M5-03：统一经 http_client 发请求（连接池 + urllib3.Retry(total=3) +
+    单域限流 + UA 轮换 + robots 门），返回 Response。
 
-    复用全局会话（连接池）；失败抛异常由上层优雅降级。
+    重试已**集中于 client**（urllib3 Retry 对 429/500/502/503/504 自动指数退避），
+    此处不再叠加外层重试循环——避免「重试上重试」在离线/限流场景放大耗时。
+    ``retries`` 形参仅为兼容保留（不再驱动外层循环）。
+
+    失败（无 requests / robots 禁止 / 网络异常）仍抛异常，由上层
+    ``_fetch_list_source`` / ``_fetch_body`` 的 try/except 优雅降级（保留原契约）。
     """
-    last = None
-    sess = _SESSION or requests
-    for attempt in range(retries + 1):
-        try:
-            h = dict(_BROWSER_HEADERS)
-            if referer:
-                h["Referer"] = referer
-            return sess.get(url, headers=h, timeout=timeout)
-        except Exception as e:  # 瞬时失败：指数退避 + 抖动
-            last = e
-            if attempt < retries:
-                backoff = min(0.2 * (2 ** attempt) + random.random() * 0.3, 2.0)
-                time.sleep(backoff)
-    raise last or RuntimeError("request failed")
+    client = _get_http_client()
+    h = dict(_BROWSER_HEADERS)
+    if referer:
+        h["Referer"] = referer
+    resp = client.get(url, headers=h, timeout=timeout)
+    if resp is None:
+        raise RuntimeError("http get blocked or failed (requests 缺失/robots 禁止/网络异常)")
+    return resp
 
 
 def _clean_html(s: str) -> str:
@@ -677,8 +717,9 @@ def _clean_html(s: str) -> str:
     return html.unescape(s).strip()
 
 
-# 通用正文提取：多数资讯站以 <p> 承载正文段落；此处兼容 <p>/<div> 文本段落
-_GENERIC_BODY_RE = re.compile(r'<(?:p|div|article)[^>]*>(.*?)</(?:p|div|article)>', re.S)
+# M5-09④：通用正文提取只保留 <p>/<article>，剔除 <div> 贪婪匹配
+# （div 嵌套复杂、易误匹配侧栏/导航，导致「正文」含大量无关内容）
+_GENERIC_BODY_RE = re.compile(r'<(?:p|article)[^>]*>(.*?)</(?:p|article)>', re.S)
 
 
 def _fetch_body(url: str, enc: str, timeout: int = 5,
@@ -702,26 +743,196 @@ def _fetch_body(url: str, enc: str, timeout: int = 5,
         return ""
 
 
+# ============================================================================
+# M5-09 解析健壮性升级：① 反爬多特征打分 ② BS4 结构化解析 ③ 编码探测
+# ============================================================================
+
+def _detect_challenge(text: str, threshold: float | None = None) -> tuple:
+    """M5-09② 反爬/挑战页识别（多特征打分）。
+
+    对 text 进行多特征打分（Cloudflare markers / 国内 WAF / captcha / 无目标
+    标签 + script>5），总分 ≥ threshold 判定为挑战页 → 上层应跳过该源。
+
+    Args:
+        text: 待检测的 HTML 文本（已解码）。
+        threshold: 阈值，None 时读模块级 _CHALLENGE_THRESHOLD（env 可覆盖）。
+
+    Returns:
+        (is_challenge: bool, score: float, reasons: list[str])
+    """
+    if threshold is None:
+        threshold = _CHALLENGE_THRESHOLD
+    if not text:
+        return False, 0.0, []
+    low = text.lower()
+    score = 0.0
+    reasons: list = []
+
+    for marker, weight in _CHALLENGE_MARKERS:
+        if marker.lower() in low:
+            score += weight
+            reasons.append(f"marker:{marker}")
+
+    script_count = low.count("<script")
+    # M5-09②：script 多且无目标标签（<a> 候选文章）→ 额外加分
+    if script_count > _CHALLENGE_SCRIPT_THRESHOLD and "<a " not in low and "<a\n" not in low:
+        score += _CHALLENGE_SCRIPT_HEAVY
+        reasons.append(f"script_heavy:{script_count}")
+
+    return score >= threshold, round(score, 2), reasons
+
+
+def _detect_charset(content: bytes) -> tuple:
+    """M5-09③ 编码探测：优先 chardet，回退 charset-normalizer，再回退 utf-8。
+
+    Returns:
+        (encoding: str, confidence: float, source: str)
+        source: 'chardet' | 'charset-normalizer' | 'utf-8-fallback'
+    """
+    if not content:
+        return "utf-8", 0.0, "utf-8-fallback"
+
+    if _HAVE_CHARDET:
+        try:
+            r = chardet.detect(content[:65536])
+            if r and r.get("encoding") and r.get("confidence", 0) >= 0.7:
+                return r["encoding"], float(r["confidence"]), "chardet"
+        except Exception:
+            pass
+
+    if _HAVE_CHARSET_NORMALIZER:
+        try:
+            best = _cn_from_bytes(content[:65536]).best()
+            if best is not None and best.encoding:
+                return best.encoding, float(getattr(best, "chaos", 0.0) or 0.0), "charset-normalizer"
+        except Exception:
+            pass
+
+    return "utf-8", 0.0, "utf-8-fallback"
+
+
+def _decode_content(content: bytes, enc_hint: str = "utf-8") -> tuple:
+    """M5-09③ 解码包装：先按 hint 解码 → 失败时探测 → 探测失败再 fallback utf-8。
+
+    探测失败时 logger.warning（不再静默 ignore）。
+
+    Returns:
+        (text: str, encoding_used: str)
+    """
+    # 1) 优先用 hint 试一遍（保留旧行为确定性）
+    for enc in (enc_hint, "utf-8", "gbk", "gb2312"):
+        try:
+            return content.decode(enc), enc
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    # 2) hint 全失败 → 探测
+    detected_enc, conf, src = _detect_charset(content)
+    try:
+        return content.decode(detected_enc), detected_enc
+    except (UnicodeDecodeError, LookupError):
+        logger.warning(
+            "[M5-09] 编码探测失败 hint=%s detected=%s conf=%.2f src=%s，强制 utf-8 ignore",
+            enc_hint, detected_enc, conf, src,
+        )
+        return content.decode("utf-8", "ignore"), "utf-8"
+
+
+def _extract_with_bs4(html_text: str, source: str, limit: int) -> list:
+    """M5-09① BS4 结构化解析（兜底正则的第一级）。
+
+    通用启发：在常见 article 容器内取 a[href]，过滤：
+    - 非 http(s) / 空 href
+    - 标题长度 < 4（噪音）
+    - 与 source 域名无关的链接（站内优先）
+
+    Returns:
+        list[(url, title)]
+    """
+    if not _HAVE_BS4 or not html_text:
+        return []
+    try:
+        soup = BeautifulSoup(html_text, "html.parser")
+    except Exception:
+        return []
+
+    # 候选容器（按命中概率从高到低）
+    containers = soup.select("article") + soup.select(".news-item") \
+        + soup.select(".list-item") + soup.select(".item") \
+        + soup.select("li") + soup.select("ul li")
+    # 若容器为空，回退到全局 a[href]
+    if not containers:
+        containers = soup.select("a[href]")
+
+    out: list = []
+    seen: set = set()
+    for c in containers:
+        # M5-09①修复：c 可能是 <a> 自身（fallback 路径），也可能是容器内的 <a>
+        if c.name == "a" and c.get("href"):
+            a = c
+        else:
+            a = c.find("a", href=True) if hasattr(c, "find") else None
+        if not a or not a.get("href"):
+            continue
+        url = a["href"]
+        if not url.startswith(("http://", "https://")):
+            continue
+        title = _clean_html(a.get_text(" ", strip=True))
+        if len(title) < 4:
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append((url, title))
+        if len(out) >= limit:
+            break
+    return out
+
+
+# M5-03③：正文抓取共享池（全局并发上限 8），替代「每源各自 new 一个嵌套
+# ThreadPoolExecutor」的放大效应（外层 6 源 × 内层 4 = 峰值 24 线程）。
+_ENRICH_POOL_CAP = 8
+_ENRICH_POOL: Optional["concurrent.futures.ThreadPoolExecutor"] = None
+_ENRICH_POOL_LOCK = threading.Lock()
+
+
+def _enrich_pool() -> "concurrent.futures.ThreadPoolExecutor":
+    """惰性获取正文抓取共享线程池（全局 cap 8）。"""
+    global _ENRICH_POOL
+    if _ENRICH_POOL is None:
+        with _ENRICH_POOL_LOCK:
+            if _ENRICH_POOL is None:
+                _ENRICH_POOL = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=_ENRICH_POOL_CAP, thread_name_prefix="qvx-enrich")
+    return _ENRICH_POOL
+
+
 def _enrich_bodies(items: list, enc: str, max_n: int = 6, timeout: int = 5,
                      referer: str = None, body_re=None) -> None:
-    """并发抓取前 max_n 条正文，写回 item['content']（无正文则保留标题）。"""
+    """M5-03③：并发抓取前 max_n 条正文（经共享池，全局 cap 8），写回 item['content']。"""
     if not _HAVE_REQUESTS or not items:
         return
     cand = items[:max_n]
     bre = body_re or EM_BODY_RE
     try:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        with ThreadPoolExecutor(max_workers=min(4, len(cand))) as ex:
-            futs = {ex.submit(_fetch_body, it["url"], enc, timeout,
-                                  referer, bre): it for it in cand}
-            for f in as_completed(futs, timeout=timeout * 2):
-                it = futs[f]
-                try:
-                    body = f.result()
-                    if body:
-                        it["content"] = body
-                except Exception:
-                    pass
+        ex = _enrich_pool()
+        from concurrent.futures import as_completed
+        futs = {ex.submit(_fetch_body, it["url"], enc, timeout,
+                              referer, bre): it for it in cand}
+        done, _ = concurrent.futures.wait(
+            futs, timeout=timeout * 2,
+            return_when=concurrent.futures.FIRST_COMPLETED)
+        # 收集已完成；未完成/取消的一律跳过（不阻塞、不残留）
+        for f, it in futs.items():
+            try:
+                body = f.result(timeout=0.1) if f in done else ""
+                if body:
+                    it["content"] = body
+            except Exception:
+                pass
+        for f in futs:
+            if not f.done():
+                f.cancel()
     except Exception:
         pass
 
@@ -742,10 +953,13 @@ def _fetch_list_source(home: str, art_re, source: str, *,
         resp = _get(home, timeout, referer=referer or home)
         if resp.status_code != 200:
             return []
-        txt = resp.content.decode(enc, "ignore")
-        # 反爬挑战页（JS 校验、无真实正文）识别：直接按抓取失败降级
-        if ("window." in txt and txt.count("<script") > 3
-                and len(art_re.findall(txt)) == 0):
+        # M5-09③：编码探测包装（先 hint → 探测 → fallback utf-8），失败不再静默
+        txt, used_enc = _decode_content(resp.content, enc)
+        # M5-09②：多特征反爬打分（替代旧 window.+script>3 单条规则）
+        is_chal, chal_score, chal_reasons = _detect_challenge(txt)
+        if is_chal:
+            logger.info("[M5-09] 识别为反爬挑战页 source=%s score=%.2f reasons=%s",
+                        source, chal_score, chal_reasons)
             return []
         seen: set = set()
         for m in art_re.finditer(txt):
@@ -769,12 +983,38 @@ def _fetch_list_source(home: str, art_re, source: str, *,
                 "url": full_url,
                 "ts": ts,
                 "ctime": ctime,
+                # M5-05②：published_ts 为真实发布时间（解析自 URL/源）；解析不到则
+                # None（不冒充），下游排序与时效衰减据此跳过该条。
+                "published_ts": (float(ctime) if ctime else None),
                 "level": "B",
                 "reading_num": 0,
                 "source": source,
             })
             if len(out) >= limit:
                 break
+
+        # M5-09①：BS4 结构化解析兜底（正则未命中时启用第二级策略）
+        if not out and _HAVE_BS4:
+            for url, title in _extract_with_bs4(txt, source, limit):
+                if url in seen:
+                    continue
+                seen.add(url)
+                full_url = url if url.startswith("http") else url
+                ctime, ts = (date_parser(url) if date_parser else (0.0, ""))
+                out.append({
+                    "id": f"{id_prefix or source}_{len(out)}",
+                    "title": title[:120],
+                    "content": title,
+                    "url": full_url,
+                    "ts": ts,
+                    "ctime": ctime,
+                    "published_ts": (float(ctime) if ctime else None),
+                    "level": "B",
+                    "reading_num": 0,
+                    "source": source,
+                })
+                if len(out) >= limit:
+                    break
     except Exception:
         return out
     if enrich:
@@ -820,6 +1060,7 @@ def fetch_eastmoney_news(limit: int = 25, timeout: int = 10,
                 "url": url,
                 "ts": ts,
                 "ctime": ctime,
+                "published_ts": (float(ctime) if ctime else None),
                 "level": "B",
                 "reading_num": 0,
                 "source": "东方财富",
@@ -866,6 +1107,7 @@ def fetch_hexun_news(limit: int = 25, timeout: int = 10,
                 "url": url,
                 "ts": ts,
                 "ctime": ctime,
+                "published_ts": (float(ctime) if ctime else None),
                 "level": "B",
                 "reading_num": 0,
                 "source": "和讯",
@@ -951,7 +1193,10 @@ def _classify_category(text: str, source: str = None) -> str:
 
 def fetch_all_news(limit: int = 60, force: bool = False,
                     use_cls: bool = True, use_em: bool = True,
-                    use_hx: bool = True) -> dict:
+                    use_hx: bool = True,
+                    per_source_timeout: int = 25,
+                    on_progress: "Optional[Callable[[int, int, str], None]]" = None,
+                    should_abort: "Optional[Callable[[], bool]]" = None) -> dict:
     """合并多源期货资讯（共 11 源，并发抓取、单源失败隔离、优雅降级）：
 
     财联社 / 东方财富 / 和讯 / 同花顺 / 华尔街见闻 / 金十数据 /
@@ -986,17 +1231,50 @@ def fetch_all_news(limit: int = 60, force: bool = False,
 
     parts: list = []
     if tasks:
-        with concurrent.futures.ThreadPoolExecutor(
-                max_workers=min(6, len(tasks))) as ex:
-            futs = {ex.submit(fn): name for name, fn in tasks}
-            for f, name in futs.items():
+        total_src = len(tasks)
+        done_src = 0
+        ex = concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(6, len(tasks)))
+        futs = {ex.submit(fn): name for name, fn in tasks}
+        pending = set(futs)
+        # M5-03④：用 concurrent.futures.wait 轮询「下一个完成的源」，
+        # 替代逐 future.result(timeout)（后者在超时/取消时仍阻塞剩余源）。
+        while pending:
+            # M4-09：协作式取消——用户点击「取消」后不再等待剩余源
+            if should_abort is not None and should_abort():
+                logger.info("资讯抓取被用户取消，跳过剩余源")
+                for f in pending:
+                    f.cancel()
+                pending = set()
+                break
+            done, pending = concurrent.futures.wait(
+                pending, timeout=per_source_timeout,
+                return_when=concurrent.futures.FIRST_COMPLETED)
+            if not done:
+                # 单批超时：放弃剩余未完成的源（不阻塞），标记取消
+                for f in pending:
+                    f.cancel()
+                pending = set()
+                break
+            for f in done:
+                name = futs[f]
                 try:
-                    r = f.result(timeout=25)
+                    r = f.result()
                     items = r.get("items", []) if isinstance(r, dict) else r
                     if isinstance(items, list):
                         parts.append((name, items))
                 except Exception as e:
                     logger.warning("源抓取失败 %s: %s", name, e)
+                done_src += 1
+                # M4-09：上报「已完成 x/总源数」进度
+                if on_progress is not None:
+                    try:
+                        on_progress(done_src, total_src,
+                                    f"已完成 {done_src}/{total_src} 源")
+                    except Exception:  # noqa: BLE001
+                        pass
+        # M5-03④：显式取消未启动任务，不阻塞等待在途任务结束
+        ex.shutdown(wait=False, cancel_futures=True)
 
     result = {"ts": time.time(), "items": [], "sources": {},
               "by_source": {}, "by_category": {}}
@@ -1634,7 +1912,7 @@ def _generate_actionable_insight(all_news: dict, res: dict, name: str,
 # ============================================================================
 # 新增信源 #4：同花顺期货频道
 # ============================================================================
-THS_HOME = "https://www.10jqka.com.cn/futures/"
+THS_HOME = get_source_url("ths")
 _THS_RE = re.compile(r'href="([^"]*futures/detail/\d+[^"]*)"[^>]*>(.*?)</a>', re.S)
 
 def fetch_ths_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> list:
@@ -1644,8 +1922,8 @@ def fetch_ths_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> l
     items = []
     try:
         hdrs = {**_BROWSER_HEADERS}
-        resp = (_SESSION or requests).get(THS_HOME, headers=hdrs, timeout=timeout)
-        if resp.status_code != 200:
+        resp = _get_http_client().get(THS_HOME, headers=hdrs, timeout=timeout)
+        if resp is None or resp.status_code != 200:
             return []
         txt = resp.text.replace("<br/>", "\n")
         for href, title in _THS_RE.findall(txt)[:limit]:
@@ -1660,7 +1938,7 @@ def fetch_ths_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> l
     return items
 
 # —— 金投网 · 期货频道 ——
-CNGOLD_FUTURES_HOME = "https://futures.cngold.org/"
+CNGOLD_FUTURES_HOME = get_source_url("cngold")
 _CNGOLD_ART_RE = re.compile(
     r'href="(https://futures\.cngold\.org/[^"]+)"[^>]*title="([^"]+)"', re.S)
 _CNGOLD_DATE_RE = re.compile(r'/c/(\d{4})-(\d{2})-(\d{2})/')
@@ -1699,6 +1977,7 @@ def fetch_cngold_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -
                 "url": url,
                 "ts": ts,
                 "ctime": ctime,
+                "published_ts": (float(ctime) if ctime else None),
                 "level": "B",
                 "reading_num": 0,
                 "source": "金投网",
@@ -1711,7 +1990,7 @@ def fetch_cngold_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -
 
 
 # —— 新浪财经 · 财经滚动 ——
-SINA_ROLL_HOME = "https://finance.sina.com.cn/"
+SINA_ROLL_HOME = get_source_url("sina_roll")
 _SINA_ROLL_RE = re.compile(
     r'href="(https?://finance\.sina\.com\.cn/[^"]+\.shtml)"[^>]*>([^<]+)</a>', re.S)
 
@@ -1753,7 +2032,7 @@ def fetch_sina_roll_news(limit: int = 20, timeout: int = 10, enrich: bool = True
 
 
 # —— 中金在线 · 财经频道 ——
-ZQ86_HOME = "https://www.zq86.com/"
+ZQ86_HOME = get_source_url("zq86")
 _ZQ86_RE = re.compile(
     r'href="(https?://www\.zq86\.com/[^"]+)"[^>]*>([^<]+)</a>', re.S)
 
@@ -1815,7 +2094,7 @@ def fetch_zq86_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> 
 # ============================================================================
 # 新增信源 #5：华尔街见闻 — 期货/大宗商品频道
 # ============================================================================
-WSJ_FUTURES_HOME = "https://wallstreetcn.com/live/global"
+WSJ_FUTURES_HOME = get_source_url("wsj")
 _WSJ_RE = re.compile(
     r'<a[^>]*href="(https://wallstreetcn\.com/articles/\d+)"[^>]*>(.*?)</a>', re.S)
 _WSJ_FUTURES_KEYWORDS = ["期货", "大宗商品", "原油", "黄金", "铜", "铁矿石", "农产品",
@@ -1835,8 +2114,8 @@ def fetch_wsj_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> l
             "Referer": "https://wallstreetcn.com/",
             "Cookie": "locale=zh-CN",
         }
-        resp = (_SESSION or requests).get(WSJ_FUTURES_HOME, headers=hdrs, timeout=timeout)
-        if resp.status_code != 200:
+        resp = _get_http_client().get(WSJ_FUTURES_HOME, headers=hdrs, timeout=timeout)
+        if resp is None or resp.status_code != 200:
             return []
         txt = resp.text
         seen = set()
@@ -1850,13 +2129,16 @@ def fetch_wsj_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> l
             if title in seen:
                 continue
             seen.add(title)
+            # M5-05①：华尔街见闻快讯页无法从列表页取真实发布时间 → ctime/published_ts
+            # 置 None（不再用 time.time() 冒充），内容仍参与情绪统计，但不参与时效衰减。
             items.append({
                 "id": "wsj_" + str(hash(href) % 1000000),
                 "title": title[:120],
                 "content": title,
                 "url": href,
                 "ts": "",
-                "ctime": time.time(),
+                "ctime": None,
+                "published_ts": None,
                 "level": "B",
                 "reading_num": 0,
                 "source": "华尔街见闻",
@@ -1871,7 +2153,7 @@ def fetch_wsj_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> l
 # ============================================================================
 # 新增信源 #6：金十数据 — 期货快讯频道
 # ============================================================================
-JIN10_HOME = "https://www.jin10.com/"
+JIN10_HOME = get_source_url("jin10")
 _JIN10_RE = re.compile(
     r'<a[^>]*href="(https://www\.jin10\.com/flash/\d+)"[^>]*>(.*?)</a>', re.S)
 _JIN10_FLASH_RE = re.compile(
@@ -1895,8 +2177,8 @@ def fetch_jin10_news(limit: int = 20, timeout: int = 10, enrich: bool = True) ->
             **_BROWSER_HEADERS,
             "Referer": "https://www.jin10.com/",
         }
-        resp = (_SESSION or requests).get(JIN10_HOME, headers=hdrs, timeout=timeout)
-        if resp.status_code != 200:
+        resp = _get_http_client().get(JIN10_HOME, headers=hdrs, timeout=timeout)
+        if resp is None or resp.status_code != 200:
             return []
         txt = resp.text
         # 尝试用 flash 文本模式匹配
@@ -1910,13 +2192,17 @@ def fetch_jin10_news(limit: int = 20, timeout: int = 10, enrich: bool = True) ->
             if text[:60] in seen:
                 continue
             seen.add(text[:60])
+            # M5-05①：金十数据快讯页（静态 HTML 正则抓取）无法取真实发布时间 →
+            # ctime/published_ts 置 None（不再用 time.time() 冒充），内容仍参与情绪，
+            # 但不参与时效衰减。注：理想方案是接金十官方实时 JSON 接口，当前保守降级。
             items.append({
                 "id": "jin10_" + str(hash(text) % 1000000),
                 "title": text[:80],
                 "content": text,
                 "url": JIN10_HOME,
                 "ts": "",
-                "ctime": time.time(),
+                "ctime": None,
+                "published_ts": None,
                 "level": "B",
                 "reading_num": 0,
                 "source": "金十数据",
@@ -1931,7 +2217,10 @@ def fetch_jin10_news(limit: int = 20, timeout: int = 10, enrich: bool = True) ->
 # ============================================================================
 # 新增信源 #7-#11：更多主流财经资讯网站（提升覆盖面与交叉验证能力）
 # ============================================================================
-_URL_DATE_RE = re.compile(r'(\d{4})[-/]?(\d{2})[-/]?(\d{2})')
+# M5-05③：收紧日期解析——必须带 `[-/]` 分隔（杜绝把商品代码/ID 等 8 位纯数字
+# 误判为日期），且前后不得紧贴数字（`(?<!\d)`/`(?!\d)`）；再经 datetime 构造
+# 自然校验月 01-12 / 日 01-31。仅匹配形如 `/2026/09/26/` 或 `/2026-09-26/` 的路径段。
+_URL_DATE_RE = re.compile(r'(?<!\d)(\d{4})[-/](\d{2})[-/](\d{2})(?!\d)')
 
 
 def _parse_url_date(url: str):
@@ -1947,7 +2236,7 @@ def _parse_url_date(url: str):
 
 
 # —— 新浪财经 · 期货频道 ——
-SINA_HOME = "https://finance.sina.com.cn/futures/"
+SINA_HOME = get_source_url("sina")
 _SINA_RE = re.compile(
     r'href="(https?://finance\.sina\.com\.cn/[^"]+\.shtml)"[^>]*>(.*?)</a>', re.S)
 
@@ -1961,7 +2250,7 @@ def fetch_sina_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> 
 
 
 # —— 期货日报 ——
-QHRB_HOME = "http://www.qhrb.com.cn/"
+QHRB_HOME = get_source_url("qhrb")
 _QHRB_RE = re.compile(
     r'href="(http://www\.qhrb\.com\.cn/[^"]+\.html)"[^>]*>(.*?)</a>', re.S)
 
@@ -1975,7 +2264,7 @@ def fetch_qhrb_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> 
 
 
 # —— 中国证券报 · 中证网 ——
-CS_HOME = "https://www.cs.com.cn/"
+CS_HOME = get_source_url("cs")
 _CS_RE = re.compile(
     r'href="(https?://www\.cs\.com\.cn/[^"]+\.html)"[^>]*>(.*?)</a>', re.S)
 
@@ -1989,7 +2278,7 @@ def fetch_cs_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> li
 
 
 # —— 证券时报 ——
-STCN_HOME = "https://www.stcn.com/"
+STCN_HOME = get_source_url("stcn")
 _STCN_RE = re.compile(
     r'href="(https?://[a-z]+\.stcn\.com/[^"]+\.(?:html|shtml))"[^>]*>(.*?)</a>', re.S)
 
@@ -2003,7 +2292,7 @@ def fetch_stcn_news(limit: int = 20, timeout: int = 10, enrich: bool = True) -> 
 
 
 # —— 凤凰财经 · 期货频道 ——
-IFENG_HOME = "https://finance.ifeng.com/futures/"
+IFENG_HOME = get_source_url("ifeng")
 _IFENG_RE = re.compile(
     r'href="(https?://finance\.ifeng\.com/[^"]+\.shtml)"[^>]*>(.*?)</a>', re.S)
 
@@ -2027,7 +2316,12 @@ def _fetch_one_source(name: str, fetch_fn: callable, timeout_val: int = 15, **kw
     新增超时控制和重试机制，提升稳定性。
     """
     try:
-        items = fetch_fn(**kwargs, timeout=timeout_val)
+        # M5-01：仅对声明接受 timeout 的函数传参，避免 TypeError 被吞
+        sig = inspect.signature(fetch_fn)
+        if 'timeout' in sig.parameters:
+            items = fetch_fn(**kwargs, timeout=timeout_val)
+        else:
+            items = fetch_fn(**kwargs)
         return {"items": items if isinstance(items, list) else items.get("items", []), "error": None}
     except Exception as e:
         return {"items": [], "error": str(e)[:60]}
@@ -2051,7 +2345,9 @@ def _concurrent_fetch_all(cls_kwargs={}, em_kwargs={}, hx_kwargs={},
         ("东方财富", lambda: _fetch_one_source("em", fetch_eastmoney_news, limit=limit, enrich=True), em_kwargs),
         ("华尔街见闻", lambda: _fetch_one_source("wsj", fetch_wsj_news, limit=limit, enrich=True), wsj_kwargs),
         ("金十数据", lambda: _fetch_one_source("jin10", fetch_jin10_news, limit=limit, enrich=True), jin10_kwargs),
+        ("中金在线", lambda: _fetch_one_source("zq86", fetch_zq86_news, limit=limit, enrich=True), {}),
         ("和讯", lambda: _fetch_one_source("hx", fetch_hexun_news, limit=limit, enrich=True), hx_kwargs),
+        ("金投网", lambda: _fetch_one_source("cngold", fetch_cngold_news, limit=limit, enrich=True), {}),
         ("同花顺", lambda: _fetch_one_source("ths", fetch_ths_news, limit=limit, enrich=True), ths_kwargs),
         # 新增主流财经网站，扩大覆盖面
         ("新浪财经", lambda: _fetch_one_source("sina", fetch_sina_news, limit=limit, enrich=True), {}),
@@ -2064,22 +2360,38 @@ def _concurrent_fetch_all(cls_kwargs={}, em_kwargs={}, hx_kwargs={},
     all_items = []
     source_counts = {}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(11, len(sources))) as executor:
-        futures = {name: executor.submit(fn) for name, fn, _ in sources}
-        for name, _, _ in sources:
-            future = futures[name]
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(11, len(sources)))
+    futures = {name: executor.submit(fn) for name, fn, _ in sources}
+    # M5-03④：concurrent.futures.wait 轮询下一批完成的源，替代逐
+    # future.result(timeout=30)（后者在超时后仍阻塞后续源串行等待）。
+    pending = set(futures.values())
+    while pending:
+        done, pending = concurrent.futures.wait(
+            pending, timeout=30,
+            return_when=concurrent.futures.FIRST_COMPLETED)
+        if not done:
+            # 30s 内无源完成：放弃剩余（标记 0 条），不阻塞
+            for name, fut in futures.items():
+                if not fut.done():
+                    source_counts.setdefault(name, 0)
+                    fut.cancel()
+            pending = set()
+            break
+        for f in done:
+            name = next(n for n, ft in futures.items() if ft is f)
             try:
-                result = future.result(timeout=30)
+                result = f.result()
                 count = len(result["items"])
                 source_counts[name] = count
                 for item in result["items"]:
                     item.setdefault("source", name)
                     all_items.append(item)
-            except concurrent.futures.TimeoutError:
-                source_counts[name] = 0
             except Exception:
                 source_counts[name] = 0
-    
+    # M5-03④：显式取消未启动任务，不阻塞等待在途任务结束
+    executor.shutdown(wait=False, cancel_futures=True)
+
     results["sources"] = source_counts
     results["total_items"] = len(all_items)
     

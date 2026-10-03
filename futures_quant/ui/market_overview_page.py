@@ -35,20 +35,21 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtProperty, QPropertyAnimatio
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel,
-    QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
+    QTextEdit, QTableWidgetItem, QHeaderView, QFrame,
     QScrollArea, QSplitter, QAbstractItemView, QListWidget, QListWidgetItem,
-    QLineEdit, QTabWidget, QFileDialog,
+    QLineEdit, QTabWidget, QFileDialog, QProgressBar,
 )
 
 from .widgets import (
-    PageHeader, StatCard, ConfidenceBar, prepare_table,
+    PageHeader, StatCard, ConfidenceBar,
     color_pnl, pal, ToolBar, THEME, SectionHeader, StatusTile,
     ResponsiveRow, FlowLayout, RankTable, _fmt_hands, _fmt_yi,
 )
 from .chart_widget import PriceChart
+from .states import DataGrid   # M4-08：统一表格能力（排序 / 右键菜单 / 列显隐 / 空态）
 from .pages import BasePage, symbol_code, symbol_label, PERIODS, PERIOD_LABEL, df_to_bars
 from ..indicators.tech import add_indicators
-from ..ai import news_feed
+# news_feed 延迟导入：仅在用户点击「KP资讯解读」时才加载，避免启动时触发爬虫模块
 
 def _level_weight(level) -> float:
     """新闻重要度权重（与 news_feed 保持一致）。"""
@@ -114,11 +115,23 @@ class MarketOverviewPage(BasePage):
         self._market_ctx = {}      # 市场全局上下文（强弱/涨跌家数/资金/情绪）
         self._news_sent = (0, 0, 0)  # 资讯情绪分布 (bull, bear, neutral)
         self._sd_rows = []         # 最近一次供需信号行（主题切换时重建列表用）
+        # M4-10：compute_panorama 结果 5s 缓存，避免重复计算重复行情
+        self._pano_cache: dict[str, pd.DataFrame] = {}
+        self._pano_cache_ts: dict[str, float] = {}
         self.status_tiles = []     # 实时行情四状态灯（强弱/涨跌家数/资金/情绪）
         self.temp_lbl = QLabel("—")  # 市场温度计标签（默认值，防止 set_theme 报错）
         self.temp_bar = ConfidenceBar(0.5)  # 市场温度计条（默认值，防止 refresh_pano 报错）
         self.breadth_ext_lbl = QLabel()  # 涨跌分布扩展统计标签（默认值，防止 refresh_pano 报错）
         self.breadth_ext_lbl.setWordWrap(False)
+        # M4-08：全市场速览表改用 DataGrid（排序 / 右键复制·导出 CSV / 列显隐 / 空态 / 主题刷新）
+        self.watch = DataGrid(0, 6, empty_title="暂无行情数据",
+                              empty_subtitle="等待数据源连接")  # 全市场速览表（合约/最新价/涨跌幅/量比/持仓变化%/资金净流入）
+        self.watch.setMinimumHeight(240)
+        self.watch.setHorizontalHeaderLabels(["合约", "最新价", "涨跌幅%", "量比", "持仓变化%", "资金净流入"])
+        self.watch.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.watch.horizontalHeader().setStretchLastSection(True)
+        self.watch.horizontalHeader().setMinimumSectionSize(96)
+        self.watch.set_row_action(self._on_pick)  # 双击行 → 切换到该合约
         self._build()
 
     # ==================================================================
@@ -207,6 +220,43 @@ class MarketOverviewPage(BasePage):
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
         root.addWidget(split, 1)
+        # M4-05：构建期主题色 inline 样式集中重绘（保证切主题后被覆盖刷新）
+        self._style_static()
+
+    # ------------------------------------------------------------------
+    # M4-05：构建期主题色 inline 样式集中管理（消除「inline setStyleSheet 不随
+    # 全局 QSS 刷新」缺陷）。本方法在 _build 末尾与 set_theme 中重跑。
+    # ------------------------------------------------------------------
+    def _style_static(self) -> None:
+        """重绘所有构建期主题色 inline 样式。
+
+        这些样式在 _build 时按当时主题设过一次，但 inline setStyleSheet 不会随全局
+        QSS 重新应用而刷新；集中到本方法并在 set_theme 中重跑，杜绝切主题后停留在
+        旧配色。
+        """
+        p = pal()
+        self.quote_time.setStyleSheet(f"font-size:11px;color:{p['sub']};")
+        self._oi_hdr.setStyleSheet(f"font-size:11px;font-weight:bold;color:{p['sub']};")
+        self._oi_time.setStyleSheet(f"font-size:10px;color:{p['sub']};")
+        self._sd_hdr.setStyleSheet(f"font-size:11px;font-weight:bold;color:{p['sub']};")
+        self._sd_time.setStyleSheet(f"font-size:10px;color:{p['sub']};")
+        self.rank_hint.setStyleSheet(f"font-size:11px;color:{p['sub']};")
+        self.rank_count.setStyleSheet(f"font-size:10px;color:{p['sub']};")
+        # 涨跌分布三色块：主题色 + 白字（flat 用 bg 反白），与 _refresh_breadth 同色
+        self._bg_up.setStyleSheet(
+            f"background:{p['up']};color:#fff;font-size:12px;font-weight:bold;border-radius:0;")
+        self._bg_flat.setStyleSheet(
+            f"background:{p['sub']};color:{p['bg']};font-size:12px;font-weight:bold;border-radius:0;")
+        self._bg_down.setStyleSheet(
+            f"background:{p['down']};color:#fff;font-size:12px;font-weight:bold;border-radius:0;")
+        # AI 研判占位（尚未填充）随主题色刷新
+        if self._news is None:
+            self.ai_view.setHtml(
+                f"<div style='font-size:13px;color:{p['sub']};line-height:1.5'>"
+                "AI 综合研判将在页面打开后自动生成，请稍候…</div>")
+            self.tech_view.setHtml(
+                f"<div style='font-size:13px;color:{p['sub']};line-height:1.5'>"
+                "选择合约后将自动生成该品种的技术面解读，请稍候…</div>")
 
     # ------------------------------------------------------------------
     # 综合仪表板：顶部核心指标 + 市场状态 + 板块强度 + 涨跌分布
@@ -256,7 +306,6 @@ class MarketOverviewPage(BasePage):
         rt_lay.addLayout(rt_secondary)
         self.quote_time = QLabel("行情更新：—")
         self.quote_time.setObjectName("quote-time")
-        self.quote_time.setStyleSheet("font-size:11px;color:#64748b;")
         rt_lay.addWidget(self.quote_time)
 
         # 右侧：市场状态卡片
@@ -337,7 +386,6 @@ class MarketOverviewPage(BasePage):
         self._bg_down = QLabel(); self._bg_down.setObjectName("bg-down")
         for w in (self._bg_up, self._bg_flat, self._bg_down):
             w.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            w.setStyleSheet("color:#fff;font-size:11px;font-weight:bold;")
         bg_lay.addWidget(self._bg_up, 1); bg_lay.addWidget(self._bg_flat, 1); bg_lay.addWidget(self._bg_down, 1)
         brd_lay.addWidget(self.breadth_gauge)
         self.breadth_lbl = QLabel(); self.breadth_lbl.setWordWrap(True)
@@ -365,20 +413,25 @@ class MarketOverviewPage(BasePage):
 
         b1 = QWidget(); b1l = QVBoxLayout(b1); b1l.setContentsMargins(0, 0, 0, 0); b1l.setSpacing(2)
         self._oi_hdr = QLabel("持仓异动（按 |持仓变%| 排序，点击表头可重排）")
-        self._oi_hdr.setStyleSheet(f"font-size:11px;font-weight:bold;color:{pal()['sub']};")
         b1l.addWidget(self._oi_hdr)
+        self._oi_time = QLabel("数据更新时间: --:--:--")
+        b1l.addWidget(self._oi_time)
         self.oi_tbl = RankTable(
             [("name", "合约", "text"), ("category", "板块", "text"),
-             ("oi_chg", "持仓变%", "bar")], theme=self._theme)
+             ("oi_chg", "持仓变化%", "bar")], theme=self._theme)
+        self.oi_tbl.set_tooltip_template("合约: {name}\n板块: {category}\n持仓变化%: {oi_chg:.2f}%\n正值: 增仓 | 负值: 减仓")
         b1l.addWidget(self.oi_tbl)
         b2 = QWidget(); b2l = QVBoxLayout(b2); b2l.setContentsMargins(0, 0, 0, 0); b2l.setSpacing(2)
         self._sd_hdr = QLabel("供需 / 库存信号（财经资讯 云端研判）")
-        self._sd_hdr.setStyleSheet(f"font-size:11px;font-weight:bold;color:{pal()['sub']};")
         b2l.addWidget(self._sd_hdr)
+        self._sd_time = QLabel("数据更新时间: --:--:--")
+        b2l.addWidget(self._sd_time)
         # 5 列 -> 4 列：合并「方向 + 研判」为单「信号」列，降低列宽压力、提升信息密度
+        # 字段说明：strength=净供需偏向（>0供需紧，<0供应宽松），sample=参考案例
         self.sd_tbl = RankTable(
-            [("cat", "板块", "text"), ("strength", "信号强度", "bar"),
-             ("signal", "信号", "text"), ("sample", "依据", "text")], theme=self._theme)
+            [("cat", "板块", "text"), ("strength", "净供需%", "bar"),
+             ("signal", "信号", "text"), ("sample", "参考案例", "text")], theme=self._theme)
+        self.sd_tbl.set_tooltip_template("板块: {cat}\n净供需: {strength_txt}\n信号: {signal}\n案例: {sample}")
         b2l.addWidget(self.sd_tbl)
         fund_lay.addWidget(ResponsiveRow(b1, b2))
         bl.addWidget(fund_card)
@@ -386,39 +439,55 @@ class MarketOverviewPage(BasePage):
         # 第五部分：榜单（排名列 + 比例条 + 点击表头排序）
         rank_card = QFrame(); rank_card.setObjectName("card")
         rank_lay = QVBoxLayout(rank_card); rank_lay.setContentsMargins(8, 6, 8, 6); rank_lay.setSpacing(6)
-        rank_lay.addWidget(self._section_header("榜单（点击表头可排序，前三名奖牌色）", "#10b981"))
+        # Period selector + section header
+        period_layout = QHBoxLayout()
+        period_layout.setSpacing(8)
+        self.period_combo = QComboBox()
+        self.period_combo.addItems(["日榜", "周榜", "月榜"])
+        self.period_combo.setFixedWidth(80)
+        self.period_combo.currentIndexChanged.connect(self._on_period_changed)
+        period_layout.addWidget(self.period_combo)
+        period_layout.addWidget(self._section_header("榜单（点击表头可排序，前三名奖牌色）", "#10b981"))
+        period_layout.addStretch(1)
+        rank_lay.addLayout(period_layout)
         self.rank_hint = QLabel()
         self.rank_hint.setObjectName("rank-hint")
-        self.rank_hint.setStyleSheet(f"font-size:11px;color:{pal()['sub']};")
         self.rank_hint.setText(
             "领涨 / 领跌 / 资金流向 各取 Top 8 · 板块明细含强弱/资金/品种数 · "
             "点击表头可排序，前三名奖牌色")
         rank_lay.addWidget(self.rank_hint)
+        self.rank_count = QLabel("共显示 0 条")
+        rank_lay.addWidget(self.rank_count)
         g1 = QWidget(); g1l = QVBoxLayout(g1); g1l.setContentsMargins(0, 0, 0, 0); g1l.setSpacing(2)
-        g1l.addWidget(QLabel("领涨 Top 8"))
+        g1l.addWidget(QLabel("领涨 Top 8（涨跌幅正值：上涨，负值：下跌）"))
         self.gain_tbl = RankTable(
             [("name", "合约", "text"), ("category", "板块", "text"),
              ("chg", "涨跌幅%", "bar")], theme=self._theme)
         g1l.addWidget(self.gain_tbl)
+        self.gain_tbl.set_tooltip_template("合约: {name}\n板块: {category}\n涨跌幅%: {chg:.2f}%\n正值: 上涨 | 负值: 下跌")
         g2 = QWidget(); g2l = QVBoxLayout(g2); g2l.setContentsMargins(0, 0, 0, 0); g2l.setSpacing(2)
-        g2l.addWidget(QLabel("领跌 Top 8"))
+        g2l.addWidget(QLabel("领跌 Top 8（涨跌幅正值：上涨，负值：下跌）"))
         self.lag_tbl = RankTable(
             [("name", "合约", "text"), ("category", "板块", "text"),
              ("chg", "涨跌幅%", "bar")], theme=self._theme)
         g2l.addWidget(self.lag_tbl)
+        self.lag_tbl.set_tooltip_template("合约: {name}\n板块: {category}\n涨跌幅%: {chg:.2f}%\n正值: 上涨 | 负值: 下跌")
         rank_lay.addWidget(ResponsiveRow(g1, g2))
         rb1 = QWidget(); rb1l = QVBoxLayout(rb1); rb1l.setContentsMargins(0, 0, 0, 0); rb1l.setSpacing(2)
-        rb1l.addWidget(QLabel("资金流向 Top 8（亿）"))
+        rb1l.addWidget(QLabel("资金净流入 Top 8（亿元，正值：流入，负值：流出）"))
+        # fund字段：正负表示净流入/净流出
         self.flow_tbl = RankTable(
             [("name", "合约", "text"), ("category", "板块", "text"),
-             ("fund", "资金流(亿)", "bar")], theme=self._theme)
+             ("fund", "净流入(亿)", "bar")], theme=self._theme)
         rb1l.addWidget(self.flow_tbl)
+        self.flow_tbl.set_tooltip_template("合约: {name}\n板块: {category}\n净流入: {fund:.2f}亿元\n正值: 资金净流入 | 负值: 资金净流出")
         rb2 = QWidget(); rb2l = QVBoxLayout(rb2); rb2l.setContentsMargins(0, 0, 0, 0); rb2l.setSpacing(2)
-        rb2l.addWidget(QLabel("板块明细（强弱 / 资金 / 品种数）"))
+        rb2l.addWidget(QLabel("板块明细（平均涨跌 / 资金净流入 / 品种数）"))
         self.sec_tbl = RankTable(
             [("category", "板块", "text"), ("mean_chg", "平均涨跌%", "bar"),
-             ("flow", "资金流(亿)", "bar"), ("count", "品种数", "num")], theme=self._theme)
+             ("flow", "资金净流入(亿)", "bar"), ("count", "涉及品种数", "num")], theme=self._theme)
         rb2l.addWidget(self.sec_tbl)
+        self.sec_tbl.set_tooltip_template("板块: {category}\n平均涨跌: {mean_chg:+.2f}%\n资金净流入: {flow:+.1f}亿元\n涉及品种: {count}只")
         rank_lay.addWidget(ResponsiveRow(rb1, rb2))
         bl.addWidget(rank_card)
 
@@ -465,6 +534,20 @@ class MarketOverviewPage(BasePage):
         self.news_status = QLabel("页面打开自动生成 云端研判；也可点击「KP资讯解读」手动刷新")
         self.news_status.setObjectName("hint")
         ctl.addWidget(self.news_status, 1)
+        # M4-09：资讯抓取进度条 + 取消按钮
+        self.news_prog = QProgressBar()
+        self.news_prog.setRange(0, 100)
+        self.news_prog.setValue(0)
+        self.news_prog.setVisible(False)
+        self.news_prog.setMaximumWidth(180)
+        self.news_prog.setMaximumHeight(14)
+        ctl.addWidget(self.news_prog)
+        self.news_stop_btn = QPushButton("取消")
+        self.news_stop_btn.setObjectName("secondary")
+        self.news_stop_btn.setEnabled(False)
+        self.news_stop_btn.setToolTip("取消当前资讯抓取（已完成的源仍会展示）")
+        self.news_stop_btn.clicked.connect(self._stop_news)
+        ctl.addWidget(self.news_stop_btn)
         bl.addLayout(ctl)
 
         # 精简研判摘要：直接呈现「由财经资讯推导出的结果 / 趋势」，不再罗列新闻列表
@@ -557,6 +640,7 @@ class MarketOverviewPage(BasePage):
     def _refresh_all(self):
         """刷新all。"""
         self._refresh_quote()
+        self._refresh_watch()
         self._refresh_pano()
 
     # ------------------------------------------------------------------
@@ -645,12 +729,57 @@ class MarketOverviewPage(BasePage):
         # 首次显示：延迟加载全景（行情 + 速览 + 自选列表），避免构造期间阻塞主线程
         if not self._pano_lazy:
             self._pano_lazy = True
-            QTimer.singleShot(100, self._refresh_all)
+            # 白屏修复：改走 _lazy_refresh_all（网络预热在 Worker，主线程只刷 UI）
+            QTimer.singleShot(100, self._lazy_refresh_all)
         if not self._news_autoloaded:
             self._news_autoloaded = True
             self.news_status.setText("正在自动获取全市场资讯与 云端研判…")
             # 延迟 600ms，待布局稳定后再发起网络请求，避免首帧卡顿
             QTimer.singleShot(600, self._run_news)
+        elif (time.time() - getattr(self, "_news_last_ts", 0.0)) > 300:
+            # M5-07②：非首次进入 —— 距上次抓取 >5min 才自动刷新；
+            # 5min 内切回页面不重复抓取（验收：3 分钟内重复进首页只发 1 次）
+            self._run_news()
+
+    def _lazy_refresh_all(self) -> None:
+        """首次全景刷新（白屏根治）：网络预热走 Worker，主线程只刷 UI。
+
+        背景（启动白屏真因）：
+            原实现在 ``showEvent`` 里 ``QTimer.singleShot(100, self._refresh_all)``，
+            而 ``_refresh_all`` → ``_refresh_watch`` → ``_ensure_panorama`` →
+            ``mdm.compute_panorama`` 会在**主线程**对全市场品种逐个发起 HTTP
+            请求；请求经 ``http_client`` 令牌桶限流（默认 1 req/s）串行排队，
+            主线程被长时间占住 → Qt 事件循环无法重绘窗口 → 表现为「启动后白屏」。
+
+        修复：
+            1) Worker 线程执行网络密集的「预热」（全景 + 盘口），结果回填
+               ``_pano_cache``（5s 缓存）；
+            2) 预热完成后回主线程调 ``_refresh_all``，此时 ``_ensure_panorama``
+               命中缓存、不再发起网络，UI 快速刷新。
+
+        功能与最终界面结果完全不变，仅把耗时网络移出主线程。
+        """
+        def _warm():
+            """Worker 线程：预热网络数据（绝不触碰 UI 控件）。"""
+            try:
+                self._ensure_panorama()
+            except Exception:
+                pass
+            try:
+                self.mdm.get_quote(self.cur_symbol, self.cur_period)
+            except Exception:
+                pass
+            return True
+
+        def _done(_r=None):
+            """主线程：命中缓存刷新 UI。"""
+            try:
+                self._refresh_all()
+            except Exception:
+                pass
+
+        # 失败也要走 UI 刷新（降级为空表/空态，不再白屏）
+        self._run_worker(_warm, _done, on_err=lambda _e: _done())
 
     # ==================================================================
     # 数据加载
@@ -685,9 +814,61 @@ class MarketOverviewPage(BasePage):
         self.quote_time.setStyleSheet(
             f"color:{pal()['accent']};font-size:11px;font-weight:bold;")
 
-    def _refresh_watch(self):
-        """全市场速览表（按涨跌幅排序）。"""
-        pan = self.mdm.compute_panorama(self.cur_period)
+    # M4-10：全景 compute_panorama 缓存（5s 有效期）
+    _PANO_CACHE_TTL = 5.0
+
+    def _get_panorama(self) -> pd.DataFrame | None:
+        """获取全景 DataFrame，走 5s 缓存（M4-10 避免重复计算）。
+
+        优先命中缓存；若缓存缺失或已过期，调用方应主动刷新缓存。
+        参数:
+            period: 周期
+
+        返回:
+            pd.DataFrame | None
+        """
+        period = self.cur_period
+        key = (period, self.cur_cat)
+        ts = self._pano_cache_ts.get(key, 0.0)
+        # 缓存有效窗口：创建时间 ts >= 当前时间 - TTL（即距创建 ≤ TTL 秒）
+        if key in self._pano_cache and ts >= time.time() - self._PANO_CACHE_TTL:
+            return self._pano_cache[key]
+        # 无缓存或已过期：返回 None 由调用方计算并回填
+        return None
+
+    def _put_panorama(self, pan: pd.DataFrame) -> None:
+        """写入全景缓存（M4-10：compute_panorama 结果落缓存，后续 5s 内复用）。
+
+        参数:
+            pan: compute_panorama 返回的全市场 DataFrame
+        """
+        period = self.cur_period
+        key = (period, self.cur_cat)
+        self._pano_cache[key] = pan
+        self._pano_cache_ts[key] = time.time()
+
+    def _ensure_panorama(self) -> "pd.DataFrame":
+        """获取全景 DataFrame（M4-10③ 统一入口）：优先读 5s 缓存；
+        缺失/过期则 compute 并回填，返回结果。
+
+        消除 ``_refresh_all`` 中 ``_refresh_watch``（读缓存）先于
+        ``_refresh_pano``（填缓存）的顺序依赖：首个调用方触发计算并缓存，
+        后续调用方复用同批结果，避免重复 compute。返回可能为空 DataFrame
+        （计算失败时），不返回 None。
+        """
+        pan = self._get_panorama()
+        if pan is None or pan.empty:
+            pan = self.mdm.compute_panorama(self.cur_period)
+            if pan is not None and not pan.empty:
+                self._put_panorama(pan)
+        return pan if pan is not None else pd.DataFrame()
+
+    def _refresh_watch(self) -> None:
+        """全市场速览表（按涨跌幅排序）。
+
+        M4-10：全景 compute_panorama 结果 5s 缓存，避免重复计算重复行情。
+        """
+        pan = self._ensure_panorama()
         if pan is None or pan.empty:
             return
         # 受板块筛选影响
@@ -706,14 +887,20 @@ class MarketOverviewPage(BasePage):
             ff = QTableWidgetItem(f"{r['fund_flow']:+,.2f}")
             color_pnl(ff, r["fund_flow"])
             self.watch.setItem(i, 5, ff)
-        prepare_table(self.watch)
+        # M4-08：DataGrid 自带行号隐藏 / 行高 / 隔行底色与空态，无需再 prepare_table
 
     def _refresh_pano(self):
-        """市场全局 + 持仓异动 + 榜单 + 板块明细。"""
+        """市场全局 + 持仓异动 + 榜单 + 板块明细。
+
+        M4-10：全景 compute_panorama 结果 5s 缓存，避免重复计算重复行情；
+        仅当缓存过期（>5s）或主动刷新（手动「刷新」）时重新计算。
+        """
         p = pal()
-        pan_all = self.mdm.compute_panorama(self.cur_period)
-        if pan_all is None or pan_all.empty:
+        # M4-10③：统一走 _ensure_panorama（优先 5s 缓存；缺失则 compute 回填）
+        pan = self._ensure_panorama()
+        if pan is None or pan.empty:
             return
+        pan_all = pan
         pan = pan_all if self.cur_cat == "全部" else pan_all[pan_all["category"] == self.cur_cat]
 
         up = int((pan_all["chg_pct"] > 0).sum())
@@ -902,29 +1089,82 @@ class MarketOverviewPage(BasePage):
             for _, r in agg.iterrows()
         ]
         self.sec_tbl.set_rows(rows_sec)
-        self.sec_tbl.set_tooltip_template("{category} · 平均涨跌 {mean_chg:+.2f}% · 资金流 {flow:+.1f}亿 · {count}只")
+        self.sec_tbl.set_tooltip_template("{category} · 平均涨跌 {mean_chg:+.2f}% · 资金净流入 {flow:+.1f}亿元 · {count}只")
 
-        # 领涨 / 领跌 / 资金流（受板块筛选影响）
-        if pan.empty:
+        # 领涨 / 领跌 / 资金流（全市场数据，不受板块筛选影响；板块明细受筛选影响）
+        source = pan if not pan.empty else pan_all
+        if source.empty:
             return
-        top = pan.sort_values("chg_pct", ascending=False).head(8)
-        bot = pan.sort_values("chg_pct", ascending=True).head(8)
-        fl = pan.sort_values("fund_flow", ascending=False).head(8)
+        top = source.sort_values("chg_pct", ascending=False).head(8)
+        bot = source.sort_values("chg_pct", ascending=True).head(8)
+        fl = source.sort_values("fund_flow", ascending=False).head(8)
         rows_gain = [{"name": r["name"], "category": r["category"],
                       "chg": float(r["chg_pct"])} for _, r in top.iterrows()]
         self.gain_tbl.set_rows(rows_gain)
         self.gain_tbl.set_on_activate(self._on_rank_activated)
-        self.gain_tbl.set_tooltip_template("{name} · {category} · 涨跌幅 {chg:+.2f}%")
+        self.gain_tbl.set_tooltip_template("{name} · {category} · 涨跌幅 {chg:+.2f}%\n正值: 上涨 | 负值: 下跌")
         rows_lag = [{"name": r["name"], "category": r["category"],
                      "chg": float(r["chg_pct"])} for _, r in bot.iterrows()]
         self.lag_tbl.set_rows(rows_lag)
         self.lag_tbl.set_on_activate(self._on_rank_activated)
-        self.lag_tbl.set_tooltip_template("{name} · {category} · 涨跌幅 {chg:+.2f}%")
+        self.lag_tbl.set_tooltip_template("{name} · {category} · 涨跌幅 {chg:+.2f}%\n正值: 上涨 | 负值: 下跌")
         rows_flow = [{"name": r["name"], "category": r["category"],
                       "fund": float(r["fund_flow"])} for _, r in fl.iterrows()]
         self.flow_tbl.set_rows(rows_flow)
         self.flow_tbl.set_on_activate(self._on_rank_activated)
-        self.flow_tbl.set_tooltip_template("{name} · {category} · 资金流 {fund:+.1f}亿")
+        self.flow_tbl.set_tooltip_template("{name} · {category} · 净流入 {fund:+.1f}亿元\n正值: 资金净流入 | 负值: 资金净流出")
+
+        # 供需/库存信号表降级：资讯未加载时用持仓异动数据填充，避免空表
+        if not self._sd_rows:
+            self._fill_sd_fallback(pan_all)
+
+    def _fill_sd_fallback(self, pan_all: pd.DataFrame) -> None:
+        """供需/库存信号表降级填充：资讯未就绪时，基于持仓异动+涨跌幅生成替代信号。
+
+        逻辑：增仓+上涨 → 偏紧利多；减仓+下跌 → 宽松利空；其余 → 平衡。
+        strength 经 sigmoid 归一化至 [-1, 1]，与 _fill_news 的 bias 比例尺一致。
+        参数:
+            pan_all: compute_panorama 返回的全市场 DataFrame"""
+        if pan_all.empty:
+            self.sd_tbl.set_rows([])
+            self._sd_hdr.setText("供需 / 库存信号（财经资讯 云端研判）")
+            return
+        # 按板块分组，取各板块内持仓变化均值作为强度代理
+        rows = []
+        for cat in sorted({r[2] for r in self.mdm.universe}):
+            cat_df = pan_all[pan_all["category"] == cat]
+            if cat_df.empty:
+                continue
+            avg_oi = float(cat_df["oi_chg"].mean())
+            avg_chg = float(cat_df["chg_pct"].mean())
+            # 综合强度：持仓变化 60% + 涨跌方向 40%，经 sigmoid 归一化至约 [-1, 1]
+            raw = avg_oi * 0.6 + avg_chg * 0.4
+            strength = raw / (1.0 + abs(raw))  # sigmoid-like 缩放，避免极端值
+            if strength > 0.2:
+                direction, verdict = "▲ 偏紧", "增仓利多"
+                strength_txt = f"紧 {strength*100:+.0f}%"
+            elif strength < -0.2:
+                direction, verdict = "▼ 宽松", "减仓利空"
+                strength_txt = f"宽 {abs(strength*100):+.0f}%"
+            else:
+                direction, verdict = "● 平衡", "供需平衡"
+                strength_txt = "平衡"
+            # 取该板块代表性品种作为参考案例
+            sample_name = cat_df.iloc[0]["name"] if not cat_df.empty else "—"
+            rows.append({
+                "cat": cat,
+                "strength": round(strength, 3),
+                "strength_txt": strength_txt,
+                "signal": f"{direction} {verdict}",
+                "sample": sample_name,
+            })
+        # 按强度绝对值排序
+        rows.sort(key=lambda r: abs(r["strength"]), reverse=True)
+        self.sd_tbl.set_rows(rows)
+        self._sd_hdr.setText(
+            f"供需 / 库存信号（{len(rows)} 个板块 · 持仓异动代理，资讯加载后将自动更新）")
+        ts = dt.datetime.now().strftime("%H:%M:%S")
+        self._sd_time.setText(f"数据更新时间: {ts}（代理模式）")
 
     # ---- 资讯 + 资讯解读 ----
     def _run_news(self):
@@ -932,14 +1172,27 @@ class MarketOverviewPage(BasePage):
         if getattr(self, "_news_running", False):
             return
         self._news_running = True
+        # M5-07②：记录抓取发起时间（showEvent 的 5min 自动刷新节流依据；
+        # 失败也算 —— 避免网络异常时每次切页都重试轰炸 13 源）
+        self._news_last_ts = time.time()
         self.news_btn.setEnabled(False)
         self.news_btn.setText("解读中…")
-        self.news_status.setText("正在并发爬取 11 个财经资讯源（财联社/东方财富/和讯/同花顺/"
-                                  "华尔街见闻/金十/新浪财经/期货日报/中证网/证券时报/凤凰财经）…")
+        self.news_stop_btn.setEnabled(True)
+        self.news_prog.setVisible(True)
+        self.news_prog.setValue(0)
+        self.news_status.setText("正在并发爬取 13 个财经资讯源（财联社/东方财富/和讯/同花顺/"
+                                 "华尔街见闻/金十/新浪财经/金投网/中金在线/中证网/证券时报/凤凰财经/期货日报）…")
 
-        def work():
+        def work(worker):
             """处理work。"""
-            news = news_feed.fetch_all_news(limit=60)
+            from ..ai import news_feed as _nf
+            news = _nf.fetch_all_news(
+                limit=60,
+                per_source_timeout=8,   # M4-09：单源超时 8s（避免个别源拖垮整体）
+                on_progress=lambda d, t, txt: worker.emit_progress(
+                    int(d / t * 100), txt),
+                should_abort=worker.isInterruptionRequested,
+            )
             # 市场级 云端研判
             bias = _news_overall_bias(news)
             p_up = max(0.05, min(0.95, 0.5 + 0.5 * bias))
@@ -947,13 +1200,13 @@ class MarketOverviewPage(BasePage):
             risk_label = "高" if abs(bias) > 0.4 else ("中" if abs(bias) > 0.15 else "低")
             res = {"p_up": p_up, "expected_return_pct": exp,
                    "risk": {"label": risk_label, "score": int(abs(bias) * 100)}}
-            analysis = news_feed.ai_analyze_news(news, res, "期货市场", "全市场", mdm=self.mdm)
+            analysis = _nf.ai_analyze_news(news, res, "期货市场", "全市场", mdm=self.mdm)
             # 当前品种技术面研判（与资讯偏置联动）
             tech = self._compute_technical(self.cur_symbol, self.cur_period, news_bias=bias)
             # 各板块供需 / 库存信号
             sd_rows = []
             for c in sorted({r[2] for r in self.mdm.universe}):
-                b = news_feed.news_bias_for_symbol(c, c, c, news)
+                b = _nf.news_bias_for_symbol(c, c, c, news)
                 sd_rows.append((c, b["bias"], b["matched"], b["samples"]))
             return news, analysis, sd_rows, tech
 
@@ -995,6 +1248,8 @@ class MarketOverviewPage(BasePage):
             conf_txt = f" · 综合置信度 {conf*100:.0f}%" if isinstance(conf, (int, float)) else ""
             self.news_status.setText(
                 f"已更新 {ts} · 抓取 {total} 条 · 信源覆盖 {active}/{tsrc}{conf_txt} · 云端研判完成")
+            self.news_prog.setValue(100)
+            self.news_prog.setVisible(False)
             self._restore_news_btn()
 
         def err(msg):
@@ -1003,15 +1258,55 @@ class MarketOverviewPage(BasePage):
                 参数:
                     msg"""
             self.news_status.setText(f"资讯获取失败：{msg}（将使用已有缓存或稍后重试）")
+            self.news_prog.setVisible(False)
             self._restore_news_btn()
 
-        self._run_worker(work, done, err)
+        self._run_worker(work, done, err,
+                         on_progress=self._on_news_progress,
+                         on_interrupted=self._on_news_interrupted)
 
     def _restore_news_btn(self):
         """处理restorenewsbtn。"""
         self._news_running = False
         self.news_btn.setEnabled(True)
         self.news_btn.setText("KP资讯解读")
+        if getattr(self, "news_stop_btn", None) is not None:
+            self.news_stop_btn.setEnabled(False)
+        if getattr(self, "news_prog", None) is not None:
+            self.news_prog.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # M4-09：资讯抓取 进度 + 取消
+    # ------------------------------------------------------------------
+    def _stop_news(self) -> None:
+        """取消当前资讯抓取（M4-09）：已完成的源仍会展示。"""
+        if not getattr(self, "_workers", None):
+            self._restore_news_btn()
+            return
+        self._workers[-1].requestInterruption()
+        self.news_stop_btn.setEnabled(False)
+        self.news_status.setText("已请求取消资讯抓取，正在收尾已完成的源…")
+
+    def _on_news_progress(self, pct: int, text: str) -> None:
+        """资讯抓取进度回调（M4-09）：「已完成 x/13 源」。
+
+        参数:
+            pct: int — 0~100 真实百分比
+            text: str — 引擎上报的「已完成 x/总源数 源」文本
+        """
+        if getattr(self, "_closed", False):
+            return
+        try:
+            self.news_prog.setValue(pct)
+            self.news_status.setText(f"正在并发抓取财经资讯…（{text}）")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_news_interrupted(self) -> None:
+        """资讯抓取被用户取消：恢复界面，已抓取结果（若有）保留展示。"""
+        self.news_prog.setVisible(False)
+        self.news_status.setText("资讯抓取已取消（已完成的源结果保留）。")
+        self._restore_news_btn()
 
     def _on_rank_activated(self, row: dict) -> None:
         """领涨/领跌/资金流榜单点击回调：同步到 symbol/period 并刷新。
@@ -1047,18 +1342,22 @@ class MarketOverviewPage(BasePage):
 
         # 供需 / 库存信号表（RankTable：排名列 + 信号强度比例条 + 点击排序）
         # 方向 + 研判 合并为单「信号」列（如「▲ 偏紧 · 去库利多」），降低列宽压力、提升可读性
+        # strength: 净供需指数（>0.05 供需紧/库存不足，<-0.05 供应宽松/库存过剩）
         sd_out = []
         for (c, bias, matched, samples) in sd_rows:
             if bias > 0.05:
                 direction, verdict = "▲ 偏紧", "去库利多"
+                strength_txt = f"紧 {bias*100:+.0f}%"
             elif bias < -0.05:
                 direction, verdict = "▼ 宽松", "累库利空"
+                strength_txt = f"宽 {abs(bias*100):+.0f}%"
             else:
                 direction, verdict = "● 平衡", "供需平衡"
+                strength_txt = "平衡"
             sd_out.append({
                 "cat": c,
                 "strength": float(bias),
-                "strength_txt": f"{bias*100:+.0f}%",
+                "strength_txt": strength_txt,
                 "signal": f"{direction} {verdict}",
                 "sample": (samples[0] if samples else "—"),
             })
@@ -1747,12 +2046,16 @@ class MarketOverviewPage(BasePage):
         table.setItem(r, c, it)
         return it
 
-    def _on_pick(self, item):
-        """处理onpick。
-        
-            参数:
-                item"""
-        name = self.watch.item(item.row(), 0).text()
+    def _on_pick(self, row: int):
+        """双击速览表某行 → 切换当前品种到该合约。
+
+        参数:
+            row: 被双击的行号（DataGrid.set_row_action 回调签名）。
+        """
+        it = self.watch.item(row, 0)
+        if it is None:
+            return
+        name = it.text()
         for r in self.mdm.universe:
             if r[1] == name:
                 idx = self.sym_cb.findData(symbol_code(r))
@@ -1763,10 +2066,11 @@ class MarketOverviewPage(BasePage):
     def set_theme(self, t: str) -> None:
         """设置主题。
         
-            参数:
-                t: str"""
+        参数:
+            t: str"""
         super().set_theme(t)
         self._style_cards()
+        self._style_static()
         self.temp_lbl.setStyleSheet("color:%s;" % pal()["sub"])
         for tl in self.status_tiles:
             tl.set_theme(t)
@@ -1774,3 +2078,17 @@ class MarketOverviewPage(BasePage):
         if self._news is not None:
             self._fill_news(self._news, self._ai_analysis,
                             self._sd_rows, self._tech)
+
+    def _on_period_changed(self, index):
+        """周期下拉框切换：同步更新主周期并刷新全景数据。"""
+        periods = ["D", "W", "M"]
+        if index < 0 or index >= len(periods):
+            return
+        new_period = periods[index]
+        # 同步主周期选择器（月线 M 对应主周期中的月线选项）
+        for i, p in enumerate(["1m", "5m", "15m", "30m", "1h", "4h", "D", "W", "M"]):
+            if p == new_period:
+                self.per_cb.setCurrentIndex(i)
+                break
+        self.cur_period = new_period
+        self._refresh_pano()

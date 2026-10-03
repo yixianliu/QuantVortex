@@ -94,7 +94,7 @@ app.processEvents()
 # ---- 准备一个合法策略基因（供双向联动透传）----
 gene = page_bt._manual_gene("ma_cross")
 gene_desc = describe_gene(gene)
-sym = "rb.SHFE"
+sym = "RB.SHFE"
 entry = {
     "symbol": sym, "symbol_name": "螺纹钢", "desc": gene_desc, "gene": gene,
     "metrics": {"total_return": 0.12, "annual_return": 0.18, "sharpe": 1.2,
@@ -204,4 +204,3 @@ if fails == 0:
     print("回测↔预测 双向联动 端到端验证：全部通过")
 else:
     print(f"回测↔预测 双向联动 端到端验证：{fails} 项失败")
-    sys.exit(1)

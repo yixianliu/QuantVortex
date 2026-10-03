@@ -1,4 +1,10 @@
 import tempfile, os, json
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 from futures_quant.storage.json_store import AtomicJSON
 from futures_quant.storage.config_manager import ConfigManager, SessionState
 from futures_quant.storage.analysis_store import AnalysisStore

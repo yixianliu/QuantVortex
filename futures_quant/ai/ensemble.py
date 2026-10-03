@@ -21,6 +21,8 @@ import pandas as pd
 
 from .lstm import LSTM
 from .features import build_features
+# M3-11：阈值集中化（默认值 == 改造前字面量，行为不变）
+from .constants import ENSEMBLE as _EC, EPS as _EPS
 
 try:
     from sklearn.ensemble import GradientBoostingRegressor
@@ -32,14 +34,18 @@ except Exception:  # pragma: no cover - sklearn 缺失时优雅降级
 class _Ridge:
     """最小二乘岭回归（扁平窗口 -> 单值），作 LSTM 回退。"""
 
-    ALPHA_GRID = (1e-3, 1e-2, 0.1, 1.0, 10.0, 100.0, 1000.0)
+    # 仅为 import 期快照（兼容外部对 `_Ridge.ALPHA_GRID` 的引用）；
+    # 运行期搜索以阈值中心为准，故 fit_with_cv 内读 `_EC.ridge_alpha_grid`，
+    # 这样改配置后无需重新 import 即生效。
+    ALPHA_GRID = _EC.ridge_alpha_grid
 
-    def __init__(self, alpha: float = 1.0) -> None:
+    def __init__(self, alpha: float = None) -> None:
         """初始化相关对象。
         
             参数:
                 alpha: float"""
-        self.alpha = alpha
+        # None 哨兵：默认值取自阈值中心（避免 import 期固化）
+        self.alpha = _EC.ridge_default_alpha if alpha is None else alpha
         self.w = None
         self.b = 0.0
 
@@ -50,13 +56,23 @@ class _Ridge:
                 X: np.ndarray
                 y: np.ndarray"""
         X = np.asarray(X, float); y = np.asarray(y, float)
-        XtX = X.T @ X + self.alpha * np.eye(X.shape[1])
-        Xty = X.T @ y
+        # M3-09：旧实现用**未中心化**的正规方程 (XᵀX + αI) w = Xᵀy 求权重，
+        # 却用中心化公式 b = ȳ - x̄ᵀw 求截距 —— 两者不自洽：带截距的最小二乘
+        # 正规方程应建立在**中心化**数据上 ((X-X̄)ᵀ(X-X̄) + αI) w = (X-X̄)ᵀ(y-ȳ)。
+        # 实测后果：无噪声的精确线性关系拟合后 MAE 高达 0.14（应为 ~0），
+        # 且会让 fit_with_cv 的 alpha 选择偏向错误区间。
+        # 注：截距不参与 L2 惩罚（与 sklearn Ridge 默认一致）。
+        xm = X.mean(0)
+        ym = float(y.mean())
+        Xc = X - xm
+        yc = y - ym
+        XtX = Xc.T @ Xc + self.alpha * np.eye(X.shape[1])
+        Xty = Xc.T @ yc
         try:
             self.w = np.linalg.solve(XtX, Xty)
         except np.linalg.LinAlgError:
             self.w = np.linalg.pinv(XtX) @ Xty
-        self.b = y.mean() - (X.mean(0) @ self.w)
+        self.b = ym - float(xm @ self.w)
 
     def predict(self, x: np.ndarray) -> float:
         """预测相关对象。
@@ -75,7 +91,7 @@ class _Ridge:
                     Xva: np.ndarray, yva: np.ndarray) -> "_Ridge":
         """在验证集上按 MAE 选择最优 alpha，返回已训练模型。"""
         best, best_err = None, float("inf")
-        for a in cls.ALPHA_GRID:
+        for a in _EC.ridge_alpha_grid:
             m = cls(alpha=a)
             try:
                 m.fit(Xtr, ytr)
@@ -85,7 +101,7 @@ class _Ridge:
                 continue
             if np.isfinite(err) and err < best_err:
                 best, best_err = m, err
-        return best if best is not None else cls(alpha=1.0)
+        return best if best is not None else cls(alpha=_EC.ridge_default_alpha)
 
 
 class _TreeModel:
@@ -96,22 +112,25 @@ class _TreeModel:
     仅作用于预测侧，不影响回测 fitness；通过现有反方差权重自动获得合理占比。
     """
 
-    def __init__(self, period: str, seed: int = 7, extended: bool = True) -> None:
+    def __init__(self, period: str, seed: int = None, extended: bool = True,
+                 symbol: str = "UNKNOWN") -> None:
         """初始化相关对象。
-        
+
             参数:
                 period: str
                 seed: int
-                extended: bool"""
+                extended: bool
+                symbol: str  # M3-04：品种标识，参与特征缓存键，缺省会串味"""
         self.period = period
-        self.seed = seed
+        self.seed = _EC.default_random_seed if seed is None else seed
         self.extended = extended
+        self.symbol = symbol
         self.gbm = None
         self.mean = None          # 标记是否已训练（与 PeriodModel 接口一致）
-        self.resid_std = 1e-4
-        self.seq_len = 20
+        self.resid_std = _EPS.default_resid_std
+        self.seq_len = _EC.default_seq_len
 
-    def fit(self, df: pd.DataFrame, seq_len: int = 20, epochs: int = 25) -> bool:
+    def fit(self, df: pd.DataFrame, seq_len: int = None, epochs: int = None) -> bool:
         """拟合相关对象。
         
             参数:
@@ -123,32 +142,37 @@ class _TreeModel:
                 bool"""
         if not _HAVE_GBM:
             return False
+        seq_len = _EC.default_seq_len if seq_len is None else seq_len
+        epochs = _EC.default_epochs if epochs is None else epochs
         self.seq_len = seq_len
         rdf = _resample(df, self.period)
-        if len(rdf) < seq_len + 5:
+        if len(rdf) < seq_len + _EC.min_extra_bars:
             return False
-        ind, F, _ = build_features(rdf, extended=self.extended)
+        ind, F, _ = build_features(rdf, extended=self.extended,
+                                   symbol=self.symbol, period=self.period)
         arr = F.values.astype(float)
         y = ind["ret"].shift(-1).values.astype(float)
         seqs, Ys = _make_sequences(arr, y, seq_len)   # 与 LSTM 成员同口径
-        if len(seqs) < 20:
+        if len(seqs) < _EC.min_train_sequences:
             return False
         Xs = seqs.reshape(len(seqs), -1)              # 扁平窗口
         try:
             self.gbm = GradientBoostingRegressor(
-                n_estimators=100, max_depth=3, learning_rate=0.06,
-                subsample=0.9, random_state=self.seed)
+                n_estimators=_EC.gbm_n_estimators, max_depth=_EC.gbm_max_depth,
+                learning_rate=_EC.gbm_learning_rate,
+                subsample=_EC.gbm_subsample, random_state=self.seed)
             # 时序切分：后 20% 留作样本外残差估计，避免样本内残差低估不确定性
-            cut = int(len(Xs) * 0.8)
-            if cut >= 20 and len(Xs) - cut >= 8:
+            cut = int(len(Xs) * _EC.train_split_ratio)
+            if cut >= _EC.gbm_min_oos_train and len(Xs) - cut >= _EC.gbm_min_oos_valid:
                 self.gbm.fit(Xs[:cut], Ys[:cut])
                 oos = self.gbm.predict(Xs[cut:])
-                self.resid_std = float(np.std(Ys[cut:] - oos)) + 1e-6
+                self.resid_std = float(np.std(Ys[cut:] - oos)) + _EPS.eps_resid
                 self.gbm.fit(Xs, Ys)                  # 保留样本外 σ，全量重训
             else:
                 self.gbm.fit(Xs, Ys)
                 preds = self.gbm.predict(Xs)
-                self.resid_std = float(np.std(Ys - preds)) * 1.5 + 1e-6
+                self.resid_std = (float(np.std(Ys - preds))
+                                  * _EC.insample_resid_inflate + _EPS.eps_resid)
             self.mean = np.zeros(1)   # 标记已训练
             return True
         except Exception:
@@ -162,7 +186,8 @@ class _TreeModel:
                 df_upto: pd.DataFrame
                 seq_len: int"""
         rdf = _resample(df_upto, self.period)
-        ind, F, _ = build_features(rdf, extended=self.extended)
+        ind, F, _ = build_features(rdf, extended=self.extended,
+                                   symbol=self.symbol, period=self.period)
         arr = F.values.astype(float)
         if len(arr) < seq_len + 1 or self.gbm is None:
             return None
@@ -182,7 +207,7 @@ class _TreeModel:
             return 0.0
         r = float(self.gbm.predict(x.reshape(1, -1))[0])
         if self.period in ("W", "1W", "week"):
-            r = r / 5.0
+            r = r / _EC.trading_days_per_week
         return r
 
     def _daily_returns(self, df: pd.DataFrame, horizon: int) -> np.ndarray:
@@ -209,7 +234,7 @@ class _TreeModel:
         if self.period in ("W", "1W", "week"):
             daily = []
             for r in step:
-                daily.extend([r / 5.0] * 5)
+                daily.extend([r / _EC.trading_days_per_week] * int(_EC.trading_days_per_week))
             step = daily[:horizon]
         out = np.array(step[:horizon], dtype=float)
         if len(out) < horizon:
@@ -244,11 +269,12 @@ def _roll_step(seq: np.ndarray, base: np.ndarray, r: float,
         new_row[0] = (r - mean[0]) / std[0]
         if len(new_row) > 1:
             vol_prev = seq[-1, 1] * std[1] + mean[1]
-            new_row[1] = (0.9 * vol_prev + 0.1 * abs(r) - mean[1]) / std[1]
+            new_row[1] = (_EC.vol_ewma_decay * vol_prev + _EC.vol_ewma_alpha * abs(r) - mean[1]) / std[1]
     else:
         new_row[0] = r
         if len(new_row) > 1:
-            new_row[1] = 0.9 * seq[-1, 1] + 0.1 * abs(r)
+            new_row[1] = (_EC.vol_ewma_decay * seq[-1, 1]
+                         + _EC.vol_ewma_alpha * abs(r))
     return np.vstack([seq[1:], new_row[None, :]])
 
 
@@ -272,28 +298,31 @@ def _resample(df: pd.DataFrame, period: str) -> pd.DataFrame:
 class PeriodModel:
     """单周期模型（D 或 W），可训练基础 7 特征或扩展特征。"""
 
-    def __init__(self, period: str, hidden: int = 32, seed: int = 7,
-                 extended: bool = True) -> None:
+    def __init__(self, period: str, hidden: int = None, seed: int = None,
+                 extended: bool = True, symbol: str = "UNKNOWN") -> None:
         """初始化相关对象。
-        
+
             参数:
                 period: str
                 hidden: int
                 seed: int
-                extended: bool"""
+                extended: bool
+                symbol: str  # M3-04：品种标识，参与特征缓存键，缺省会串味"""
         self.period = period
-        self.hidden = hidden
-        self.seed = seed
+        # None 哨兵：默认值取自阈值中心（避免 import 期固化，便于运行期覆盖）
+        self.hidden = _EC.lstm_hidden_size if hidden is None else hidden
+        self.seed = _EC.default_random_seed if seed is None else seed
         self.extended = extended
+        self.symbol = symbol
         self.lstm = None
         self.ridge = None
         self.use_lstm = True
         self.mean = None
         self.std = None
-        self.resid_std = 1e-4
-        self.seq_len = 20
+        self.resid_std = _EPS.default_resid_std
+        self.seq_len = _EC.default_seq_len
 
-    def fit(self, df: pd.DataFrame, seq_len: int = 20, epochs: int = 25) -> bool:
+    def fit(self, df: pd.DataFrame, seq_len: int = None, epochs: int = None) -> bool:
         """拟合相关对象。
         
             参数:
@@ -303,23 +332,26 @@ class PeriodModel:
         
             返回:
                 bool"""
+        seq_len = _EC.default_seq_len if seq_len is None else seq_len
+        epochs = _EC.default_epochs if epochs is None else epochs
         self.seq_len = seq_len
         rdf = _resample(df, self.period)
-        if len(rdf) < seq_len + 5:
+        if len(rdf) < seq_len + _EC.min_extra_bars:
             return False
-        ind, F, _ = build_features(rdf, extended=self.extended)
+        ind, F, _ = build_features(rdf, extended=self.extended,
+                                   symbol=self.symbol, period=self.period)
         arr = F.values.astype(float)
         y = ind["ret"].shift(-1).values.astype(float)
         Xs, Ys = _make_sequences(arr, y, seq_len)
-        if len(Xs) < 20:
+        if len(Xs) < _EC.min_train_sequences:
             return False
         mean = Xs.reshape(-1, Xs.shape[-1]).mean(0)
-        std = Xs.reshape(-1, Xs.shape[-1]).std(0) + 1e-8
+        std = Xs.reshape(-1, Xs.shape[-1]).std(0) + _EPS.eps_std
         self.mean, self.std = mean, std
         Xs = (Xs - mean) / std
         try:
             self.lstm = LSTM(arr.shape[1], hidden_size=self.hidden, output_size=1, seed=self.seed)
-            self.lstm.fit([Xs[i] for i in range(len(Xs))], Ys, epochs=epochs, lr=0.01)
+            self.lstm.fit([Xs[i] for i in range(len(Xs))], Ys, epochs=epochs, lr=_EC.lstm_learning_rate)
             probe = self.lstm.predict_last(Xs[-1])
             if not math.isfinite(probe):
                 raise ValueError("LSTM 输出非有限值")
@@ -332,7 +364,7 @@ class PeriodModel:
             preds = np.array([self.lstm.predict_last(Xs[i]) for i in range(len(Xs))])
         else:
             preds = np.array([self.ridge.predict(Xs[i].reshape(-1)) for i in range(len(Xs))])
-        self.resid_std = float(np.std(Ys - preds)) + 1e-6
+        self.resid_std = float(np.std(Ys - preds)) + _EPS.eps_resid
         return True
 
     def _pred(self, Xseq: np.ndarray) -> float:
@@ -352,7 +384,8 @@ class PeriodModel:
     def _daily_returns(self, df: pd.DataFrame, horizon: int) -> np.ndarray:
         """该周期视角下未来 horizon 天的每日收益向量。"""
         rdf = _resample(df, self.period)
-        ind, F, _ = build_features(rdf, extended=self.extended)
+        ind, F, _ = build_features(rdf, extended=self.extended,
+                                   symbol=self.symbol, period=self.period)
         arr = F.values.astype(float)
         if len(arr) < self.seq_len + 1:
             return np.zeros(horizon)
@@ -369,7 +402,7 @@ class PeriodModel:
         if self.period in ("W", "1W", "week"):
             daily = []
             for r in step:
-                daily.extend([r / 5.0] * 5)
+                daily.extend([r / _EC.trading_days_per_week] * int(_EC.trading_days_per_week))
             step = daily[:horizon]
         out = np.array(step[:horizon], dtype=float)
         if len(out) < horizon:
@@ -379,7 +412,8 @@ class PeriodModel:
     def predict_next(self, df_upto: pd.DataFrame, seq_len: int) -> float:
         """单步（下一根）收益预测，用于滚动样本外评估。"""
         rdf = _resample(df_upto, self.period)
-        ind, F, _ = build_features(rdf, extended=self.extended)
+        ind, F, _ = build_features(rdf, extended=self.extended,
+                                   symbol=self.symbol, period=self.period)
         arr = F.values.astype(float)
         if len(arr) < seq_len + 1 or self.mean is None:
             return 0.0
@@ -387,7 +421,7 @@ class PeriodModel:
         r = self._pred(last)
         # 周线折算为单日收益
         if self.period in ("W", "1W", "week"):
-            r = r / 5.0
+            r = r / _EC.trading_days_per_week
         return float(r)
 
 
@@ -398,31 +432,39 @@ class MultiPeriodEnsemble:
     特征是噪声时 baseline 自动占主导，整体不会劣于 baseline。
     """
 
-    def __init__(self, periods=("D", "W"), hidden: int = 32, seed: int = 7) -> None:
+    def __init__(self, periods=("D", "W"), hidden: int = None, seed: int = None,
+                 symbol: str = "UNKNOWN") -> None:
         """初始化相关对象。
-        
+
             参数:
                 periods
                 hidden: int
-                seed: int"""
+                seed: int
+                symbol: str  # M3-04：品种标识，透传给各子模型参与特征缓存键"""
+        # None 哨兵（子模型也会各自兜底，这里显式解析一次便于阅读）
+        hidden = _EC.lstm_hidden_size if hidden is None else hidden
+        seed = _EC.default_random_seed if seed is None else seed
         self.periods = list(periods)
+        self.symbol = symbol
         self.models = []
         k = 0
         # 每个周期两种特征集：基础 7 特征（baseline 成员）+ 扩展特征
         for p in self.periods:
             for ext in (False, True):
                 self.models.append(
-                    PeriodModel(p, hidden=hidden, seed=seed + k, extended=ext))
+                    PeriodModel(p, hidden=hidden, seed=seed + k, extended=ext,
+                                symbol=symbol))
                 k += 1
         # 树模型基学习器（非线性视角）：每个周期各加一个扩展特征树成员
         if _HAVE_GBM:
             for p in self.periods:
-                self.models.append(_TreeModel(p, seed=seed + 100 + k, extended=True))
+                self.models.append(_TreeModel(p, seed=seed + _EC.tree_seed_offset + k, extended=True,
+                                              symbol=symbol))
                 k += 1
         self.fitted = False
-        self.ensemble_resid = 1e-4
+        self.ensemble_resid = _EPS.default_resid_std
 
-    def fit(self, df: pd.DataFrame, seq_len: int = 20, epochs: int = 25) -> bool:
+    def fit(self, df: pd.DataFrame, seq_len: int = None, epochs: int = None) -> bool:
         """拟合相关对象。
         
             参数:
@@ -432,10 +474,12 @@ class MultiPeriodEnsemble:
         
             返回:
                 bool"""
+        seq_len = _EC.default_seq_len if seq_len is None else seq_len
+        epochs = _EC.default_epochs if epochs is None else epochs
         n = len(df)
-        cut = int(n * 0.8)
+        cut = int(n * _EC.train_split_ratio)
         # 数据充足时严格分离：前 80% 训练，后 20% 验证估权重（避免统计泄露）
-        if cut < seq_len + 5:
+        if cut < seq_len + _EC.min_extra_bars:
             ok = [m.fit(df, seq_len, epochs) for m in self.models]
             self.fitted = any(m.mean is not None for m in self.models)
             k = max(1, sum(1 for m in self.models if m.mean is not None))
@@ -447,7 +491,7 @@ class MultiPeriodEnsemble:
             vmae = self._val_mae(df, seq_len, cut)
             w = []
             for e in vmae:
-                w.append(0.0 if (e is None or not np.isfinite(e)) else 1.0 / (e + 1e-3))
+                w.append(0.0 if (e is None or not np.isfinite(e)) else 1.0 / (e + _EC.mae_weight_smoothing))
             s = sum(w)
             self.weights = [x / s for x in w] if s > 0 else [1.0 / len(self.models)] * len(self.models)
         # 集成残差：按集成权重加权平均。
@@ -460,7 +504,7 @@ class MultiPeriodEnsemble:
             self.ensemble_resid = (float(sum(r * w for r, w in pairs) / tw)
                                    if tw > 0 else float(np.median([r for r, _ in pairs])))
         else:
-            self.ensemble_resid = 1e-4
+            self.ensemble_resid = _EPS.default_resid_std
         return self.fitted
 
     def _val_mae(self, df: pd.DataFrame, seq_len: int, cut: int) -> list:
@@ -469,7 +513,7 @@ class MultiPeriodEnsemble:
         n = len(df)
         # 抽样评估（最多 ~120 点），兼顾权重估计稳定性与 fit 速度
         span = max(1, n - (cut + seq_len))
-        stride = max(1, span // 120)
+        stride = max(1, span // _EC.max_val_samples)
         errs = []
         for m in self.models:
             if m.mean is None:

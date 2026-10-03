@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field, asdict
+from typing import Optional
 
 
 @dataclass
@@ -23,7 +24,7 @@ class AccountConfig:
 
 @dataclass
 class RiskConfig:
-    """风险配置：单笔/总仓位上限、最大回撤等风控参数。"""
+    """风险配置：单笔/总仓位上限、最大回撤、保证金预警等风控参数。"""
     max_single_loss: float = 5_000.0        # 单笔最大亏损
     max_daily_loss: float = 30_000.0        # 单日最大亏损
     max_drawdown: float = 0.20              # 总资金最大回撤阈值
@@ -31,14 +32,39 @@ class RiskConfig:
     max_total_position_ratio: float = 0.80  # 总仓位占用上限（占权益）
     max_order_qty: int = 100                # 单笔下单数量上限
     non_trading_hours_block: bool = True     # 非交易时段禁止下单
+    margin_warn_ratio: float = 0.80         # 保证金占用率预警线（占权益）
+    margin_halt_ratio: float = 0.95         # 保证金占用率强平/停止开仓线（占权益）
+    strict_mode: bool = True         # 是否启用严格风控模式（用于进化期）
+    risk_trigger_threshold: int = 0  # 风控触发次数阈值，超过此值视为不盈利
 
 
 @dataclass
 class BacktestConfig:
     """回测配置。"""
-    slippage: float = 1.0                   # 滑点（最小变动价位个数）
+    slippage: float = 1.0                   # 滑点（最小变动价位个数；slip_mode=fixed 时生效）
     fill_mode: str = "next_open"            # 回测撮合：next_open（防未来函数）
     start_cash: float = 1_000_000.0
+    slip_mode: str = "fixed"                # 滑点模式：fixed（tick 数）/ ratio（比例）/ atr（波动率自适应）
+    slip_ratio: float = 0.0                 # 比例滑点：成交价 × slip_ratio（slip_mode=ratio）
+    slip_atr_k: float = 0.5                 # 波动率自适应：slip = k × ATR / price × tick（slip_mode=atr）
+    atr_window: int = 14                    # ATR 平滑窗口（slip_mode=atr）
+    limit_up_pct: float = 0.04              # M3.4 正常涨跌停幅度（如 4%）
+    limit_down_pct: float = 0.04            # M3.4 正常跌停幅度
+    limit_expand_step: float = 0.02         # M3.4 每日扩板步进（第 1 天 +2%、第 2 天 +4%）
+    limit_max_level: int = 2                # M3.4 最大扩板天数（第 3 天封停）
+
+
+@dataclass
+class EvolutionConfig:
+    """进化引擎配置：可复现性种子与终止条件（M2-08 / M2-09）。
+
+    seed 固定默认值使「同 seed 重跑」可复现；max_generations/patience
+    为终止条件；target_fitness 为 None 表示不设目标适应度上限。
+    """
+    seed: int = 20240921                     # 随机种子（M2-09 可复现性；默认 20240921）
+    max_generations: int = 200               # 最大进化代数（M2-08）
+    patience: int = 30                       # 连续无改进代数上限，达到即停止（M2-08）
+    target_fitness: Optional[float] = None   # 目标适应度，达到即停止；None=不限（M2-08）
 
 
 @dataclass
@@ -69,6 +95,7 @@ class Config:
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    evolution: EvolutionConfig = field(default_factory=EvolutionConfig)
     data_path: str = "data"
 
     def to_dict(self) -> dict:
@@ -93,6 +120,7 @@ class Config:
             backtest=BacktestConfig(**d.get("backtest", {})),
             ui=UIConfig(**d.get("ui", {})),
             storage=StorageConfig(**d.get("storage", {})),
+            evolution=EvolutionConfig(**d.get("evolution", {})),
             data_path=d.get("data_path", "data"),
         )
 

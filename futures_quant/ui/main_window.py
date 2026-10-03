@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
+import re
 
 from PyQt6.QtCore import Qt, QTimer, QDateTime
-from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QListWidget, QListWidgetItem,
     QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
@@ -19,15 +21,16 @@ from PyQt6.QtWidgets import (
 
 from .widgets import THEME, pal, PALETTE
 from .icons import icon
-from .pages import (
-    ValidatePage, LogPage,
-)
+from .pages import LogPage, Worker
+from .states import DataGrid
 from .predict_ops_page import PredictOpsPage
 from .market_overview_page import MarketOverviewPage
 from .backtest_page import BacktestCenterPage
 from .ctp_monitor_page import CTPMonitorPage
 from .data_page import DataPage
 from .simple_backtest_page import SimpleBacktestPage
+
+logger = logging.getLogger(__name__)
 from .ai_settings_dialog import AIConfigDialog
 from ..storage.config_manager import ConfigManager, SessionState
 from ..runtime import get_font_paths
@@ -35,6 +38,18 @@ from .. import __version__ as APP_VERSION
 from .responsive_layout import get_layout_manager
 
 AGNES_API_BASE = "https://api.agnes-ai.cn/v1/chat/completions"
+
+
+def _product_icon() -> QIcon:
+    """M4-11②：应用图标 —— 优先 images/product/1.png，缺失时退回内置图标。"""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    p = os.path.join(root, "images", "product", "1.png")
+    if os.path.exists(p):
+        ic = QIcon(p)
+        if not ic.isNull():
+            return ic
+    return icon("bolt", "dark", size=64)
 
 NAV = [
     ("行情全景", MarketOverviewPage, "market", "market"),
@@ -63,6 +78,19 @@ class MainWindow(QMainWindow):
             self.session = SessionState()
         self.theme = self.config.get("ui.theme", "dark")
 
+        # M4-11②：窗口/应用图标（产品图，缺失自动降级内置图标）
+        app_icon = _product_icon()
+        self.setWindowIcon(app_icon)
+        try:
+            if QApplication.instance() is not None:
+                QApplication.instance().setWindowIcon(app_icon)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # M4-11（修 M4-10 遗留）：MainWindow 也需要 worker 登记列表，
+        # `_reconnect` 调用的 `_run_worker` 此前只存在于 BasePage —— 运行时 AttributeError
+        self._workers: list[Worker] = []
+
         # ---- 早期初始化 AI 配置：确保环境变量中的 API 密钥尽早加载到单例 ----
         from ..ai.config import get_ai_config
         get_ai_config(self.config)
@@ -77,11 +105,14 @@ class MainWindow(QMainWindow):
         # 数据源探测改为异步：window 先显示，避免网络探测阻塞 10s+
         self._connect_deferred = QTimer(self)
         self._connect_deferred.setSingleShot(True)
-        self._connect_deferred.timeout.connect(self._do_connect)
+        self._connect_deferred.timeout.connect(self._reconnect)
         self._connect_deferred.start(0)  # 下一轮事件循环再执行
 
         # ---- 响应式布局管理 ----
         self._layout_mgr = get_layout_manager()
+        # M4-14④：恢复用户字号缩放（90/100/110/125%，持久化于 ui.font_scale）
+        self._layout_mgr.set_user_font_scale(
+            float(self.config.get("ui.font_scale", 100)) / 100.0)
 
         self.setWindowTitle(f"期货智能分析预测系统  v{APP_VERSION}")
         # 根据分辨率动态调整最小尺寸约束
@@ -91,6 +122,8 @@ class MainWindow(QMainWindow):
         self._build()
         self._apply_theme()
         self._restore_geometry()
+        # M4-11⑥：初始导航模式（窄屏折叠 / 宽屏完整）——resize 前先校正一次
+        self._update_nav_mode()
 
         # 时钟
         self._clock = QTimer(self)
@@ -103,10 +136,21 @@ class MainWindow(QMainWindow):
         self._session_timer.setSingleShot(True)
         self._session_timer.timeout.connect(lambda: self.session.flush())
 
+        # M4-11⑦：状态栏日志 8s 自动清空（单次定时器，_push_status_log 内重启）
+        self._status_log_timer = QTimer(self)
+        self._status_log_timer.setSingleShot(True)
+        self._status_log_timer.timeout.connect(
+            lambda: self._status_log.setText(""))
+
         # 启动默认进入「行情全景」页（需求：程序启动后默认进入行情全景页面，
         # 并自动触发市场数据刷新与新闻资讯解读——由该页 showEvent 自动拉取）。
-        self.nav.setCurrentRow(0)
-        self.stack.setCurrentIndex(0)
+        # M4-01：走统一入口（会同步侧栏高亮 + 断言校验），不再直接 setCurrentIndex
+        self._show_page(0)
+
+        # M4-12：全局快捷键统一注册（Ctrl+K 面板 / F5 刷新 / Ctrl+E 导出 /
+        # Ctrl+, 模型配置 / Esc 关浮层 / Ctrl+1..7 切页）
+        self._shortcut_seqs: list[tuple[str, str]] = []   # (序列, 说明) 供帮助菜单
+        self._setup_shortcuts()
 
         # ---- 服务注册：解耦 UI 与业务层 ----
         try:
@@ -130,6 +174,9 @@ class MainWindow(QMainWindow):
     def _build(self) -> None:
         """构建相关对象。"""
         central = QWidget()
+        central.setObjectName("central")
+        central.setAutoFillBackground(True)
+        central.setStyleSheet("background:#1e1e2e;")  # 保底深色背景
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
@@ -152,7 +199,16 @@ class MainWindow(QMainWindow):
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(0)
         self.stack = QStackedWidget()
+        self.stack.setAutoFillBackground(True)
+        self.stack.setStyleSheet("background:#1e1e2e;")  # 保底深色背景
         self.pages: list[QWidget | None] = [None] * len(NAV)
+        # M4-01：NAV 下标 → QStackedWidget 下标 的**显式映射**。
+        # 页面是「首次访问才创建」（延迟初始化），而 addWidget 的入栈顺序取决于
+        # 用户点击顺序 —— 因此 NAV 下标 ≠ 栈下标。此前代码直接
+        # `stack.setCurrentIndex(idx)`，只要用户不是按 0,1,2... 顺序点，就会错位
+        # （典型：菜单直接跳「数据管理」→ 主区仍显示上一个页面，且侧栏高亮与
+        # 主区内容不一致）。此后一律用 `setCurrentWidget(page)`，索引只作诊断。
+        self._stack_index: dict[int, int] = {}
         # 预建首页（行情全景），其余页面延迟到首次点击时实例化，
         # 避免启动时一次性触发 predictor.py 等重型模块导入。
         first_cls, first_key = NAV[0][1], NAV[0][3]
@@ -162,6 +218,7 @@ class MainWindow(QMainWindow):
             lambda sym, per, k=first_key: self._on_sel(k, sym, per))
         self.pages[0] = first_page
         self.stack.addWidget(first_page)
+        self._stack_index[0] = self.stack.indexOf(first_page)
         # 预连接首页预警信号
         if hasattr(first_page, "alerts_fired"):
             first_page.alerts_fired.connect(self._on_alerts_fired)
@@ -204,12 +261,183 @@ class MainWindow(QMainWindow):
         self.status.addPermanentWidget(self._theme_btn)
         self.status.addPermanentWidget(self._status_log)
 
+        # M4-14②：关键控件无障碍名称/描述（读屏器可辨识）
+        self.nav.setAccessibleName("主导航")
+        self.nav.setAccessibleDescription(
+            "功能页面切换列表，Ctrl+1..7 快速切页，Ctrl+K 命令面板可搜索")
+        self._status_conn.setAccessibleName("数据源连接状态")
+        self._status_src.setAccessibleName("当前数据源")
+        self._status_clock.setAccessibleName("当前时间")
+        self._status_log.setAccessibleName("状态日志")
+        self._conn_btn.setAccessibleName("重连数据源")
+        self._conn_btn.setAccessibleDescription("重新连接行情数据源")
+        self._theme_btn.setAccessibleName("切换主题")
+        self._theme_btn.setAccessibleDescription("在深色与浅色主题间切换")
+
         # 顶部菜单栏
         self._build_menu()
 
         rwidget = QWidget()
+        rwidget.setObjectName("content-panel")
+        rwidget.setAutoFillBackground(True)
+        rwidget.setStyleSheet("background:#1e1e2e;")  # 保底深色背景
         rwidget.setLayout(right)
         root.addWidget(rwidget)
+
+        # M3-13 ④：模型漂移定时检测（默认 1h 一轮）
+        # 只对「已预测过」的品种扫描，超阈值写 alerts 表 + 托盘冒泡。
+        # 后台守护线程，不影响界面；关闭窗口时 stop（见 closeEvent）。
+        self.drift_monitor = None
+        try:
+            self._start_drift_monitor()
+        except Exception as e:  # 漂移检测接线失败绝不能阻断启动
+            logger.warning("模型漂移定时检测未启用：%s", e)
+
+    # ------------------------------------------------------------------
+    def _start_drift_monitor(self) -> None:
+        """拉起模型漂移定时检测（默认间隔取 DriftConfig.scheduler_interval_min）。"""
+        from ..app.scheduler import DriftMonitor
+        self.drift_monitor = DriftMonitor(
+            self.store, notify_fn=self._on_drift_alert)
+        self.drift_monitor.start()      # 默认 1h
+
+    def _push_status_log(self, text: str) -> None:
+        """M4-11⑦：写状态栏日志并重启 8s 自动清空定时器。"""
+        self._status_log.setText(text)
+        try:
+            self._status_log_timer.start(8000)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_drift_alert(self, message: str, level: str) -> None:
+        """模型漂移告警：状态栏提示 + 托盘气泡（与预警同一套呈现）。"""
+        if not message:
+            return
+        self._push_status_log(f"📉 {message}")
+        if getattr(self, "_tray", None) is not None and level == "drift":
+            try:
+                self._tray.showMessage(
+                    "模型漂移预警", message,
+                    QSystemTrayIcon.MessageIcon.Warning, 5000)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ------------------------------------------------------------------
+    # M4-12：全局快捷键与命令面板
+    # ------------------------------------------------------------------
+    def _setup_shortcuts(self) -> None:
+        """M4-12①③：全局快捷键统一注册入口（帮助菜单清单同步取自这里）。"""
+
+        def _sc(seq: str, desc: str, fn) -> None:
+            """注册单个快捷键并登记到帮助清单。"""
+            s = QShortcut(QKeySequence(seq), self)
+            s.activated.connect(fn)
+            self._shortcut_seqs.append((seq, desc))
+
+        _sc("Ctrl+K", "命令面板", self._open_palette)
+        _sc("F5", "刷新当前页", self._refresh_current_page)
+        _sc("Ctrl+E", "导出当前表", self._export_current_table)
+        _sc("Ctrl+,", "模型配置", self._open_ai_settings)
+        # M7-07：AI 对话框局部快捷键说明（作用于模型配置对话框打开期间，
+        # 登记进帮助清单；对话框内实现见 AIConfigDialog.keyPressEvent）
+        for seq, desc in (("Ctrl+S（AI 对话框）", "应用并保存"),
+                          ("Ctrl+Enter（AI 对话框）", "测试连接"),
+                          ("Ctrl+R（AI 对话框）", "恢复默认")):
+            self._shortcut_seqs.append((seq, desc))
+        _sc("Esc", "关闭浮层", self._close_overlays)
+        for i in range(len(NAV)):
+            _sc(f"Ctrl+{i + 1}", f"切到「{NAV[i][0]}」页",
+                lambda idx=i: self._show_page(idx))
+        # M4-12③：状态栏 Tooltip 快捷键速查
+        self.status.setToolTip(
+            "快捷键：" + " · ".join(f"{seq} {d}" for seq, d in self._shortcut_seqs))
+
+    def _open_palette(self) -> None:
+        """Ctrl+K：唤起命令面板（页面 / 品种 / 命令模糊搜索）。"""
+        from .command_palette import CommandPalette
+        dlg = CommandPalette(self, self._palette_items())
+        dlg.exec()
+
+    def _palette_items(self) -> list:
+        """装配面板条目：页面 → 全局命令 → 品种（mdm.universe）。"""
+        items: list = []
+        for idx, (title, _cls, _ic, _k) in enumerate(NAV):
+            items.append((f"页面：{title}", "页面",
+                          lambda i=idx: self._show_page(i)))
+        items += [
+            ("命令：切换主题（深/浅）", "命令", self._toggle_theme),
+            ("命令：重连数据源", "命令", self._reconnect),
+            ("命令：模型配置…", "命令", self._open_ai_settings),
+            ("命令：数据导出…", "命令", lambda: self._goto_page("data")),
+            ("命令：备份 / 恢复…", "命令", lambda: self._goto_page("data")),
+            ("命令：API状态", "命令", self._show_ai_status),
+            ("命令：导出当前表（Ctrl+E）", "命令", self._export_current_table),
+            ("命令：刷新当前页（F5）", "命令", self._refresh_current_page),
+            ("命令：关于", "命令", self._about),
+        ]
+        for row in (getattr(self.mdm, "universe", None) or []):
+            sym, name = row[0], row[1]
+            items.append((f"品种：{sym} {name}", "品种",
+                          lambda s=sym: self._goto_symbol(s)))
+        return items
+
+    def _goto_symbol(self, symbol: str) -> None:
+        """面板品种动作：跳到「行情全景」并把合约下拉切到目标品种。"""
+        self._goto_page("market")
+        page = self.pages[0]
+        cb = getattr(page, "sym_cb", None)
+        if cb is None:
+            return
+        for i in range(cb.count()):
+            if cb.itemData(i) == symbol:
+                if cb.currentIndex() != i:
+                    cb.setCurrentIndex(i)   # 触发 _on_symbol → 重置并刷新
+                return
+
+    def _refresh_current_page(self) -> None:
+        """F5：刷新当前页（duck-typing 兼容各页刷新方法命名）。"""
+        page = self.stack.currentWidget()
+        for name in ("_refresh_all", "refresh", "_refresh", "reload", "_reload"):
+            fn = getattr(page, name, None)
+            if callable(fn):
+                fn()
+                return
+        self._push_status_log("当前页不支持刷新")
+
+    def _export_current_table(self, path: str | None = None) -> None:
+        """Ctrl+E：导出当前页表格（DataGrid.export_csv，utf-8-sig）。"""
+        page = self.stack.currentWidget()
+        grids = [g for g in page.findChildren(DataGrid) if g.isVisibleTo(page)]
+        if not grids:
+            grids = list(page.findChildren(DataGrid))
+        if not grids:
+            self._push_status_log("当前页无可导出的表格")
+            return
+        grid = next((g for g in grids if g.hasFocus()), grids[0])
+        out = grid.export_csv(path)
+        if out:
+            self._push_status_log(f"✓ 已导出：{out}")
+        else:
+            self._push_status_log("导出取消或失败")
+
+    def _close_overlays(self) -> None:
+        """Esc：关闭主窗口唤起的可见浮层（对话框/命令面板）。"""
+        from PyQt6.QtWidgets import QDialog
+        closed = 0
+        for w in QApplication.topLevelWidgets():
+            if isinstance(w, QDialog) and w.isVisible() and w is not self:
+                w.close()
+                closed += 1
+        if not closed:
+            self._push_status_log("无浮层可关闭")
+
+    def _show_shortcuts(self) -> None:
+        """M4-12②：帮助菜单「快捷键」清单（数据源自 _setup_shortcuts 登记）。"""
+        from PyQt6.QtWidgets import QMessageBox
+        lines = [f"{seq}\t{desc}" for seq, desc in self._shortcut_seqs]
+        QMessageBox.information(
+            self, "快捷键", "\n".join(lines) +
+            "\n\n提示：Ctrl+K 命令面板可搜索页面 / 品种 / 命令")
 
     # ------------------------------------------------------------------
     def _build_menu(self) -> None:
@@ -221,6 +449,16 @@ class MainWindow(QMainWindow):
         act_theme = view.addAction("切换主题（深/浅）")
         act_theme.setShortcut("Ctrl+T")
         act_theme.triggered.connect(self._toggle_theme)
+        # M4-14④：字号缩放设置项（90/100/110/125%）
+        fmenu = view.addMenu("字号缩放")
+        self._font_scale_group = []
+        for pct in (90, 100, 110, 125):
+            act = fmenu.addAction(f"{pct}%")
+            act.setCheckable(True)
+            act.setChecked(
+                int(self.config.get("ui.font_scale", 100)) == pct)
+            act.triggered.connect(lambda _c=False, p=pct: self._set_font_scale(p))
+            self._font_scale_group.append((pct, act))
         # 数据
         data = mb.addMenu("数据")
         act_reconnect = data.addAction("重连数据源")
@@ -238,6 +476,15 @@ class MainWindow(QMainWindow):
         act_ai_status.triggered.connect(self._show_ai_status)
         # 帮助
         helpm = mb.addMenu("帮助")
+        act_sc = helpm.addAction("快捷键…")
+        act_sc.setShortcut("Ctrl+/")
+        act_sc.triggered.connect(self._show_shortcuts)
+        helpm.addSeparator()
+        # M1-09：系统诊断面板
+        act_diag = helpm.addAction("系统诊断…")
+        act_diag.setShortcut("Ctrl+Shift+D")
+        act_diag.triggered.connect(self._show_diagnostics)
+        helpm.addSeparator()
         act_about = helpm.addAction("关于")
         act_about.triggered.connect(self._about)
 
@@ -257,7 +504,7 @@ class MainWindow(QMainWindow):
         if not fired:
             return
         top = fired[0]
-        self._status_log.setText(f"⚠ 预警：{top['symbol']} {top['message']}")
+        self._push_status_log(f"⚠ 预警：{top['symbol']} {top['message']}")
         if self._tray is not None:
             title = f"期货预警 · 新增 {len(fired)} 条"
             body = "\n".join(f"· {f['symbol']} {f['message']}" for f in fired[:5])
@@ -269,7 +516,7 @@ class MainWindow(QMainWindow):
 
     def _on_scan_status(self, msg: str) -> None:
         """扫描状态反馈：写入底部状态栏（加载 / 成功 / 失败）。"""
-        self._status_log.setText(f"◌ {msg}")
+        self._push_status_log(f"◌ {msg}")
 
     def _about(self) -> None:
         """处理about。"""
@@ -289,11 +536,11 @@ class MainWindow(QMainWindow):
         from ..ai.llm_client import api_status
         st = api_status()
         if st.get("usable"):
-            self._status_log.setText(f"Agnes AI：已连接")
+            self._push_status_log("Agnes AI：已连接")
         elif st.get("configured"):
-            self._status_log.setText("云端研判：已配置（未连接）")
+            self._push_status_log("云端研判：已配置（未连接）")
         else:
-            self._status_log.setText("云端研判：未配置（降级模式）")
+            self._push_status_log("云端研判：未配置（降级模式）")
         self._status_log.setStyleSheet(f"color:{pal()['sub']};")
 
     def _show_ai_status(self) -> None:
@@ -313,17 +560,73 @@ class MainWindow(QMainWindow):
         ]
         QMessageBox.information(self, "Agnes AI 状态", "\n".join(lines))
 
-    def _goto_page(self, key: str) -> None:
-        """按页面 key 跳转（菜单快捷入口用）。"""
+    def _show_diagnostics(self) -> None:
+        """M1-09：打开系统诊断面板。"""
+        import os
+        from .diagnostics_dialog import DiagnosticsDialog
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        data_dir = os.path.join(root, "data")
+        disk_dir = root
+        # 密钥指纹：只取首尾，永不显示全文
+        try:
+            from ..ai.config import get_ai_config
+            ai_cfg = get_ai_config(self.config)
+            key_fp = ai_cfg.api_key_fingerprint() if hasattr(ai_cfg, "api_key_fingerprint") else None
+        except Exception:  # noqa: BLE001
+            key_fp = None
+        if not key_fp:
+            env_key = os.environ.get("QV_AGNES_API_KEY", "")
+            key_fp = env_key if len(env_key) <= 12 else (
+                env_key[:3] + "…" + env_key[-4:] if len(env_key) > 8 else None)
+
+        ctx = {
+            "data_dir": data_dir,
+            "disk_dir": disk_dir,
+            "data_feed": getattr(self, "_mdm", None) or getattr(self, "mdm", None),
+            "api_key_fingerprint": key_fp,
+            "qr_gate_enabled": bool(getattr(self, "_qr_gate_enabled", False)),
+        }
+        dlg = DiagnosticsDialog(context=ctx, parent=self)
+        dlg.exec()
+
+    def _goto_page(self, key: str) -> bool:
+        """按页面 key 跳转（菜单快捷入口用）。返回是否命中并切换成功。
+
+        M4-01：原来这里 `nav.setCurrentRow(i)` + `stack.setCurrentIndex(i)` 两行分开做，
+        既重复了 `_switch` 的职责（延迟创建、信号连接、会话记录都没走），又直接
+        用 NAV 下标当栈下标（错位根因）。改为统一走 `_show_page`。
+        """
         for i, (_, _, _, k) in enumerate(NAV):
             if k == key:
-                self.nav.setCurrentRow(i)
-                self.stack.setCurrentIndex(i)
-                break
+                return self._show_page(i)
+        logger.warning("未找到页面 key=%s", key)
+        return False
+
+    def _show_page(self, idx: int) -> bool:
+        """切换到 NAV 第 idx 页（幂等，侧栏高亮与主区同步）。
+
+        M4-01：单独抽出是为了处理「目标页 == 当前页」的情况 —— 此时
+        `nav.setCurrentRow(idx)` **不会**发出 currentRowChanged，`_switch` 不会被
+        触发，若直接返回就会漏掉「菜单点了但页面没切（例如尚未创建）」的情形。
+        """
+        if idx < 0 or idx >= len(NAV):
+            logger.warning("页面下标越界：%d（共 %d 页）", idx, len(NAV))
+            return False
+        if self.nav.currentRow() != idx:
+            self.nav.setCurrentRow(idx)      # 会触发 _switch(idx)
+        else:
+            self._switch(idx)                # 已在当前行，手动补一次（幂等）
+        page = self.pages[idx]
+        return page is not None and self.stack.currentWidget() is page
 
     # ------------------------------------------------------------------
     def _switch(self, idx: int) -> None:
-        """处理switch。"""
+        """处理switch。
+
+        M4-01：切换改用 `setCurrentWidget(page)` —— 页面栈的下标与 NAV 的下标
+        在「延迟初始化 + 乱序点击」下并不相等，用下标切换必然错位。
+        """
         # 延迟初始化目标页面（首次访问时才构建）
         if self.pages[idx] is None:
             title, cls, _, key = NAV[idx]
@@ -337,7 +640,20 @@ class MainWindow(QMainWindow):
                 page.alerts_fired.connect(self._on_alerts_fired)
             if hasattr(page, "scan_status"):
                 page.scan_status.connect(self._on_scan_status)
-        self.stack.setCurrentIndex(idx)
+        page = self.pages[idx]
+        # M4-01：按**widget**切换，不再按下标；同时登记真实栈下标供诊断
+        self._stack_index[idx] = self.stack.indexOf(page)
+        self.stack.setCurrentWidget(page)
+        # M4-01 ③：断言切换结果（错位会在开发/测试期立刻炸出来，而不是静默显示错页）
+        ok = self.stack.currentWidget() is page
+        if not ok:
+            logger.error(
+                "页面栈切换错位：NAV[%d]=%s 期望显示 %r，实际 %r（栈下标=%s）",
+                idx, NAV[idx][0], page, self.stack.currentWidget(),
+                self._stack_index.get(idx))
+        assert ok, (
+            f"页面栈切换错位：NAV 下标 {idx}（{NAV[idx][0]}）切换后 "
+            f"stack.currentWidget() 不是该页")
         self.session.set("last_page", idx)
         self._schedule_session_save()
 
@@ -350,8 +666,9 @@ class MainWindow(QMainWindow):
     def _restore_geometry(self) -> None:
         """处理restoregeometry。"""
         w = self.session.get("window", {})
-        # 强制默认最大化（用户上次关闭时未最大化也恢复为最大化）
-        self._want_max = bool(w.get("maximized", True)) or True
+        # M4-11③：尊重会话记录（去掉原 `or True` —— 它把用户上次「非最大化」
+        # 的偏好强制覆盖为最大化，导致记忆失效）
+        self._want_max = bool(w.get("maximized", True))
         x, y = w.get("x"), w.get("y")
         # 根据屏幕尺寸调整默认窗口大小
         min_w, min_h = self._layout_mgr.get_min_window_size()
@@ -386,11 +703,45 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         """调整大小事件。
-        
+
             参数:
                 event"""
         super().resizeEvent(event)
+        # M4-11⑥：窄屏（<1100px）侧栏自动折叠为 56px 图标条
+        self._update_nav_mode()
         self._save_geometry()
+
+    # M4-11⑥：窄屏折叠阈值与折叠宽度
+    NAV_COLLAPSE_THRESHOLD = 1100
+    NAV_COLLAPSED_WIDTH = 56
+
+    def _update_nav_mode(self) -> None:
+        """窗口宽度 <1100px 时把侧栏折叠为 56px 图标条，加宽时还原文字。
+
+        幂等：模式未变化时不做任何事（resize 高频触发，避免每帧重写文本）。
+        """
+        nav = getattr(self, "nav", None)
+        if nav is None:
+            return
+        narrow = self.width() < self.NAV_COLLAPSE_THRESHOLD
+        if narrow == getattr(self, "_nav_collapsed", None):
+            return
+        self._nav_collapsed = narrow
+        try:
+            if narrow:
+                nav.setFixedWidth(self.NAV_COLLAPSED_WIDTH)
+                for i, (title, _, _, _k) in enumerate(NAV):
+                    item = nav.item(i)
+                    item.setToolTip(title)
+                    item.setText("")
+            else:
+                nav.setFixedWidth(self._layout_mgr.nav_width())
+                for i, (title, _, _, _k) in enumerate(NAV):
+                    item = nav.item(i)
+                    item.setToolTip("")
+                    item.setText(title)
+        except Exception:  # noqa: BLE001
+            pass
 
     def moveEvent(self, event) -> None:  # noqa: N802
         """处理move事件。
@@ -406,24 +757,103 @@ class MainWindow(QMainWindow):
             参数:
                 event"""
         self.session.flush()
+        # M3-13：停掉漂移定时检测，避免进程退出后定时器仍在跑
+        try:
+            mon = getattr(self, "drift_monitor", None)
+            if mon is not None:
+                mon.stop()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self.store.close()
         except Exception:
             pass
         super().closeEvent(event)
 
-    def _reconnect(self) -> None:
-        """处理reconnect。"""
-        self.mdm.connect()
-        self._update_status()
+    def _run_worker(self, fn, on_done, on_err=None, on_progress=None,
+                    on_timeout=None, on_interrupted=None, timeout_ms: int = 0,
+                    connect_status=None) -> "Worker":
+        """MainWindow 版 worker 运行器（修复 M4-10 遗留 AttributeError）。
 
-    def _do_connect(self) -> None:
-        """异步数据源探测（由 _connect_deferred 触发），完成后更新状态栏。"""
-        self.mdm.connect()
-        self.store.add_log(str(dt.datetime.now()), "INFO",
-                          f"系统启动 · 数据源：{self.mdm.source_label}")
-        self._update_status()
-        self._connect_deferred.deleteLater()
+        ``_reconnect`` 调用的 ``self._run_worker`` 此前只定义在 BasePage 上，
+        MainWindow 并未继承 —— 首次启动（``_connect_deferred`` → ``_reconnect``）
+        必然抛 AttributeError。本方法与 ``BasePage._run_worker`` 语义一致
+        （超时守护定时器建在主线程、结束后从 ``self._workers`` 移除），
+        仅 ``connect_status`` 分支改为直接刷新主窗口状态栏。
+        """
+        w = Worker(fn, timeout_ms=timeout_ms)
+        self._workers.append(w)
+        guard = None
+        if timeout_ms > 0:
+            guard = QTimer(self)
+            guard.setSingleShot(True)
+            guard.timeout.connect(w._on_timeout)
+
+        def _safe_remove():
+            """任务结束后从存活列表移除并停掉守护定时器。"""
+            try:
+                self._workers.remove(w)
+            except ValueError:
+                pass
+            if guard is not None and guard.isActive():
+                guard.stop()
+
+        def _done(r):
+            """成功回调。"""
+            try:
+                if on_done:
+                    on_done(r)
+            finally:
+                _safe_remove()
+
+        def _err(e):
+            """失败回调。"""
+            try:
+                if on_err:
+                    on_err(e)
+            finally:
+                _safe_remove()
+
+        w.finished.connect(_done)
+        w.error.connect(_err)
+        w.interrupted.connect(_safe_remove)
+        if on_interrupted is not None:
+            w.interrupted.connect(on_interrupted)
+        if on_progress is not None:
+            w.progress.connect(on_progress)
+        if on_timeout is not None:
+            def _timeout(msg):
+                """超时回调。"""
+                try:
+                    on_timeout(msg)
+                finally:
+                    _safe_remove()
+            w.timeout.connect(_timeout)
+        if connect_status:
+            # M4-10：连接结果经 connect_ready 送达主线程后刷新状态栏
+            w.connect_ready.connect(lambda: self._update_status())
+        w.start()
+        if guard is not None:
+            guard.start(int(timeout_ms))
+        return w
+
+    def _reconnect(self) -> None:
+        """处理reconnect。
+
+        M4-10：``mdm.connect()`` 移入 Worker 线程执行，避免在主线程阻塞；
+        连接结果经 ``Worker.connect_ready`` 信号回传主线程更新状态栏。
+        """
+        def _do_connect():
+            self.mdm.connect()
+            return self.mdm.source_label
+        # M4-11（修 M4-10 遗留）：on_done 直接刷新状态栏 —— Worker.connect_ready
+        # 信号当前无发射端（全工程 grep 仅定义/连接、无 emit），不能依赖它；
+        # `finished` 必然触发，作为状态刷新的可靠路径。
+        self._run_worker(_do_connect, lambda _r=None: self._update_status(),
+                         on_progress=None,
+                         on_interrupted=None,
+                         timeout_ms=15000,
+                         connect_status=self.mdm.source_label)
 
     def _update_status(self) -> None:
         """更新状态。"""
@@ -440,6 +870,29 @@ class MainWindow(QMainWindow):
         self._status_clock.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
 
     # ------------------------------------------------------------------
+    def _set_font_scale(self, pct: int) -> None:
+        """M4-14④：应用字号缩放设置项（持久化 + 全量刷新）。"""
+        self.config.set("ui.font_scale", int(pct))
+        self.config.save()
+        self._layout_mgr.set_user_font_scale(pct / 100.0)
+        # 同步应用级基础字体（main() 的初始 setFont 不再适用新缩放）
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                f = app.font()
+                f.setPointSize(self._layout_mgr.font_size(10))
+                app.setFont(f)
+        except Exception:  # noqa: BLE001
+            pass
+        # 菜单勾选互斥
+        for p, act in getattr(self, "_font_scale_group", []):
+            try:
+                act.setChecked(p == pct)
+            except RuntimeError:
+                pass
+        self._apply_theme()
+        self._push_status_log(f"字号缩放：{pct}%")
+
     def _toggle_theme(self) -> None:
         """切换主题。"""
         self.theme = "light" if self.theme == "dark" else "dark"
@@ -453,17 +906,44 @@ class MainWindow(QMainWindow):
         W.THEME = self.theme
         # M1.2：注入规范色板并全量刷新所有挂接控件（消除页面级 inline 不刷新缺陷）
         try:
-            from .design_system import apply_design
-            apply_design(self.theme, refresh_widgets=False)  # 刷新由下方遍历负责
+            from .design_system import apply_design, build_qss
+            apply_design(self.theme, refresh_widgets=True)  # M4-04：全量刷新打开
         except Exception:
             pass
-        qss = DARK_QSS if self.theme == "dark" else LIGHT_QSS
-        # 根据分辨率调整 QSS 中的字体大小
-        base_size = self._layout_mgr.font_size(13)
-        qss = qss.replace("font-size:13px;", f"font-size:{base_size}px;")
-        qss = qss.replace("font-size:12px;", f"font-size:{base_size-1}px;")
-        qss = qss.replace("font-size:11px;", f"font-size:{base_size-2}px;")
+        # M4-04：QSS 由 design_system.build_qss 从 DESIGN token 生成（单一事实来源）
+        qss = scale_qss_fonts(build_qss(self.theme), self._layout_mgr)
         self.setStyleSheet(qss)
+        # 保底深色背景：设置 Palette（QSS 在某些环境可能不生效）
+        from PyQt6.QtGui import QPalette, QColor
+        bg = pal()["bg"]
+        pal_color = QColor(bg)
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, pal_color)
+        palette.setColor(QPalette.ColorRole.Base, pal_color)
+        self.setPalette(palette)
+        # 保底深色背景（内联，主题切换时同步更新）
+        central = self.centralWidget()
+        if central:
+            central.setStyleSheet(f"background:{bg};")
+            cpalette = central.palette()
+            cpalette.setColor(QPalette.ColorRole.Window, pal_color)
+            cpalette.setColor(QPalette.ColorRole.Base, pal_color)
+            central.setPalette(cpalette)
+            rwidget = central.layout().itemAt(1).widget() if central.layout() and central.layout().count() > 1 else None
+            if rwidget:
+                rwidget.setStyleSheet(f"background:{bg};")
+                rpal = rwidget.palette()
+                rpal.setColor(QPalette.ColorRole.Window, pal_color)
+                rpal.setColor(QPalette.ColorRole.Base, pal_color)
+                rwidget.setPalette(rpal)
+            if self.stack:
+                self.stack.setStyleSheet(f"background:{bg};")
+                spal = self.stack.palette()
+                spal.setColor(QPalette.ColorRole.Window, pal_color)
+                spal.setColor(QPalette.ColorRole.Base, pal_color)
+                self.stack.setPalette(spal)
+        # M4-04③：首次生成结果写入 config/style.qss 作为可读快照（运行时仍走生成）
+        self._write_style_snapshot(qss)
         # 导航图标重渲染
         for i, (_, _, ic, _k) in enumerate(NAV):
             self.nav.item(i).setIcon(icon(ic, self.theme))
@@ -478,208 +958,62 @@ class MainWindow(QMainWindow):
                 c = getattr(p, attr, None)
                 if c is not None and hasattr(c, "set_theme"):
                     c.set_theme(self.theme)
+        # M4-05②：打开中的对话框（如绩效归因）也随主题刷新（不改变对话框行为）
+        try:
+            from PyQt6.QtWidgets import QDialog
+            for dlg in self.findChildren(QDialog):
+                if hasattr(dlg, "set_theme"):
+                    dlg.set_theme(self.theme)
+        except Exception:
+            pass
         self._update_status()
+
+    def _write_style_snapshot(self, qss: str) -> None:
+        """把生成的 QSS 写入 config/style.qss 作为可读快照（仅首次生成时写）。
+
+        运行时仍走 build_qss 动态生成，本文件仅用于人工审阅/调试。
+        """
+        try:
+            snap = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__)))), "config", "style.qss")
+            if os.path.exists(snap):
+                return
+            os.makedirs(os.path.dirname(snap), exist_ok=True)
+            with open(snap, "w", encoding="utf-8") as fh:
+                fh.write(qss)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ============================================================================
 # QSS
 # ============================================================================
-DARK_QSS = """
-/* ===== 基础 ===== */
-QWidget { background:#0f1116; color:#e6e6e6; font-family:'SimHei','Noto Sans SC','Microsoft YaHei',sans-serif; }
-QMainWindow { background:#0f1116; }
-QFrame#toolbar { background:#161a24; border:1px solid #2a2e3a; border-radius:10px; }
-QFrame#hsep { background:#1a1d27; border:none; }
+# M4-03④：单趟字号替换，避免链式 replace 在「目标值 == 另一档源串」时把层级压平。
+# 说明：QSS 含大量 CSS 大括号，无法用 str.format("{fs13}...")（会触发 KeyError），
+# 故改用正则单次替换 11/12/13px 三档，每档映射到 responsive_layout.font_size 的三档钳制值。
+_QSS_FONT_RE = re.compile(r"font-size:(11|12|13)px;")
 
-/* ===== 侧边导航 ===== */
-QListWidget#nav { background:#0b0d12; border:none; padding-top:10px; padding-bottom:10px; outline:0; }
-QListWidget#nav::item { color:#9aa3b5; padding:12px 16px; border-left:3px solid transparent; margin:2px 8px; border-radius:8px; }
-QListWidget#nav::item:hover { background:#161a24; color:#e6e6e6; }
-QListWidget#nav::item:selected { background:#1b2230; color:#fff; border-left:3px solid #2563eb; }
 
-/* ===== 内容区 ===== */
-QStackedWidget { background:#0f1116; }
+def scale_qss_fonts(qss: str, mgr) -> str:
+    """按响应式三档钳制替换 QSS 中的 11/12/13px 字号（单趟、防串味）。
 
-/* ===== 文本 ===== */
-QLabel { color:#e6e6e6; background:transparent; }
-QLabel#sub { color:#8b93a7; }
+        参数:
+            qss: 原始 QSS 字符串。
+            mgr: ResponsiveLayoutManager（提供 font_size 三档钳制）。
 
-/* ===== 按钮 ===== */
-QPushButton { background:#2563eb; color:#fff; border:1px solid transparent; border-radius:8px; padding:8px 18px; font-size:13px; font-weight:bold; }
-QPushButton:hover { background:#1d4ed8; border-color:#2563eb; }
-QPushButton:pressed { background:#1e40af; padding-top:9px; padding-bottom:7px; }
-QPushButton:focus { border:1px solid #60a5fa; outline:none; }
-QPushButton:disabled { background:#27303f; color:#6b7280; border-color:transparent; }
-QPushButton#secondary { background:rgba(255,255,255,0.02); color:#cbd5e1; border:1px solid #2a2e3a; font-weight:500; }
-QPushButton#secondary:hover { background:#1a1d27; border-color:#3a4154; color:#fff; }
-QPushButton#secondary:pressed { background:#11141c; }
-QPushButton#secondary:focus { border-color:#60a5fa; }
-QPushButton#primary { background:#2563eb; }
-QPushButton#primary:hover { background:#1d4ed8; }
-QPushButton#danger { background:#dc2626; }
-QPushButton#danger:hover { background:#b91c1c; }
-QPushButton#danger:pressed { background:#991b1b; }
+        返回:
+            str: 字号已按比例替换的 QSS。
+    """
+    sizes = {11: mgr.font_size(11), 12: mgr.font_size(12), 13: mgr.font_size(13)}
 
-/* ===== 输入控件 ===== */
-QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit { background:#11141c; border:1px solid #2a2e3a; border-radius:8px; padding:6px 10px; color:#e6e6e6; font-size:13px; selection-background-color:#2563eb; selection-color:#fff; }
-QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QLineEdit:hover { border-color:#3a4154; }
-QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus { border:1px solid #3b82f6; background:#151923; }
-QComboBox::drop-down { border:none; width:20px; }
-QComboBox QAbstractItemView { background:#11141c; color:#e6e6e6; selection-background-color:#2563eb; selection-color:#fff; border:1px solid #2a2e3a; border-radius:8px; outline:0; padding:4px; }
-QSpinBox::up-button, QDoubleSpinBox::up-button { width:16px; border:none; background:transparent; }
-QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover { background:#1a1d27; }
+    def _sub(m):
+        """将匹配到的字号替换为对应钳制值。"""
+        return f"font-size:{sizes[int(m.group(1))]}px;"
 
-/* ===== 表格 ===== */
-QTableWidget { background:#11141c; gridline-color:#1a1d27; border:1px solid #2a2e3a; border-radius:10px; outline:0; font-size:12px; }
-QTableWidget::item { padding:6px 8px; border:none; }
-QTableWidget::item:selected { background:#1f2a44; color:#fff; }
-QHeaderView::section { background:#161a24; color:#8b93a7; border:none; padding:8px; font-weight:bold; font-size:12px; }
-QHeaderView::section:hover { color:#e6e6e6; }
-QTableWidget::item:hover { background:#232838; }
+    return _QSS_FONT_RE.sub(_sub, qss)
 
-/* ===== 标签页 ===== */
-QTabWidget::pane { border:1px solid #2a2e3a; border-radius:10px; top:-1px; }
-QTabBar::tab { background:#11141c; color:#8b93a7; padding:9px 16px; margin-right:2px; border-top-left-radius:8px; border-top-right-radius:8px; }
-QTabBar::tab:selected { background:#161a24; color:#fff; }
-QTabBar::tab:hover { color:#e6e6e6; }
 
-/* ===== 滚动条（深色） ===== */
-QScrollBar:vertical { background:#0f1116; width:12px; border-radius:6px; margin:0; }
-QScrollBar::handle:vertical { background:rgba(42,46,58,0.8); border-radius:6px; min-height:32px; margin:1px; }
-QScrollBar::handle:vertical:hover { background:rgba(58,65,84,0.95); }
-QScrollBar::handle:vertical:pressed { background:#3b82f6; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transparent; }
-QScrollBar:horizontal { background:#0f1116; height:12px; border-radius:6px; margin:0; }
-QScrollBar::handle:horizontal { background:rgba(42,46,58,0.8); border-radius:6px; min-width:32px; margin:1px; }
-QScrollBar::handle:horizontal:hover { background:rgba(58,65,84,0.95); }
-QScrollBar::handle:horizontal:pressed { background:#3b82f6; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width:0; }
-QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background:transparent; }
-
-/* ===== 复选框 ===== */
-QCheckBox { color:#cbd5e1; spacing:8px; background:transparent; }
-QCheckBox::indicator { width:16px; height:16px; border-radius:4px; border:1px solid #3a4154; background:#11141c; }
-QCheckBox::indicator:hover { border-color:#3b82f6; }
-QCheckBox::indicator:checked { background:#2563eb; border-color:#2563eb; }
-QCheckBox::indicator:checked:hover { background:#1d4ed8; }
-
-/* ===== 菜单栏 / 菜单 ===== */
-QMenuBar { background:#0b0d12; color:#cbd5e1; padding:3px 6px; border-bottom:1px solid #2a2e3a; spacing:2px; }
-QMenuBar::item { background:transparent; padding:6px 14px; border-radius:6px; }
-QMenuBar::item:selected { background:#2563eb; color:#fff; }
-QMenuBar::item:pressed { background:#1d4ed8; }
-QMenu { background:#11141c; color:#e6e6e6; border:1px solid #2a2e3a; border-radius:10px; padding:6px; }
-QMenu::item { padding:8px 26px 8px 14px; border-radius:6px; }
-QMenu::item:selected { background:#2563eb; color:#fff; }
-QMenu::separator { height:1px; background:#2a2e3a; margin:5px 10px; }
-
-/* ===== 状态栏 ===== */
-QStatusBar { background:#0b0d12; color:#8b93a7; border-top:1px solid #2a2e3a; padding:5px 12px; }
-QStatusBar::item { border:none; }
-#status-dot { color:#22c55e; font-weight:bold; font-size:13px; }
-#status-ver { color:#60a5fa; font-weight:bold; font-size:13px; padding:0 6px; }
-QFrame#chip { border-radius:12px; }
-QToolTip { background:#161a24; color:#e6e6e6; border:1px solid #2a2e3a; border-radius:6px; padding:5px 8px; }
-"""
-
-LIGHT_QSS = """
-/* ===== 基础 ===== */
-QWidget { background:#f5f7fa; color:#1f2937; font-family:'SimHei','Noto Sans SC','Microsoft YaHei',sans-serif; font-size:13px; }
-QMainWindow { background:#f5f7fa; }
-QFrame#toolbar { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; }
-QFrame#hsep { background:#e5e7eb; border:none; }
-
-/* ===== 侧边导航 ===== */
-QListWidget#nav { background:#eef2f7; border:none; padding-top:10px; padding-bottom:10px; outline:0; }
-QListWidget#nav::item { color:#475569; padding:12px 16px; border-left:3px solid transparent; margin:2px 8px; border-radius:8px; }
-QListWidget#nav::item:hover { background:#ffffff; color:#111827; }
-QListWidget#nav::item:selected { background:#e0ecff; color:#111827; border-left:3px solid #2563eb; }
-
-/* ===== 内容区 ===== */
-QStackedWidget { background:#f5f7fa; }
-
-/* ===== 文本 ===== */
-QLabel { color:#1f2937; background:transparent; }
-QLabel#sub { color:#6b7280; }
-
-/* ===== 按钮 ===== */
-QPushButton { background:#2563eb; color:#fff; border:1px solid transparent; border-radius:8px; padding:8px 18px; font-size:13px; font-weight:bold; }
-QPushButton:hover { background:#1d4ed8; }
-QPushButton:pressed { background:#1e40af; padding-top:9px; padding-bottom:7px; }
-QPushButton:focus { border:1px solid #2563eb; outline:none; }
-QPushButton:disabled { background:#e2e8f0; color:#94a3b8; border-color:transparent; }
-QPushButton#secondary { background:#ffffff; color:#334155; border:1px solid #d1d5db; font-weight:500; }
-QPushButton#secondary:hover { background:#f1f5f9; border-color:#94a3b8; }
-QPushButton#secondary:pressed { background:#e9eef5; }
-QPushButton#secondary:focus { border-color:#2563eb; }
-QPushButton#primary { background:#2563eb; }
-QPushButton#primary:hover { background:#1d4ed8; }
-QPushButton#danger { background:#dc2626; }
-QPushButton#danger:hover { background:#b91c1c; }
-
-/* ===== 输入控件 ===== */
-QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit { background:#ffffff; border:1px solid #d1d5db; border-radius:8px; padding:6px 10px; color:#1f2937; font-size:13px; selection-background-color:#2563eb; selection-color:#fff; }
-QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QLineEdit:hover { border-color:#94a3b8; }
-QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus { border:1px solid #2563eb; background:#ffffff; }
-QComboBox::drop-down { border:none; width:20px; }
-QComboBox QAbstractItemView { background:#ffffff; color:#1f2937; selection-background-color:#2563eb; selection-color:#fff; border:1px solid #d1d5db; border-radius:8px; outline:0; padding:4px; }
-QSpinBox::up-button, QDoubleSpinBox::up-button { width:16px; border:none; background:transparent; }
-QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover { background:#f1f5f9; }
-
-/* ===== 表格 ===== */
-QTableWidget { background:#ffffff; gridline-color:#eef2f7; border:1px solid #d1d5db; border-radius:10px; outline:0; font-size:12px; }
-QTableWidget::item { padding:6px 8px; border:none; }
-QTableWidget::item:selected { background:#dbeafe; color:#111827; }
-QHeaderView::section { background:#eef2f7; color:#6b7280; border:none; padding:8px; font-weight:bold; font-size:12px; }
-QHeaderView::section:hover { color:#111827; }
-QTableWidget::item:hover { background:#eff6ff; }
-
-/* ===== 标签页 ===== */
-QTabWidget::pane { border:1px solid #d1d5db; border-radius:10px; top:-1px; }
-QTabBar::tab { background:#eef2f7; color:#6b7280; padding:9px 16px; margin-right:2px; border-top-left-radius:8px; border-top-right-radius:8px; }
-QTabBar::tab:selected { background:#ffffff; color:#111827; }
-QTabBar::tab:hover { color:#111827; }
-
-/* ===== 滚动条（浅色） ===== */
-QScrollBar:vertical { background:#f1f5f9; width:12px; border-radius:6px; margin:0; }
-QScrollBar::handle:vertical { background:rgba(203,213,225,0.8); border-radius:6px; min-height:32px; margin:1px; }
-QScrollBar::handle:vertical:hover { background:rgba(148,163,184,0.95); }
-QScrollBar::handle:vertical:pressed { background:#2563eb; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transparent; }
-QScrollBar:horizontal { background:#f1f5f9; height:12px; border-radius:6px; margin:0; }
-QScrollBar::handle:horizontal { background:rgba(203,213,225,0.8); border-radius:6px; min-width:32px; margin:1px; }
-QScrollBar::handle:horizontal:hover { background:rgba(148,163,184,0.95); }
-QScrollBar::handle:horizontal:pressed { background:#2563eb; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width:0; }
-QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background:transparent; }
-
-/* ===== 复选框 ===== */
-QCheckBox { color:#334155; spacing:8px; background:transparent; }
-QCheckBox::indicator { width:16px; height:16px; border-radius:4px; border:1px solid #94a3b8; background:#ffffff; }
-QCheckBox::indicator:hover { border-color:#2563eb; }
-QCheckBox::indicator:checked { background:#2563eb; border-color:#2563eb; }
-QCheckBox::indicator:checked:hover { background:#1d4ed8; }
-
-/* ===== 菜单栏 / 菜单 ===== */
-QMenuBar { background:#eef2f7; color:#334155; padding:3px 6px; border-bottom:1px solid #d1d5db; spacing:2px; }
-QMenuBar::item { background:transparent; padding:6px 14px; border-radius:6px; }
-QMenuBar::item:selected { background:#2563eb; color:#fff; }
-QMenuBar::item:pressed { background:#1d4ed8; }
-QMenu { background:#ffffff; color:#1f2937; border:1px solid #d1d5db; border-radius:10px; padding:6px; }
-QMenu::item { padding:8px 26px 8px 14px; border-radius:6px; }
-QMenu::item:selected { background:#2563eb; color:#fff; }
-QMenu::separator { height:1px; background:#e2e8f0; margin:5px 10px; }
-
-/* ===== 状态栏 ===== */
-QStatusBar { background:#eef2f7; color:#6b7280; border-top:1px solid #d1d5db; padding:5px 12px; }
-QStatusBar::item { border:none; }
-#status-dot { color:#16a34a; font-weight:bold; font-size:13px; }
-#status-ver { color:#2563eb; font-weight:bold; font-size:13px; padding:0 6px; }
-QFrame#chip { border-radius:12px; }
-QToolTip { background:#ffffff; color:#1f2937; border:1px solid #d1d5db; border-radius:6px; padding:5px 8px; }
-"""
 
 
 def main() -> None:
@@ -688,13 +1022,19 @@ def main() -> None:
     import sys
     from PyQt6.QtGui import QFont, QFontDatabase
     from PyQt6.QtWidgets import QApplication
-    
+
     # 强制应用安全模式：打包模式下从环境变量加载 API 密钥，清除持久化密钥
     from ..runtime import is_frozen
     from ..ai.llm_client import enforce_security_mode
     enforce_security_mode(is_frozen())
-    
+
     app = QApplication([])
+
+    # M4-11①：Splash 先行（品牌 Logo + 版本 + 进度文案，processEvents 分步推进）
+    from .splash import Splash
+    splash = Splash(app)
+    splash.step("加载字体…")
+
     # 显式加载中文字体，避免无 CJK 字形时回退成 tofu。
     # 优先用内嵌/系统字体，按注册成功的家族设置；全部失败时退回 Qt 系统默认（含 CJK 回退）。
     chosen_family = ""
@@ -714,7 +1054,17 @@ def main() -> None:
     else:
         base_size = 10
         app.setFont(QFont("", base_size))  # 让 Qt 走系统默认字体（含 CJK 回退）
+
+    splash.step("初始化主窗口…")
     win = MainWindow()
+    # M4-14④：MainWindow 已从配置恢复用户字号缩放，同步应用级基础字体
+    try:
+        from .responsive_layout import get_layout_manager as _glm
+        f = app.font()
+        f.setPointSize(_glm().font_size(10))
+        app.setFont(f)
+    except Exception:  # noqa: BLE001
+        pass
 
     # ---- 全局崩溃兜底：异常时尽量落盘状态，并写入崩溃日志 ----
     def _excepthook(etype, exc, tb):  # noqa: ANN001
@@ -735,11 +1085,13 @@ def main() -> None:
         sys.__excepthook__(etype, exc, tb)
     sys.excepthook = _excepthook
 
-    # 恢复上次窗口状态（默认最大化）
+    # 恢复上次窗口状态（尊重会话记录；M4-11③ 已去掉强制最大化）
     if getattr(win, "_want_max", True):
         win.showMaximized()
     else:
         win.show()
+    # M4-11①：主窗口已显示，关闭 Splash 交还焦点
+    splash.finish(win)
     # 确保窗口在最前面并激活
     win.raise_()
     win.activateWindow()

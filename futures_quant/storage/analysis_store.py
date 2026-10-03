@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import logging
 import os
 import sqlite3
 from typing import Any, Optional
 
 from ..runtime import normalize_data_path
+
+logger = logging.getLogger(__name__)
 
 
 class AnalysisStore:
@@ -140,6 +143,13 @@ class AnalysisStore:
             last_collected_ts TEXT,
             status TEXT DEFAULT 'ok',
             note TEXT);
+
+        CREATE TABLE IF NOT EXISTS feedback_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            ts TEXT,
+            payload_json TEXT);
+        CREATE INDEX IF NOT EXISTS ix_feedback_samples ON feedback_samples(symbol, ts);
         """)
         # 预测历史表增量迁移（库文件可能已存在旧 schema，需兼容追加列）
         self._migrate_predictions()
@@ -283,6 +293,53 @@ class AnalysisStore:
             (limit,))
         return [dict(r) for r in cur.fetchall()]
 
+    # ------------------------- M3-13 漂移检测支撑 -------------------------
+    def daily_hit_rates(self, symbol: Optional[str] = None,
+                        days: int = 180) -> list:
+        """按「结算日」聚合的方向命中率序列（M3-13 漂移检测的数据源）。
+
+        只取已结算且命中标记非空（`score IS NOT NULL`）的记录，按
+        ``COALESCE(closed_ts, ts)`` 的日期部分分组。
+
+        返回:
+            ``[(day: str, rate: float, n: int), ...]``，按日**升序**（旧 → 新）。
+
+        注意：这里的「日」是**结算日**而非自然交易日，一天内可能有多条
+        预测（多周期 / 多次点击），故用 ``AVG(score)`` 作当日命中率，
+        ``n`` 为该日样本数（供基准做样本数加权，避免「1 条命中 = 100%」
+        把基准带偏）。
+        """
+        where = "WHERE status='closed' AND score IS NOT NULL"
+        args: list = []
+        if symbol:
+            where += " AND symbol=?"
+            args.append(symbol)
+        sql = ("SELECT substr(COALESCE(NULLIF(closed_ts, ''), ts), 1, 10) AS d, "
+               "AVG(score) AS rate, COUNT(*) AS n "
+               f"FROM predictions {where} GROUP BY d ORDER BY d DESC LIMIT ?")
+        args.append(int(days))
+        try:
+            cur = self.conn.execute(sql, tuple(args))
+            rows = [(r[0], float(r[1] or 0.0), int(r[2] or 0))
+                    for r in cur.fetchall() if r[0]]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("daily_hit_rates 查询失败（symbol=%s）：%s", symbol, e)
+            return []
+        rows.reverse()
+        return rows
+
+    def predicted_symbols(self, limit: int = 100) -> list:
+        """返回「已预测过」的品种代码列表（M3-13：定时漂移检测的扫描对象）。"""
+        try:
+            cur = self.conn.execute(
+                "SELECT DISTINCT symbol FROM predictions "
+                "WHERE symbol IS NOT NULL AND symbol <> '' "
+                "ORDER BY symbol LIMIT ?", (int(limit),))
+            return [r[0] for r in cur.fetchall() if r[0]]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("predicted_symbols 查询失败：%s", e)
+            return []
+
     def count_predictions(self, status: Optional[str] = None) -> int:
         """统计预测记录总数（可按 status 过滤），用于看板健康度提示。"""
         if status:
@@ -372,6 +429,46 @@ class AnalysisStore:
                 (symbol, limit))
         else:
             cur = self.conn.execute("SELECT * FROM predictions ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+    # ----------------------------- 反馈样本（M7.4 闭环） -----------------------------
+    def append_feedback_sample(self, payload: dict) -> int:
+        """写入一条反馈样本（交易/回测结果），返回自增 id。
+
+        作为 M7.4「交易反馈 → 再训练」闭环的监督信号入口；
+        payload 至少应含 ``symbol`` 与业务字段（pnl / source 等）。
+        """
+        import json
+        symbol = str((payload or {}).get("symbol") or "")
+        ts = str((payload or {}).get("ts") or dt.datetime.now().isoformat(timespec="seconds"))
+        payload_json = json.dumps(payload, ensure_ascii=False, default=str)
+        cur = self.conn.execute(
+            "INSERT INTO feedback_samples (symbol, ts, payload_json) VALUES (?,?,?)",
+            (symbol, ts, payload_json))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def feedback_sample_count(self, symbol: str = "") -> int:
+        """统计反馈样本数（可按 symbol 过滤），供 M7.4 调度门控触发再训练。
+
+        假设：feedback_samples 表已通过 _init_schema 创建（见本节上文）。
+        """
+        if symbol:
+            return self.conn.execute(
+                "SELECT COUNT(*) FROM feedback_samples WHERE symbol=?",
+                (symbol,)).fetchone()[0]
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM feedback_samples").fetchone()[0]
+
+    def load_feedback_samples(self, symbol: str = "", limit: int = 500) -> list:
+        """读取反馈样本（默认按 id 倒序），供诊断/查看。"""
+        if symbol:
+            cur = self.conn.execute(
+                "SELECT * FROM feedback_samples WHERE symbol=? "
+                "ORDER BY id DESC LIMIT ?", (symbol, limit))
+        else:
+            cur = self.conn.execute(
+                "SELECT * FROM feedback_samples ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in cur.fetchall()]
 
     # ----------------------------- 研判记录 -----------------------------

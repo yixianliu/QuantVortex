@@ -48,6 +48,7 @@ class MultiPeriodSync:
         self.default_visible = max(20, int(default_visible))
         self.hover_index: int = -1
         self._charts: List[KLineChart] = []
+        self._aux: List[Any] = []   # M4-13②：辅助图（跨图 hover 联动）
 
     # ---------------- 注册 / 移除 ----------------
     def register(self, chart: KLineChart) -> None:
@@ -55,11 +56,37 @@ class MultiPeriodSync:
         if chart not in self._charts:
             self._charts.append(chart)
         self._apply_zoom()
+        for aux in self._aux:
+            self._bind_pair(chart, aux)
 
     def unregister(self, chart: KLineChart) -> None:
         """注销一张 K 线。"""
         if chart in self._charts:
             self._charts.remove(chart)
+
+    # ---------------- 辅助图联动（M4-13②） ----------------
+    def register_aux(self, chart) -> None:
+        """注册辅助图并与其余 K 线建立双向 hover 联动。
+
+        辅助图需实现 ``set_hover_fraction``（接收）和/或 ``hover_fraction``
+        信号（发送）——即 chart_widget.HoverCrosshairMixin 的接口。
+        板块图（market_overview）与 predict_ops 的 macd/kdj/rsi 均可经此接入。
+        """
+        if chart not in self._aux:
+            self._aux.append(chart)
+        for k in self._charts:
+            self._bind_pair(k, chart)
+
+    @staticmethod
+    def _bind_pair(kline, aux) -> None:
+        """建立单对双向联动（双方任一方向缺接口则跳过该方向）。"""
+        try:
+            if hasattr(aux, "set_hover_fraction") and hasattr(kline, "hover_fraction"):
+                kline.hover_fraction.connect(aux.set_hover_fraction)
+            if hasattr(aux, "hover_fraction") and hasattr(kline, "set_hover_fraction"):
+                aux.hover_fraction.connect(kline.set_hover_fraction)
+        except Exception:
+            pass
 
     # ---------------- 缩放 ----------------
     def zoom_in(self, step: int = 5) -> None:

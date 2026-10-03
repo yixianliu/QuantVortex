@@ -12,6 +12,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
+_IN_PYTEST = "PYTEST_CURRENT_TEST" in os.environ
+
+
+def _exit(code: int) -> None:
+    if _IN_PYTEST:
+        raise RuntimeError(f"R5.3 真实样本标记 e2e 测试失败 (exit {code})")
+    sys.exit(code)
+
+
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication(sys.argv)
@@ -82,6 +91,6 @@ check(page._manual_group is not None and page._manual_group.isVisible(),
 print()
 if fails == 0:
     print("=== R5.3 真实样本视觉标记 e2e 全部通过 ===")
-    sys.exit(0)
+    _exit(0)
 print(f"=== 失败 {fails} 项 ===")
-sys.exit(1)
+_exit(1)

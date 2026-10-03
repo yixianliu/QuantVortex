@@ -18,15 +18,17 @@ from __future__ import annotations
 
 import json
 import os
-import ssl
 import time
-import urllib.request
 
 import pandas as pd
 
 from .base import DataFeed
+from .http_client import get_client as _get_http_client, _verify_ssl
+from ..ai.source_config import SINA_KLINE_URL
 
-_SINA_URL = "https://stock2.finance.sina.com.cn/futures/api/json.php/InnerFuturesNewService.getDailyKLine"
+# M5-10③：新浪日线 URL 收敛到 source_config.SINA_KLINE_URL（可经 settings.json#news_sources 或
+# env QV_NEWS_SINA_KLINE_URL 覆盖）。SSL 校验走 http_client._verify_ssl()（VERIFY_SSL=0 逃生）。
+_SINA_URL = SINA_KLINE_URL
 _HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"}
 
 _COLS = ["datetime", "open", "high", "low", "close", "volume", "open_interest"]
@@ -75,8 +77,8 @@ class SinaFeed(DataFeed):
     # 网络与缓存
     # ------------------------------------------------------------------
     def _http(self, url: str) -> str:
-        # ⚠️ SSL 验证已禁用以兼容部分内网/代理环境。
-        # 生产环境若涉及敏感数据，建议启用 check_hostname=True 和 CERT_REQUIRED。
+        # M5-03：统一经 http_client 发请求（连接池 + Retry + UA 轮换 + 单域限流 + SSL 校验）。
+        # 无 requests / 网络失败时抛异常，由 _fetch_daily 的 try 兜底回退陈旧缓存。
         """处理http。
         
             参数:
@@ -84,19 +86,13 @@ class SinaFeed(DataFeed):
         
             返回:
                 str"""
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(url, headers=_HEADERS)
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout, context=ctx) as r:
-                return r.read().decode("utf-8", "ignore")
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(f"HTTP {e.code}: {e.reason}") from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"网络请求失败: {e.reason}") from e
-        except OSError as e:
-            raise RuntimeError(f"IO 错误: {e}") from e
+        client = _get_http_client()
+        resp = client.get(url, headers=_HEADERS, timeout=self.timeout)
+        if resp is None:
+            raise RuntimeError("网络请求失败（无 responses 或被限流/robots 拦截）")
+        if resp.status_code != 200:
+            raise RuntimeError(f"HTTP {resp.status_code}: {resp.reason}")
+        return resp.text
 
     def _cache_path(self, sina_sym: str) -> str:
         """处理缓存路径。

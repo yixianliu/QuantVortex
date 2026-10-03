@@ -22,7 +22,9 @@ from .synthetic import FUTURES_UNIVERSE
 
 
 # 平今仓免收手续费的品种（真实交易所规则）：上期所部分、中金所全部
-_CLOSE_TODAY_FREE = {"rb", "hc", "ru", "au", "ag", "IF", "IH", "T", "IC", "IM"}
+# 上期所：螺纹/热卷/不锈钢/橡胶/黄金/白银/燃油/沥青/铜/铝/锌/镍/锡/铅/原油
+# 中金所：全品种
+_CLOSE_TODAY_FREE = {"RB", "HC", "SS", "RU", "AU", "AG", "FU", "BU", "CU", "AL", "ZN", "NI", "SN", "PB", "SC", "IF", "IH", "T", "IC", "IM"}
 
 # 少数品种的手续费/保证金微调（其余按 category 规则生成）
 _SPEC_TUNING = {
@@ -33,17 +35,43 @@ _SPEC_TUNING = {
     "IM": {"commission_per_lot": 25.0, "margin_rate": 0.12},
     "T":  {"commission_per_lot": 5.0,  "margin_rate": 0.03},
     # 贵金属/能源：高价值，按手手续费偏高
-    "au": {"commission_per_lot": 10.0, "margin_rate": 0.08},
-    "ag": {"commission_per_lot": 5.0,  "margin_rate": 0.10},
-    "sc": {"commission_per_lot": 10.0, "margin_rate": 0.10},
+    "AU": {"commission_per_lot": 10.0, "margin_rate": 0.08},
+    "AG": {"commission_per_lot": 5.0,  "margin_rate": 0.10},
+    "SC": {"commission_per_lot": 10.0, "margin_rate": 0.10},
     # 有色金属：按手中等
-    "cu": {"commission_per_lot": 5.0},
-    "al": {"commission_per_lot": 5.0},
-    "zn": {"commission_per_lot": 5.0},
-    "ni": {"commission_per_lot": 5.0},
-    "sn": {"commission_per_lot": 5.0},
-    "pb": {"commission_per_lot": 5.0},
+    "CU": {"commission_per_lot": 5.0},
+    "AL": {"commission_per_lot": 5.0},
+    "ZN": {"commission_per_lot": 5.0},
+    "NI": {"commission_per_lot": 5.0},
+    "SN": {"commission_per_lot": 5.0},
+    "PB": {"commission_per_lot": 5.0},
+    # 玻璃：郑商所建材，低价低波动，手续费偏低
+    "FG": {"commission_per_lot": 2.0, "margin_rate": 0.10},
+    # 钯金：贵金属，参考沪银规格（高价值贵金属）
+    "PD": {"commission_per_lot": 5.0, "margin_rate": 0.08},
 }
+
+
+# 各交易所标准交易时段（真实市场规则，用于风控非交易时段拦截）
+# 注意：夜盘时段跨天，起始时间为次日 00:00 后的实际时钟时间
+# 2024版：上午增加 10:15-10:30 休市；INE 原油夜盘至 02:30
+_EXCHANGE_HOURS: dict[str, list] = {
+    # 上期所（SHFE）：日盘 09:00-10:15 / 10:30-11:30 / 13:30-15:00；夜盘 21:00-23:00
+    "SHFE": [("09:00", "10:15"), ("10:30", "11:30"), ("13:30", "15:00"), ("21:00", "23:00")],
+    # 大商所（DCE）：日盘 09:00-10:15 / 10:30-11:30 / 13:30-15:00；夜盘 21:00-23:00
+    "DCE":  [("09:00", "10:15"), ("10:30", "11:30"), ("13:30", "15:00"), ("21:00", "23:00")],
+    # 郑商所（CZCE）：日盘 09:00-10:15 / 10:30-11:30 / 13:30-15:00；夜盘 21:00-23:00
+    "CZCE": [("09:00", "10:15"), ("10:30", "11:30"), ("13:30", "15:00"), ("21:00", "23:00")],
+    # 上期能源（INE）：原油/20号胶等；日盘 09:00-10:15 / 10:30-11:30 / 13:30-15:00；夜盘 21:00-02:30
+    "INE":  [("09:00", "10:15"), ("10:30", "11:30"), ("13:30", "15:00"), ("21:00", "02:30")],
+    # 中金所（CFFEX）：股指/国债；日盘 09:30-11:30 / 13:00-15:00；无夜盘
+    "CFFEX":[("09:30", "11:30"), ("13:00", "15:00")],
+}
+
+
+def _hours_for(exchange: str) -> list:
+    """返回指定交易所的交易时段列表（空列表表示不限制）。"""
+    return _EXCHANGE_HOURS.get(exchange, [])
 
 
 def _build_specs() -> dict:
@@ -72,6 +100,7 @@ def _build_specs() -> dict:
 
         lev = round(1.0 / margin) if margin > 0 else 10
         close_today = 0.0 if code in _CLOSE_TODAY_FREE else 0.5
+        trading_hours = _hours_for(exch)
 
         specs[code] = {
             "symbol": code,
@@ -86,6 +115,7 @@ def _build_specs() -> dict:
             "leverage": lev,
             "close_today_commission_ratio": close_today,
             "delivery_date": None,
+            "trading_hours": trading_hours,
         }
 
     # 应用微调
@@ -118,9 +148,12 @@ def _norm(symbol: str) -> str:
     for cand in (up, low, code):
         if cand in CONTRACT_SPECS:
             return cand
-    # 去掉可能的 "0" 主力后缀（rb0 -> rb）
+    # 去掉可能的 "0" 主力后缀（rb0 -> rb -> RB）
     if len(code) > 1 and code[-1] == "0":
         base = code[:-1]
+        base_up = base.upper()
+        if base_up in CONTRACT_SPECS:
+            return base_up
         if base in CONTRACT_SPECS:
             return base
         if base.lower() in CONTRACT_SPECS:
@@ -147,7 +180,7 @@ def build_contract(symbol: str, **overrides) -> Contract:
         min_price_tick=spec["min_price_tick"],
         margin_rate=spec["margin_rate"],
         commission_per_lot=spec["commission_per_lot"],
-        trading_hours=None,
+        trading_hours=spec.get("trading_hours") or _hours_for(spec.get("exchange", "")),
         delivery_date=spec.get("delivery_date"),
         leverage=spec["leverage"],
         close_today_commission_ratio=spec.get("close_today_commission_ratio", 0.5),

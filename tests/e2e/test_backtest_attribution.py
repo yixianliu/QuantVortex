@@ -49,8 +49,9 @@ def _run_real_backtest():
     cfg.account.margin_rate = spec["margin_rate"]
     cfg.account.multiplier = spec["multiplier"]
     cfg.account.commission_per_lot = spec["commission_per_lot"]
-    cfg.account.close_today_ratio = spec.get("close_today_ratio", 0.0)
+    cfg.account.close_today_ratio = spec.get("close_today_commission_ratio", 0.0)
     # 放松风控，让策略原始表现充分展现（与回测页一致）
+    cfg.risk.non_trading_hours_block = False  # 日线样本无精确时间，无需时段拦截
     cfg.risk.max_single_loss = 1e12
     cfg.risk.max_daily_loss = 1e12
     cfg.risk.max_drawdown = 0.99
@@ -64,7 +65,7 @@ def _run_real_backtest():
     bt = Backtester(cfg, feed)
     bt.add_contract(contract)
     bt.add_strategy(strat)
-    res = bt.run(SYM, START, END, PERIOD, warmup=60)
+    res = bt.run(SYM, START, END, PERIOD, warmup=20)
     return res, cfg, contract
 
 

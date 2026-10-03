@@ -86,6 +86,18 @@ def normalize_data_path(p: Optional[str], default_name: str) -> str:
     return os.path.join(get_data_dir(), os.path.basename(p))
 
 
+def get_images_dir() -> str:
+    """返回图片资源目录。打包时从内部资源加载，开发期从文件系统。
+
+    M6-01：统一图片目录访问入口，打包后使用 sys._MEIPASS/images。
+    """
+    if is_frozen():
+        # 打包后从内部资源加载
+        return os.path.join(sys._MEIPASS, "images")
+    # 开发期从项目根目录的 images 文件夹
+    return os.path.join(app_base_dir(), "images")
+
+
 def get_font_paths() -> List[str]:
     """返回候选中文字体文件路径，按优先级排序（去重保序）。
 

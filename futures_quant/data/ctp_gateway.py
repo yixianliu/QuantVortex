@@ -25,6 +25,9 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -161,6 +164,16 @@ class CTPFeed(DataFeed):
         self.on_status: Optional[Callable[[str], None]] = None
         self._reconnect_attempts = 0
         self._max_reconnect = 5
+        # M5-02④：指数退避（30s→60s→120s，封顶 300s）+ ±20% jitter，避免断线风暴
+        self._reconnect_base_sec = 30.0
+        self._reconnect_max_sec = 300.0
+        self._next_reconnect_at: float = 0.0
+        # M5-02②：连接真实确认——connect() 发起异步握手后，等待首个行情回报
+        # （_on_vnpy_tick/_on_ctpbee_tick）或框架 ready 信号在限时内到达，否则判未连接。
+        self._connect_wait_sec = 10.0
+        self._confirmed_conn = threading.Event()
+        # 连接握手期间收到首个 tick 即置位（框架 ready 回调亦可置位）
+        self._handshake_started_at: float = 0.0
         self._fallback = SyntheticFeed()    # 明确标注的回退（仅在不连接时）
         self._cache: dict[str, pd.DataFrame] = {}
 
@@ -192,7 +205,13 @@ class CTPFeed(DataFeed):
 
     # ------------------------- 真实 CTP 接入 -------------------------
     def connect(self) -> bool:
-        """尝试建立 CTP 连接。任何前置条件不满足都返回 False 并给出诊断文本。"""
+        """尝试建立 CTP 连接。任何前置条件不满足都返回 False 并给出诊断文本。
+
+        M5-02②：CTP 连接是异步握手，connect() 不再「发完请求即假定成功」。
+        改为在 ``_connect_wait_sec``（默认 10s）限时内等待**真实连接确认**
+        （首个行情回报 ``_confirmed_conn`` 置位）；窗口内未确认则判定未连接，
+        返回 False 并标注「连接未确认」，绝不冒充实盘已连。
+        """
         if not self.creds.complete:
             self.connected = False
             self._set_status("未连接 · 凭据不完整（请在 ctp_settings.json 配置账号/密码/前置机）")
@@ -203,19 +222,29 @@ class CTPFeed(DataFeed):
             self._set_status("未连接 · 未安装 CTP 库（需 vnpy_ctp 或 ctpbee + 期货公司动态库）")
             return False
         self._lib_name = lib
+        self._confirmed_conn.clear()
+        self._handshake_started_at = time.time()
         try:
             if lib == "vnpy_ctp":
                 self._connect_vnpy()
             else:
                 self._connect_ctpbee()
-            # 注意：CTP连接通常是异步的，connect()只启动连接流程
-            # 实际连接状态需等待回调通知或查询 feed.connected
-            # 此处假设连接请求已发出，返回 True 表示成功启动
-            self.connected = True
-            self._reconnect_attempts = 0
-            tag = "仿真(SimNow)" if self.creds.mode == "simnow" else "实盘"
-            self._set_status(f"已连接 · CTP{tag}（库：{lib}）")
-            return True
+            # M5-02②：限时等待真实连接确认（首个 tick 回报）
+            confirmed = self._confirmed_conn.wait(timeout=self._connect_wait_sec)
+            if confirmed:
+                self.connected = True
+                self._reconnect_attempts = 0
+                self._next_reconnect_at = 0.0
+                tag = "仿真(SimNow)" if self.creds.mode == "simnow" else "实盘"
+                self._set_status(f"已连接 · CTP{tag}（库：{lib}，连接已确认）")
+                return True
+            # 窗口内未确认：标记未连接（不抛异常；上层据此回退/告警）
+            self.connected = False
+            elapsed = time.time() - self._handshake_started_at
+            self._set_status(
+                f"连接未确认 · 发起 {lib} 握手 {elapsed:.1f}s 内未收到行情回报"
+                f"（请核对前置机/凭据/网络，或行情处于休市期）")
+            return False
         except Exception as exc:
             import traceback
             print(f"[CTP错误] {type(exc).__name__}: {exc}")
@@ -318,6 +347,8 @@ class CTPFeed(DataFeed):
             "volume": float(tick.volume), "open_interest": float(tick.open_interest),
             "symbol": f"{tick.symbol}.{tick.exchange.value}",
         }
+        # M5-02②：首个 tick 到达即确认连接真实建立
+        self._confirmed_conn.set()
         if self.on_bar:
             self.on_bar(bar)
 
@@ -336,6 +367,8 @@ class CTPFeed(DataFeed):
             "open_interest": float(getattr(tick, "open_interest", 0) or 0),
             "symbol": getattr(tick, "symbol", ""),
         }
+        # M5-02②：首个 tick 到达即确认连接真实建立
+        self._confirmed_conn.set()
         if self.on_bar:
             self.on_bar(bar)
 
@@ -344,7 +377,7 @@ class CTPFeed(DataFeed):
         if self._gw is None and not self.connected:
             return
         # vnpy / ctpbee 的具体订阅在 connect() 中按 creds.subscribe 批量完成；
-        # 运行时增量订阅可在 self._main_engine / self._ctpbee_app 上调用。
+        # 运行时增量订阅可在 self._main_engine / self._ctpbee_api（ctpbee）上调用。
         if hasattr(self, "_main_engine") and self._main_engine is not None:
             try:
                 from vnpy.trader.object import SubscribeRequest
@@ -363,10 +396,15 @@ class CTPFeed(DataFeed):
             # ★ 通知 ctpbee 停止 refresh_query 线程
             if hasattr(self, "_ctpbee_core") and self._ctpbee_core is not None:
                 self._ctpbee_core.r_flag = False
-            if hasattr(self, "_main_engine"):
+            if hasattr(self, "_main_engine") and getattr(self, "_main_engine", None):
                 self._main_engine.close()
-            if hasattr(self, "_ctpbee_app"):
-                self._ctpbee_app.stop()
+            # M5-02②：修复属性名 BUG——原 `self._ctpbee_app.stop()` 中 `_ctpbee_app`
+            # 从未赋值（实际为 `_ctpbee_core`），导致 ctpbee 后台线程无法停止而泄漏。
+            if hasattr(self, "_ctpbee_core") and self._ctpbee_core is not None:
+                try:
+                    self._ctpbee_core.stop()
+                except Exception:  # noqa: BLE001 - 框架 stop 异常不应阻断断连
+                    pass
         except Exception:
             pass
         self.connected = False
@@ -378,15 +416,33 @@ class CTPFeed(DataFeed):
 
     # ------------------------- 自动重连 -------------------------
     def maybe_reconnect(self) -> bool:
-        """连接断开后按退避策略尝试重连（由上层定时器调用）。"""
+        """连接断开后按指数退避策略尝试重连（由上层定时器调用）。
+
+        M5-02④：30s→60s→120s（封顶 300s）指数退避 + ±20% jitter，避免断线风暴；
+        成功一次重连则清零计数。
+        """
         if self.connected:
             return True
         if self._reconnect_attempts >= self._max_reconnect:
             self._set_status(f"重连失败已达 {self._max_reconnect} 次，请检查网络/凭据")
             return False
+        # 退避门槛：距上次尝试不足退避间隔则暂缓（jitter ±20%）
+        backoff = min(
+            self._reconnect_base_sec * (2 ** self._reconnect_attempts),
+            self._reconnect_max_sec,
+        )
+        jitter = backoff * random.uniform(-0.2, 0.2)
+        wait_at = self._next_reconnect_at + max(0.0, backoff + jitter)
+        if self._reconnect_attempts and time.time() < wait_at:
+            return False  # 仍在退避窗口内，跳过本次
         self._reconnect_attempts += 1
-        self._set_status(f"尝试重连 CTP（第 {self._reconnect_attempts} 次）…")
-        return self.connect()
+        self._next_reconnect_at = time.time()
+        self._set_status(f"尝试重连 CTP（第 {self._reconnect_attempts} 次，退避 {backoff:.0f}s）…")
+        ok = self.connect()
+        if ok:
+            self._reconnect_attempts = 0
+            self._next_reconnect_at = 0.0
+        return ok
 
     # ------------------------- DataFeed 接口 -------------------------
     def get_history(self, symbol, start, end, period="1m", limit=0) -> pd.DataFrame:

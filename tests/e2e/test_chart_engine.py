@@ -17,6 +17,12 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPaintEvent
 from PyQt6.QtWidgets import QApplication, QWidget
 
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 from futures_quant.ui.chart_engine import (
     ChartData,
     available_backends,

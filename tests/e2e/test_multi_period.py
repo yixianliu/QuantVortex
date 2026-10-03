@@ -14,6 +14,12 @@ import unittest
 
 from PyQt6.QtWidgets import QApplication
 
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 from futures_quant.ui.multi_period_widget import (
     MultiPeriodWidget,
     MultiPeriodSync,

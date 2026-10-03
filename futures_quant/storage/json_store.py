@@ -9,13 +9,26 @@
     - 点分路径：get("ui.theme") / set("ui.theme", "light") 方便嵌套读写。
 
 读写都在内存 dict 上完成，磁盘 IO 仅在 save() 时发生，效率可控。
+
+M1-04（2026-10-01）：并发安全
+    - 新增模块级 `threading.RLock()` `_SAVE_LOCK`，包住「读全量→合并→写 tmp→copy bak→os.replace」
+      的完整临界区，保证 8 线程并发写 200 次后 JSON 仍可 `json.load`；
+    - 备份顺序修正：先 `shutil.copyfile(主→bak)` 再 `os.replace(tmp→主)`（旧的
+      `os.replace(主→bak)` 会让主文件在替换失败时消失）；
+    - `save()` 保持「任何异常吞掉返回 False」的语义，锁外做清理不阻塞其他线程。
 """
 from __future__ import annotations
 
 import json
 import os
 import shutil
+import threading
 from typing import Any, Optional
+
+
+# M1-04：模块级 RLock——所有 save() 走同一把锁，跨实例并发写安全。
+# RLock 允许同一线程多次进入（save 内部若再调 as_dict 也不死锁）。
+_SAVE_LOCK = threading.RLock()
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -139,29 +152,35 @@ class AtomicJSON:
     def save(self) -> bool:
         """原子写：写 *.tmp → 复制旧文件为 *.bak → os.replace。
 
+        M1-04：整个「读全量→写 tmp→备份→替换」临界区由模块级 RLock 保护，
+        8 线程并发写也不会产生半截 JSON。
+
         返回是否成功；任何异常都被吞掉并返回 False，绝不影响主流程。
         """
-        self.data["__version__"] = self.version
-        tmp = self.path + ".tmp"
-        try:
-            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=2, sort_keys=False)
-            # 先备份旧的好文件，再替换
-            if os.path.exists(self.path):
-                shutil.copyfile(self.path, self.path + ".bak")
-            os.replace(tmp, self.path)
-            # 首次写入后也确保存在一份 .bak，便于后续崩溃回退
-            if not os.path.exists(self.path + ".bak"):
-                shutil.copyfile(self.path, self.path + ".bak")
-            return True
-        except Exception:
+        with _SAVE_LOCK:
+            self.data["__version__"] = self.version
+            tmp = self.path + ".tmp"
             try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
+                os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, ensure_ascii=False, indent=2, sort_keys=False)
+                # M1-04 修正备份顺序：先 copy 旧主→bak（保留原文件），再 replace
+                # 旧代码用 os.replace(主→bak) 会让主文件在 replace 失败时彻底消失
+                if os.path.exists(self.path):
+                    shutil.copyfile(self.path, self.path + ".bak")
+                os.replace(tmp, self.path)
+                # 首次写入后也确保存在一份 .bak，便于后续崩溃回退
+                if not os.path.exists(self.path + ".bak"):
+                    shutil.copyfile(self.path, self.path + ".bak")
+                return True
             except Exception:
-                pass
-            return False
+                # 清理半截 tmp（锁内清理由本线程负责，不会阻塞其他线程等待）
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except Exception:
+                    pass
+                return False
 
     def exists(self) -> bool:
         """处理exists。

@@ -1,11 +1,20 @@
 """历史回放校准：把历史 K 线逐窗喂给 predictor，将「模型预测」作为已结算样本写入
-分析库，从而使「可靠性校准」从「样本不足」快速进入有数据状态（out-of-time 实证）。
+分析库，从而使「可靠性校准」从「样本不足」快速进入有数据状态。
 
 设计要点：
 - 回放使用**独立新建**的 FuturesPredictor 实例，绝不复用调用方（如预测页）的共享
   predictor，避免污染后续实时预测的模型状态（predict() 一旦 trained 即不再重训）。
-- 仅训练一次（全样本），随后滑窗 predict 不复训；以 stride + max_samples 控制规模，
-  避免对全历史逐根重训导致的不堪重负。
+- M3-03（关键修正）：此前本模块声称「out-of-time（样本外）实证」，但实现是
+  **用全量 df 训练一次、再滑窗 predict** —— 模型在训练时已见过全部未来数据，
+  属于典型的样本内泄漏（in-sample leakage），且该偏差会经 reliability_calibration
+  反馈回线上 p_up，形成偏差放大回路。
+  现改为**真·Walk-Forward**：
+    * 每 ``retrain_stride`` 步，用 ``df.iloc[:t]``（严格截止到 t 的历史）重新训练；
+    * 随后仅对 ``[t, t+horizon)`` 做预测，预测输入同样只用 ``df.iloc[:t]``；
+    * 归一化统计量（_feat_mean / _feat_std 等）随 fit 只从训练段估计，杜绝未来信息。
+  用 ``retrain_stride`` 控制重训频率以控成本（默认 20），而非逐根重训。
+  ``oos_only=True``（默认）即上述严格样本外模式；置 False 可回退到旧的
+  「全量训练一次」模式，仅用于对比/兼容，**不应**用于生成校准样本。
 - 真实收益口径与 evaluate_prediction 一致：以预测窗口末根 close 为起点，
   与 horizon 根之后的 close 比，判定方向是否命中。
 - 离线、确定性：news_bias=0、calibrate_p_up=None，不引入资讯与外部校准噪声，
@@ -17,6 +26,7 @@ from __future__ import annotations
 
 import datetime as dt
 import glob
+import logging
 import math
 import os
 from typing import Callable, Optional
@@ -25,6 +35,10 @@ import numpy as np
 import pandas as pd
 
 from .predictor import FuturesPredictor
+# M3-11：阈值集中化（默认值 == 改造前字面量，行为不变）
+from .constants import CALIB as _CC
+
+logger = logging.getLogger(__name__)
 
 
 def load_bars_from_csv(path: str) -> Optional[pd.DataFrame]:
@@ -40,7 +54,7 @@ def load_bars_from_csv(path: str) -> Optional[pd.DataFrame]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
         df = df.dropna(subset=["open", "high", "low", "close"])
-        return df if len(df) >= 80 else None
+        return df if len(df) >= _CC.min_bars_for_replay else None
     except Exception:
         return None
 
@@ -62,34 +76,73 @@ def discover_local_samples(data_dir: str) -> list:
     return out
 
 
-def replay_symbol(store, df, symbol, period: str = "D", horizon: int = 10,
-                 stride: int = 8, max_samples: int = 250, config: str = "enhanced",
-                 epochs: int = 20, extended_features: bool = True,
-                 use_ensemble: bool = True, progress_cb: Optional[Callable] = None) -> dict:
+def replay_symbol(store, df, symbol, period: str = "D", horizon: int = None,
+                 stride: int = None, max_samples: int = None,
+                 config: str = "enhanced",
+                 epochs: int = None, extended_features: bool = True,
+                 use_ensemble: bool = True, progress_cb: Optional[Callable] = None,
+                 retrain_stride: int = None, oos_only: bool = True) -> dict:
     """回放单个品种的历史，把每个窗口的预测作为已结算校准样本写入 store。
+
+    M3-03：默认走**真·Walk-Forward**（oos_only=True）—— 每 ``retrain_stride``
+    步用 ``df.iloc[:t]`` 重训后再预测 ``[t, t+horizon)``，归一化统计量只从训练段
+    估计，彻底消除原实现的样本内泄漏。
+
+    参数:
+        retrain_stride: 每隔多少根 K 线重新训练一次（默认 20）。越小越接近
+            逐根重训（成本高），越大越省但适应性下降。
+        oos_only: True（默认）严格样本外 walk-forward；False 回退到旧的
+            「全量训练一次」模式，仅用于 A/B 对比或兼容，**不应用于生成校准样本**。
 
     返回 {added, skipped, total, symbol}。
     """
-    if df is None or len(df) < 80:
-        return {"added": 0, "skipped": 0, "total": 0, "symbol": symbol}
-
-    # 独立 predictor 实例：零副作用，绝不污染调用方的共享模型
-    pred = FuturesPredictor()
-    try:
-        pred.fit(df, seq_len=20, epochs=epochs,
-                 force_ridge=True,  # 沙箱无 torch，必须用岭回归兜底
-                 extended_features=extended_features,
-                 use_ensemble=use_ensemble,
-                 symbol=symbol, period=period)
-    except Exception:
-        return {"added": 0, "skipped": 0, "total": 0, "symbol": symbol}
-    if not getattr(pred, "trained", False):
+    # None 哨兵：缺省值取自阈值中心（避免 import 期固化）
+    horizon = _CC.replay_horizon if horizon is None else horizon
+    stride = _CC.replay_stride if stride is None else stride
+    max_samples = _CC.replay_max_samples if max_samples is None else max_samples
+    epochs = _CC.replay_epochs if epochs is None else epochs
+    retrain_stride = (_CC.replay_retrain_stride if retrain_stride is None
+                      else retrain_stride)
+    if df is None or len(df) < _CC.min_bars_for_replay:
         return {"added": 0, "skipped": 0, "total": 0, "symbol": symbol}
 
     n = len(df)
-    start = max(60, pred.seq_len + 1)
+
+    def _new_pred(train_df) -> Optional[FuturesPredictor]:
+        """用给定（训练）段拟合一个独立 predictor；失败返回 None。"""
+        p = FuturesPredictor()
+        try:
+            p.fit(train_df, seq_len=_CC.replay_seq_len, epochs=epochs,
+                  force_ridge=True,  # 沙箱无 torch，必须用岭回归兜底
+                  extended_features=extended_features,
+                  use_ensemble=use_ensemble,
+                  symbol=symbol, period=period)
+        except Exception:
+            return None
+        return p if getattr(p, "trained", False) else None
+
+    pred: Optional[FuturesPredictor] = None
     end = n - horizon
     step = max(1, stride)
+
+    if not oos_only:
+        # ---- 旧模式（仅用于对比/兼容）：全量训练一次，存在样本内泄漏 ----
+        pred = _new_pred(df)
+        if pred is None:
+            return {"added": 0, "skipped": 0, "total": 0, "symbol": symbol}
+        start = max(_CC.replay_min_start, pred.seq_len + 1)
+        retrain_stride = 0            # 不再重训
+        last_train_t = -10 ** 9
+    else:
+        # ---- 真 Walk-Forward：起点先用一个最小训练段拟合，确定 seq_len ----
+        probe = _new_pred(df.iloc[:max(_CC.replay_min_start,
+                                       _CC.replay_probe_train_bars)])
+        start = max(_CC.replay_min_start,
+                    (probe.seq_len + 1) if probe is not None
+                    else _CC.replay_min_start)
+        pred = None                    # 循环中按 stride 重训
+        last_train_t = None
+
     if end <= start:
         return {"added": 0, "skipped": 0, "total": 0, "symbol": symbol}
 
@@ -99,6 +152,20 @@ def replay_symbol(store, df, symbol, period: str = "D", horizon: int = 10,
             break
         total += 1
         window = df.iloc[:t]
+
+        # M3-03：真 Walk-Forward —— 到步就用「截止到 t 的历史」重训
+        if oos_only and (
+            pred is None or last_train_t is None or (t - last_train_t) >= retrain_stride
+        ):
+            pred = _new_pred(window)
+            if pred is None:
+                skipped += 1
+                continue
+            last_train_t = t
+
+        if pred is None:
+            skipped += 1
+            continue
         try:
             res = pred.predict(window, horizon=horizon,
                                news_bias=0.0, news_samples=[], calibrate_p_up=None)
@@ -113,7 +180,8 @@ def replay_symbol(store, df, symbol, period: str = "D", horizon: int = 10,
         fut_close = float(df["close"].iloc[fut_idx])
         actual_pct = (fut_close / last_close - 1.0) * 100.0
         y_up = 1.0 if actual_pct > 0 else 0.0
-        hit = 1 if (p_up >= 0.5 and actual_pct > 0) or (p_up < 0.5 and actual_pct < 0) else 0
+        nu = _CC.hit_p_up_threshold
+        hit = 1 if (p_up >= nu and actual_pct > 0) or (p_up < nu and actual_pct < 0) else 0
         rec = {
             "ts": str(df.index[t - 1]),
             "symbol": symbol, "period": period, "horizon": horizon,
@@ -169,6 +237,185 @@ def replay_local_store(store, data_dir: str = "data/real_samples",
 
 # ---------------- M6.4 多模型对比回放 ----------------
 
+class _TCNEstimator:
+    """把 `ai.tcn.TemporalConvNet` 适配成外部主模型接口 `fit(X_3d, y) / predict(X_3d)`。
+
+    M3-06 ①：TCN 的 `fit()` 原来是个 `pass`（权重随机、什么都不学），且 `_causal_conv`
+    因切片上界写错导致卷积输出恒为 0 —— 装上它等于装了个「恒预测 0」的假模型。
+    现在 TCN 会在首次 fit 时按 `X.shape[2]` 惰性建网并真正训练读出层。
+    """
+
+    name = "tcn"
+
+    def __init__(self, epochs: int = None, channels=None, kernel_size: int = None,
+                 lr: float = None, seed: int = None) -> None:
+        self.epochs = int(_CC.tcn_epochs if epochs is None else epochs)
+        self.channels = list(_CC.tcn_channels if channels is None else channels)
+        self.kernel_size = int(_CC.tcn_kernel_size if kernel_size is None
+                               else kernel_size)
+        self.lr = float(_CC.tcn_lr if lr is None else lr)
+        self.seed = _CC.random_seed if seed is None else seed
+        self.net = None
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        """处理fit。
+
+            参数:
+                X: np.ndarray
+                y: np.ndarray"""
+        from .tcn import TemporalConvNet
+        if self.net is None:
+            self.net = TemporalConvNet(
+                num_inputs=int(np.asarray(X).shape[2]),
+                num_channels=self.channels,
+                kernel_size=self.kernel_size,
+                seed=self.seed,
+            )
+        self.net.fit(np.asarray(X, dtype=float), np.asarray(y, dtype=float),
+                     epochs=self.epochs, lr=self.lr,
+                     batch_size=_CC.tcn_batch_size)
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """处理predict。
+
+            参数:
+                X: np.ndarray
+
+            返回:
+                np.ndarray"""
+        if self.net is None:
+            return np.zeros(len(np.asarray(X)), dtype=float)
+        return np.asarray(self.net.predict(np.asarray(X, dtype=float)),
+                          dtype=float).reshape(-1)
+
+
+class _GBMEstimator:
+    """把 `ai.boosting.GradientBoostingModel` 适配成外部主模型接口。
+
+    输入是 (n, seq_len, n_feat) 的序列窗口，树模型不吃时序结构，按样本展平成
+    (n, seq_len * n_feat) 后训练 —— 与 ensemble.py 里树成员的处理口径一致。
+    """
+
+    name = "gbm"
+
+    def __init__(self, n_estimators: int = None, learning_rate: float = None,
+                 max_depth: int = None, seed: int = None) -> None:
+        self.n_estimators = int(_CC.gbm_n_estimators if n_estimators is None
+                                else n_estimators)
+        self.learning_rate = float(_CC.gbm_learning_rate if learning_rate is None
+                                   else learning_rate)
+        self.max_depth = int(_CC.gbm_max_depth if max_depth is None else max_depth)
+        self.seed = _CC.random_seed if seed is None else seed
+        self.model = None
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        """处理fit。
+
+            参数:
+                X: np.ndarray
+                y: np.ndarray"""
+        from .boosting import GradientBoostingModel
+        flat = np.asarray(X, dtype=float).reshape(len(X), -1)
+        self._n_feat_flat = flat.shape[1]
+        self.model = GradientBoostingModel(
+            task="regression",
+            n_estimators=self.n_estimators,
+            max_depth=self.max_depth,          # 玩具实现按 1 层真实分裂
+            learning_rate=self.learning_rate,
+            random_state=self.seed,
+        )
+        self.model.fit(flat, np.asarray(y, dtype=float))
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """处理predict。
+
+            参数:
+                X: np.ndarray
+
+            返回:
+                np.ndarray"""
+        if self.model is None:
+            return np.zeros(len(np.asarray(X)), dtype=float)
+        flat = np.asarray(X, dtype=float).reshape(len(X), -1)
+        return np.asarray(self.model.predict(flat), dtype=float).reshape(-1)
+
+
+class _TSTransformerEstimator:
+    """TS-Transformer 适配器。**无 torch 时明确不可用**（不伪装成可用模型）。
+
+    M3-06 ⑤：TSTransformer 在无 torch 分支下 predict 恒返回 0，若参与对比会
+    拉出一个「看起来很差的成员」却让人误以为是模型能力问题。这里直接判不可用。
+    """
+
+    name = "transformer"
+
+    def __init__(self, epochs: int = None, seq_len: int = None) -> None:
+        self.epochs = int(_CC.ts_epochs if epochs is None else epochs)
+        self.seq_len = int(_CC.ts_seq_len if seq_len is None else seq_len)
+        self.model = None
+        self.available = False
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        """处理fit。
+
+            参数:
+                X: np.ndarray
+                y: np.ndarray"""
+        from .ts_transformer import TSWrapper, TORCH_AVAILABLE
+        if not TORCH_AVAILABLE:
+            self.available = False
+            logger.warning("TS-Transformer 不可用：未安装 torch，该成员不参与对比")
+            return self
+        self.model = TSWrapper(
+            feature_size=int(np.asarray(X).shape[2]),
+            seq_len=int(np.asarray(X).shape[1]),
+            epochs=self.epochs,
+        )
+        self.model.fit(np.asarray(X, dtype=float), np.asarray(y, dtype=float))
+        self.available = True
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """处理predict。
+
+            参数:
+                X: np.ndarray
+
+            返回:
+                np.ndarray"""
+        if self.model is None or not getattr(self.model, "available", False):
+            return np.zeros(len(np.asarray(X)), dtype=float)
+        return np.asarray(self.model.predict(np.asarray(X, dtype=float)),
+                          dtype=float).reshape(-1)
+
+
+def build_external_estimator(model_name: str, epochs: int = None,
+                            seq_len: int = None):
+    """按名字构造外部主模型；不支持或不可用时返回 None。
+
+    这是 M3-06 ④ 的落点：`MultiModelComparator` 的 tcn / gbm 分支由此真正
+    拿到对应模型，而不是像旧实现那样被 `force_ridge=True` 悄悄降级成 Ridge。
+    """
+    if epochs is None:
+        epochs = _CC.ts_epochs
+    if seq_len is None:
+        seq_len = _CC.ts_seq_len
+    name = (model_name or "").lower()
+    if name == "tcn":
+        return _TCNEstimator(epochs=max(_CC.tcn_min_epochs, int(epochs)))
+    if name in ("gbm", "boosting", "gbdt"):
+        return _GBMEstimator()
+    if name in ("transformer", "ts_transformer", "ts-transformer"):
+        est = _TSTransformerEstimator(epochs=max(_CC.ts_min_epochs, int(epochs)),
+                                     seq_len=seq_len)
+        # 无 torch 时直接判不可用（避免"恒 0 模型"混入对比）
+        from .ts_transformer import TORCH_AVAILABLE
+        return est if TORCH_AVAILABLE else None
+    return None
+
+
 class MultiModelComparator:
     """M6.4 多模型回放对比：同一回放集上跑 Ridge/LSTM/TCN/GBM，输出 MAE/命中率。
 
@@ -200,13 +447,23 @@ class MultiModelComparator:
                          extended_features=extended_features,
                          use_ensemble=use_ensemble, symbol=symbol, period=period)
             else:
-                # tcn / gbm 在沙箱无 torch 时降级到 Ridge 路径，模型名仍保留
-                pred.fit(df, seq_len=seq_len, epochs=epochs, force_ridge=True,
+                # M3-06 ④：tcn / gbm **真正调用对应模型**（旧实现一律 force_ridge=True
+                # 降级成 Ridge，四个分支里有两个是假的，对比表自然毫无差异）。
+                est = build_external_estimator(model_name_l, epochs=epochs)
+                if est is None:
+                    logger.warning("模型 %s 不可用，跳过对比", model_name_l)
+                    return None
+                pred.fit(df, seq_len=seq_len, epochs=epochs, force_ridge=False,
                          extended_features=extended_features,
-                         use_ensemble=use_ensemble, symbol=symbol, period=period)
+                         use_ensemble=use_ensemble, symbol=symbol, period=period,
+                         external_model=est)
         except Exception:
             return None
         if not getattr(pred, "trained", False):
+            return None
+        if model_name_l not in ("ridge", "lstm") and pred.external_model is None:
+            # 外部模型训练失败已被 _train_core 回退成 Ridge —— 不应再冒充 tcn/gbm
+            logger.warning("模型 %s 训练失败并已回退 Ridge，跳过对比", model_name_l)
             return None
         return pred
 
@@ -215,11 +472,11 @@ class MultiModelComparator:
         dfs: dict,
         symbol: str = "multi",
         period: str = "D",
-        horizon: int = 10,
-        stride: int = 8,
-        max_samples: int = 100,
-        epochs: int = 12,
-        seq_len: int = 20,
+        horizon: int = None,
+        stride: int = None,
+        max_samples: int = None,
+        epochs: int = None,
+        seq_len: int = None,
         use_ensemble: bool = True,
         extended_features: bool = True,
         out_csv: Optional[str] = None,
@@ -241,6 +498,12 @@ class MultiModelComparator:
           "csv_path": str | None,
         }
         """
+        # 对比回放的默认值与 replay_* 部分同值但语义独立，故用 COMPARE_* 单独一组
+        horizon = _CC.compare_horizon if horizon is None else horizon
+        stride = _CC.compare_stride if stride is None else stride
+        max_samples = _CC.compare_max_samples if max_samples is None else max_samples
+        epochs = _CC.compare_epochs if epochs is None else epochs
+        seq_len = _CC.compare_seq_len if seq_len is None else seq_len
         rows = []
         for sym, df in dfs.items():
             if df is None or len(df) < seq_len + 1 + horizon:
@@ -252,7 +515,7 @@ class MultiModelComparator:
                 if pred is None:
                     continue
                 n = len(df)
-                start = max(60, pred.seq_len + 1)
+                start = max(_CC.replay_min_start, pred.seq_len + 1)
                 end = n - horizon
                 if end <= start:
                     continue
@@ -272,13 +535,21 @@ class MultiModelComparator:
                     fut_idx = min(t - 1 + horizon, n - 1)
                     fut_close = float(df["close"].iloc[fut_idx])
                     actual_pct = (fut_close / last_close - 1.0) * 100.0
+                    # M3-06：abs_err 原来是 `abs(actual_pct)` —— 那是**行情自身波动
+                    # 幅度**，与模型毫无关系，四个模型的 MAE 必然相等。改为
+                    # 「模型预测涨跌幅度 vs 真实涨跌幅度」的误差，才具备可比性。
+                    fc = res.get("forecast") or []
+                    pred_pct = ((float(fc[-1]) / last_close - 1.0) * 100.0
+                                if (fc and last_close) else 0.0)
                     y_up = 1.0 if actual_pct > 0 else 0.0
-                    hit = 1 if (p_up >= 0.5 and y_up == 1) or (p_up < 0.5 and y_up == 0) else 0
-                    abs_err = abs(actual_pct)
+                    nu = _CC.hit_p_up_threshold
+                    hit = 1 if (p_up >= nu and y_up == 1) or (p_up < nu and y_up == 0) else 0
+                    abs_err = abs(pred_pct - actual_pct)
                     rows.append({
                         "symbol": sym, "model": model, "ts": str(df.index[t - 1]),
                         "p_up": round(p_up, 4), "actual_up": y_up,
                         "actual_pct": round(actual_pct, 3),
+                        "pred_pct": round(pred_pct, 3),
                         "hit": hit, "abs_err": round(abs_err, 3),
                     })
                     added += 1

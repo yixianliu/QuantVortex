@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import math
+import time
 from bisect import bisect_right
 from typing import Optional
 
@@ -25,38 +27,35 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel,
-    QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
+    QTextEdit, QTableWidgetItem, QHeaderView, QFrame,
     QSplitter, QSizePolicy, QAbstractItemView, QTabWidget, QSpinBox,
     QProgressBar, QCheckBox, QDialog,
 )
 
 from .widgets import (
     PageHeader, Badge, StatCard, ConfidenceBar, SectionHeader,
-    prepare_table, color_pnl, pal, THEME, ToolBar, PALETTE,
+    color_pnl, pal, THEME, ToolBar, PALETTE,
 )
+from .states import DataGrid   # M4-08：统一表格能力（排序 / 右键菜单 / 列显隐 / 空态）
 from .icons import icon
 from .chart_widget import KLineChart, PriceChart, ReliabilityChart
 from .pages import BasePage, Worker, df_to_bars, symbol_code, symbol_label, PERIODS, PERIOD_LABEL
+
+logger = logging.getLogger(__name__)
 from ..data.market_data import MarketDataManager
-from ..indicators.tech import add_indicators
-from ..ai.predictor import FuturesPredictor
-from ..ai.feedback import (
-    quick_regime, adaptive_config, calibrated_confidence,
-    reliability_calibration, calibration_band_at, mean_band_width,
-    evaluate_all_open, recommend_text,
-)
-from ..ai.calibration_replay import (
-    discover_local_samples, load_bars_from_csv, replay_symbol,
-)
-from ..ai import news_feed
-from ..strategy.auto_evolve import (
-    latest_signal_for as evolved_signal_for,
-    describe_gene, factor_signal, ensemble_strategy_signal,
-)
-from ..ai.linkage_bus import BUS
-from ..analysis.signals import resonance, trend_score, divergence
+from ..indicators.tech import add_indicators, cached_add_indicators
+# 以下重型模块延迟导入：仅在使用时才加载，避免启动时阻塞
+# from ..ai.predictor import FuturesPredictor          → 延迟
+# from ..ai.feedback import ...                        → 延迟
+# from ..ai.calibration_replay import ...               → 延迟
+# from ..ai import news_feed                            → 延迟
+# from ..strategy.auto_evolve import ...                → 延迟
+# from ..ai.linkage_bus import BUS                      → 延迟
+# from ..analysis.signals import resonance, trend_score → 延迟
 from ..core.metric_schema import format_metric, backtest_linkage_for, METRIC_LABEL
 from ..storage.analysis_store import AnalysisStore
+from ..ai.feedback import calibration_band_at
+from ..strategy.auto_evolve import describe_gene
 
 
 # ============================================================================
@@ -136,7 +135,8 @@ def _screen(mdm, store=None):
                       if len(pct) >= 20 else 0.0)
             # AI 方向概率（廉价岭回归；任何异常回退 0.5）
             try:
-                pr = FuturesPredictor()
+                from ..ai.predictor import FuturesPredictor as _FP
+                pr = _FP()
                 pr.fit(df, seq_len=20, epochs=15, force_ridge=True)
                 pp = pr.predict(df, horizon=5)
                 pu = float(pp["p_up"])
@@ -234,24 +234,65 @@ class PredictOpsPage(BasePage):
                 self.PAGE_KEY, dft, "D")
         else:
             self.cur_symbol, self.cur_period = dft, "D"
-        self.predictor = FuturesPredictor()
+        self._predictor = None   # 延迟初始化，避免启动时加载 AI 模块
         self._results = []       # 选品评分结果
         self._cats = []          # 板块聚合结果
+        self._linkage_accent = False   # 联动标签当前是否高亮（accent），供 _style_static 重绘
         self._preloaded_gene = None    # 回测中心联动预载的策略基因
         self._preloaded_symbol = None
+        self._news_cache = None
+        self._news_cache_ts = 0
+        self._news_cache_interval = 30.0  # seconds
+        # 筛选结果缓存
+        self._screen_cache = None          # (results, cats)
+        self._screen_cache_ts = 0
+        self._screen_cache_ttl = 300.0     # 5 minutes
+        # 缓存：预测器拟合结果（避免重复训练）
+        self._fit_cache = None          # (fit_result, symbol, period, extended_features, use_ensemble, cache_ts)
+        self._fit_cache_ttl = 10.0      # seconds
         # ---- 指标预测 / AI 辅助 控制状态 ----
         self.ind_forecast_on = True    # 是否在 MACD/KDJ/RSI 图上叠加预测曲线
         self.ind_horizon = 10          # 指标预测步数
         self._last_ind = None          # 最近一次渲染的指标 DataFrame（供 AI 研判）
         self._last_res = None          # 最近一次预测结果（供 AI 研判）
         self._ai_running = False       # AI 指标研判进行中标记
-        # ---- 双向联动总线：订阅回测中心实时更新 ----
+        # ---- 双向联动：订阅全局事件总线（M3.5 core.events），回测中心产出经总线广播 ----
         try:
-            BUS.backtest_updated.connect(self._on_backtest_updated)
+            from ..core.events import bus as _EBUS
+            _EBUS.subscribe("backtest.completed", self._on_backtest_updated)
         except Exception:  # noqa: BLE001
             pass
         self._build()
         self._screen_lazy = True   # 首次 showEvent 时延迟加载选品排行
+        # M4-13④：图表高度按窗口动态分配（min(260, avail/4)）
+        self._apply_chart_heights()
+
+    # ---- M4-13④：图表高度随窗口动态分配 ----
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        """窗口尺寸变化：重算副图最小高度（768p 下无纵向滚动条）。"""
+        super().resizeEvent(event)
+        self._apply_chart_heights()
+
+    def _apply_chart_heights(self) -> None:
+        """副图 minHeight = min(260, avail/4)（下限 150）；主图 = min(360, avail/3)。
+
+        avail 取**屏幕高度**（responsive_layout 单例，与响应式三档同源），
+        而非 self.height() —— 后者被子图 minHeight 硬约束钳高（布局最小值
+        反向撑大页面），公式会死锁在 260，768p 下永远缩不下去（滚动条病根）。
+        768p 屏：副图 192px、主图 256px，四图 + 页头/控制栏 ≤ 视口高。
+        """
+        try:
+            from .responsive_layout import get_layout_manager
+            avail = max(480, int(get_layout_manager().height))
+            sub_h = min(260, max(150, avail // 4))
+            self.macd.setMinimumHeight(sub_h)
+            self.kdj.setMinimumHeight(sub_h)
+            self.rsi.setMinimumHeight(sub_h)
+            self.chart.setMinimumHeight(min(360, max(240, avail // 3)))
+        except AttributeError:
+            pass   # _build 未完成时不做任何事
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- 构建界面 ----
     def _build(self):
@@ -287,12 +328,7 @@ class PredictOpsPage(BasePage):
         self.start_btn = QPushButton("🚀 开始预测")
         self.start_btn.setObjectName("primary")
         self.start_btn.setMinimumHeight(36)
-        self.start_btn.setStyleSheet(
-            "QPushButton#primary{background:#2563eb;color:#fff;"
-            "border:1px solid transparent;border-radius:10px;"
-            "padding:8px 24px;font-size:14px;font-weight:bold;}"
-            "QPushButton#primary:hover{background:#1d4ed8;}"
-            f"QPushButton#primary:disabled{{background:{pal()['sub']};color:{pal()['text']};}}")
+        # M4-05：移除硬编码配色，改由 QSS #primary（token 同源）统一着色，切主题自动刷新
         self.start_btn.clicked.connect(self._run_prediction)
 
         ctl.addWidget(QLabel("目标品种"))
@@ -303,6 +339,14 @@ class PredictOpsPage(BasePage):
         ctl.addWidget(self.hor_spin)
         ctl.addSpacing(12)
         ctl.addWidget(self.start_btn)
+        # M4-06⑤：预测长任务的「停止」按钮（协作式，在下一个检查点生效）
+        self.stop_btn = QPushButton("停止")
+        self.stop_btn.setObjectName("ghost")
+        self.stop_btn.setMinimumHeight(36)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.setToolTip("请求中止当前预测流程（结算/选参/校准等子步骤间生效）")
+        self.stop_btn.clicked.connect(self._stop_prediction)
+        ctl.addWidget(self.stop_btn)
         # 联动：用该品种已沉淀的最优回测策略反向跑回测
         self.backtest_link_btn = QPushButton("🧪 回测此策略")
         self.backtest_link_btn.setObjectName("ghost")
@@ -415,17 +459,23 @@ class PredictOpsPage(BasePage):
         chart_layout.addWidget(self.kdj, 1)
         chart_layout.addWidget(self.rsi, 1)
 
+        # M4-13②：图表间 hover 联动（双向）——任一副图 hover 时主图十字线同步，
+        # 主图 hover 时副图十字回显。set_hover_fraction 不回发信号，无反馈环。
+        for sub in (self.macd, self.kdj, self.rsi):
+            sub.hover_fraction.connect(self.chart.set_hover_fraction)
+            self.chart.hover_fraction.connect(sub.set_hover_fraction)
+
         # 图例说明：买卖点位标注
-        legend = QLabel(
+        self.legend = QLabel(
             "<span style='color:#22c55e;font-weight:600;'>◆</span> 建议买入　"
             "<span style='color:#ef4444;font-weight:600;'>◆</span> 建议卖出　"
             "<span style='color:#f59e0b;font-weight:600;'>◆</span> 止损位　"
             "<span style='color:#3b82f6;font-weight:600;'>━</span> 支撑/压力线　"
             "<span style='color:#ef4444;font-weight:600;'>┅</span> KP预测路径(红涨绿跌)"
         )
-        legend.setObjectName("sub")
-        legend.setStyleSheet(f"font-size:11px;color:{p['sub']};padding:2px 0;")
-        chart_layout.addWidget(legend)
+        self.legend.setObjectName("sub")
+        self.legend.setStyleSheet(f"font-size:11px;color:{p['sub']};padding:2px 0;")
+        chart_layout.addWidget(self.legend)
 
         left_tab.addTab(chart_tab, "📈 K线分析")
 
@@ -443,14 +493,14 @@ class PredictOpsPage(BasePage):
         calib_layout.setContentsMargins(8, 8, 8, 8)
         calib_layout.setSpacing(6)
 
-        calib_intro = QLabel(
+        self.calib_intro = QLabel(
             "本页把模型的「自信度」摊开给你看：上图为<b>校准可靠度图</b>"
             "（模型说涨 X% vs 历史上真实涨了多少，落点越贴近对角线越诚实）；"
             "下图为<b>预测价格概率带</b>（中枢价 ±1σ 置信区间）。")
-        calib_intro.setWordWrap(True)
-        calib_intro.setObjectName("sub")
-        calib_intro.setStyleSheet(f"font-size:12px;color:{p['sub']};padding:2px 0;")
-        calib_layout.addWidget(calib_intro)
+        self.calib_intro.setWordWrap(True)
+        self.calib_intro.setObjectName("sub")
+        self.calib_intro.setStyleSheet(f"font-size:12px;color:{p['sub']};padding:2px 0;")
+        calib_layout.addWidget(self.calib_intro)
 
         # 历史回放校准工具条：把本地真实样本逐窗回放，批量灌入已结算校准样本，
         # 使「校准可靠度图」从「样本不足」快速进入有数据状态（离线、无需联网）。
@@ -472,19 +522,53 @@ class PredictOpsPage(BasePage):
         self.replay_cur.setChecked(False)
         self.replay_cur.setToolTip("勾选则只回放当前选中品种，否则回放本地全部真实样本")
         self.replay_prog = QProgressBar()
-        self.replay_prog.setRange(0, 0)  # 未知总量 → 忙碌指示
+        self.replay_prog.setRange(0, 100)  # M4-09：真实百分比（按样本数推进）
+        self.replay_prog.setValue(0)
         self.replay_prog.setVisible(False)
         self.replay_prog.setMaximumHeight(14)
         self.replay_status = QLabel("")
         self.replay_status.setObjectName("sub")
         self.replay_status.setStyleSheet(f"font-size:11px;color:{p['sub']};")
         replay_bar.addWidget(self.replay_btn)
+        # M4-06⑤：回放是批量长任务（逐品种逐窗），提供协作式停止入口
+        self.replay_stop_btn = QPushButton("停止")
+        self.replay_stop_btn.setObjectName("ghost")
+        self.replay_stop_btn.setMinimumHeight(32)
+        self.replay_stop_btn.setEnabled(False)
+        self.replay_stop_btn.setToolTip("请求中止当前历史回放（在当前品种回放结束后生效）")
+        self.replay_stop_btn.clicked.connect(self._stop_replay)
+        replay_bar.addWidget(self.replay_stop_btn)
         replay_bar.addWidget(QLabel("步长"))
         replay_bar.addWidget(self.replay_hor)
         replay_bar.addWidget(self.replay_cur)
         replay_bar.addWidget(self.replay_prog, 1)
         replay_bar.addWidget(self.replay_status)
         calib_layout.addLayout(replay_bar)
+
+        # M3-05 ④：Walk-Forward 滚动验证入口。
+        # 上面的「历史回放校准」只灌校准样本；这里直接给出**因果滚动**的样本外
+        # 性能指标（逐折只用历史段训练再预测未来段），用来判断模型是否真有技能。
+        wf_bar = QHBoxLayout()
+        wf_bar.setSpacing(8)
+        self.wf_btn = QPushButton("🔁 Walk-Forward 验证")
+        self.wf_btn.setObjectName("ghost")
+        self.wf_btn.setMinimumHeight(32)
+        self.wf_btn.setToolTip("对当前品种做因果滚动验证：逐折只用历史段训练、再预测未来段，"
+                               "输出折数 / 样本外方向准确率 / MAE（成本约为单次评估的折数倍）")
+        self.wf_btn.clicked.connect(self._run_walk_forward)
+        self.wf_prog = QProgressBar()
+        self.wf_prog.setRange(0, 0)          # 未知总量 → 忙碌指示
+        self.wf_prog.setVisible(False)
+        self.wf_prog.setMaximumHeight(14)
+        wf_bar.addWidget(self.wf_btn)
+        wf_bar.addWidget(self.wf_prog, 1)
+        calib_layout.addLayout(wf_bar)
+
+        self.wf_status = QLabel("")
+        self.wf_status.setWordWrap(True)
+        self.wf_status.setObjectName("sub")
+        self.wf_status.setStyleSheet(f"font-size:11px;color:{p['sub']};padding:2px 0;")
+        calib_layout.addWidget(self.wf_status)
 
         # 校准状态速览卡片：样本数 / 平均偏差 / 评级 / 校准区间±（不确定性）
         self.calib_stats = {
@@ -516,6 +600,76 @@ class PredictOpsPage(BasePage):
         calib_layout.addWidget(self.prob_band, 1)
 
         left_tab.addTab(calib_tab, "🎯 概率校准")
+
+        # ===== M3-10：模型状态面板（Model Card）=====
+        # 让用户明确知道「当前到底在跑哪个模型、是否降级、是不是占位实现」。
+        mc_tab = QWidget()
+        mc_layout = QVBoxLayout(mc_tab)
+        mc_layout.setContentsMargins(8, 8, 8, 8)
+        mc_layout.setSpacing(6)
+
+        self.mc_intro = QLabel(
+            "这里列出全部候选模型与其<b>真实状态</b>："
+            "<b>占位实现</b>指接口齐全但并非端到端训练（或依赖缺失时恒值输出）的模型，"
+            "标灰显示且注明局限 —— 不要把它的输出当完整模型用。")
+        self.mc_intro.setWordWrap(True)
+        self.mc_intro.setObjectName("sub")
+        self.mc_intro.setStyleSheet(f"font-size:12px;color:{p['sub']};padding:2px 0;")
+        mc_layout.addWidget(self.mc_intro)
+
+        # ===== M3-13 ③：模型漂移指示灯 =====
+        # 一眼看出「当前品种的模型是不是已经跑偏了」：
+        #   绿 ok / 红 drift（超阈值，建议重训）/ 灰 no_data（样本不足）
+        drift_row = QHBoxLayout()
+        drift_row.setSpacing(6)
+        self.drift_light = QLabel("●")
+        self.drift_light.setFixedWidth(14)
+        self.drift_light.setObjectName("drift_light")
+        self.drift_light.setToolTip("模型漂移指示灯：绿=正常，红=命中率相对训练期显著漂移（建议重训），"
+                                    "灰=已结算样本不足，暂不判定")
+        self.drift_text = QLabel("模型漂移：未检测")
+        self.drift_text.setObjectName("sub")
+        self.drift_text.setWordWrap(True)
+        self.drift_btn = QPushButton("📉 检测漂移")
+        self.drift_btn.setObjectName("ghost")
+        self.drift_btn.setMinimumHeight(28)
+        self.drift_btn.setToolTip("对当前品种跑一次漂移检测：比较近 60 天的方向命中率"
+                                  "与训练期基准，超过阈值即提示重训")
+        self.drift_btn.clicked.connect(self._refresh_drift_light)
+        drift_row.addWidget(self.drift_light)
+        drift_row.addWidget(self.drift_text, 1)
+        drift_row.addWidget(self.drift_btn)
+        mc_layout.addLayout(drift_row)
+
+        mc_bar = QHBoxLayout()
+        mc_bar.setSpacing(8)
+        self.mc_refresh_btn = QPushButton("🔄 刷新模型状态")
+        self.mc_refresh_btn.setObjectName("ghost")
+        self.mc_refresh_btn.setMinimumHeight(32)
+        self.mc_refresh_btn.setToolTip("重新探测 torch / sklearn / arch 等可选依赖，"
+                                       "并读取当前预测器的训练状态")
+        self.mc_refresh_btn.clicked.connect(self._refresh_model_cards)
+        self.mc_summary = QLabel("")
+        self.mc_summary.setObjectName("sub")
+        self.mc_summary.setStyleSheet(f"font-size:11px;color:{p['sub']};")
+        mc_bar.addWidget(self.mc_refresh_btn)
+        mc_bar.addWidget(self.mc_summary, 1)
+        mc_layout.addLayout(mc_bar)
+
+        from ..ai.model_card import COLUMNS as _MC_COLUMNS  # 延迟导入避免启动阻塞
+
+        # M4-08：模型状态表改用 DataGrid（排序 / 右键复制·导出 / 列显隐 / 空态 / 主题刷新）
+        self.mc_tbl = DataGrid(0, len(_MC_COLUMNS),
+                               empty_title="暂无模型卡片",
+                               empty_subtitle="点击「刷新」探测本机可用模型")
+        self.mc_tbl.setHorizontalHeaderLabels(list(_MC_COLUMNS))
+        self.mc_tbl.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
+        self.mc_tbl.horizontalHeader().setStretchLastSection(True)
+        mc_layout.addWidget(self.mc_tbl, 1)
+        self._mc_tab_index = left_tab.addTab(mc_tab, "🧩 模型状态")
+        # 惰性刷新：首次切到该页时才探测依赖，避免启动期白跑一次 importlib
+        left_tab.currentChanged.connect(self._on_left_tab_changed)
 
         main_split.addWidget(left_tab)
 
@@ -554,7 +708,11 @@ class PredictOpsPage(BasePage):
         # 选品排行（带伸缩比例，随窗口调整）
         right_layout.addWidget(SectionHeader("品种入手机会排行", accent="#3b82f6"))
         # 移除「板块」列：品种字段完整展示（ResizeToContents），其余字段平均分配列宽
-        self.screen_tbl = QTableWidget(0, 5)
+        # M4-08：选品排行改用 DataGrid；末列含「分析」按钮单元格控件 → 排序关闭
+        # （原 setSortingEnabled(True) 的 Qt 自动排序会打乱 setCellWidget，一并移除）
+        self.screen_tbl = DataGrid(0, 5, sortable=False,
+                                   empty_title="暂无选品结果",
+                                   empty_subtitle="点击「开始预测」生成排行")
         self.screen_tbl.setHorizontalHeaderLabels(
             ["品种", "评分", "20日%", "AI方向", "操作"])
         _hdr = self.screen_tbl.horizontalHeader()
@@ -563,8 +721,6 @@ class PredictOpsPage(BasePage):
         # 其余字段（评分/20日%/AI方向/操作）平均分配剩余宽度，布局均衡
         for _c in range(1, 5):
             _hdr.setSectionResizeMode(_c, QHeaderView.ResizeMode.Stretch)
-        self.screen_tbl.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows)
         self.screen_tbl.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection)
         self.screen_tbl.itemSelectionChanged.connect(self._on_screen_select)
@@ -572,14 +728,14 @@ class PredictOpsPage(BasePage):
         right_layout.addWidget(self.screen_tbl, 2)  # stretch=2，随窗口伸缩
 
         # 评分档位图例
-        legend2 = QLabel(
+        self.legend2 = QLabel(
             "<span style='color:#ef4444;font-weight:600;'>■</span> 优先入手(≥68)　"
             "<span style='color:#3b82f6;font-weight:600;'>■</span> 可留意(≥55)　"
             "<span style='color:#64748b;font-weight:600;'>■</span> 暂观望"
         )
-        legend2.setObjectName("sub")
-        legend2.setStyleSheet(f"font-size:11px;color:{p['sub']};")
-        right_layout.addWidget(legend2, 1)  # stretch=1
+        self.legend2.setObjectName("sub")
+        self.legend2.setStyleSheet(f"font-size:11px;color:{p['sub']};")
+        right_layout.addWidget(self.legend2, 1)  # stretch=1
 
         # 板块机会地图
         right_layout.addWidget(SectionHeader("板块机会", accent="#22c55e"))
@@ -605,6 +761,30 @@ class PredictOpsPage(BasePage):
 
         # 初始加载K线图（主线程，轻量）
         self._base_refresh()
+        # M4-05：构建期主题色 inline 样式集中重绘（保证切主题后被覆盖刷新）
+        self._style_static()
+
+    # ------------------------------------------------------------------
+    # M4-05：构建期主题色 inline 样式集中管理（消除「inline setStyleSheet 不随
+    # 全局 QSS 刷新」缺陷）。本方法在 _build 末尾与 set_theme 中重跑。
+    # ------------------------------------------------------------------
+    def _style_static(self) -> None:
+        """重绘所有构建期主题色 inline 样式。"""
+        p = pal()
+        self.linkage_lbl.setStyleSheet(
+            f"font-size:11px;color:{p['accent'] if self._linkage_accent else p['sub']};")
+        self.status_lbl.setStyleSheet(f"font-size:12px;color:{p['sub']};")
+        self.score_val.setStyleSheet(f"font-size:11px;color:{p['sub']};min-width:34px;")
+        self.legend.setStyleSheet(f"font-size:11px;color:{p['sub']};padding:2px 0;")
+        self.calib_intro.setStyleSheet(f"font-size:12px;color:{p['sub']};padding:2px 0;")
+        self.replay_status.setStyleSheet(f"font-size:11px;color:{p['sub']};")
+        self.wf_status.setStyleSheet(f"font-size:11px;color:{p['sub']};padding:2px 0;")
+        self.calib_hint.setStyleSheet(f"font-size:11px;color:{p['sub']};padding:2px 0;")
+        self.mc_intro.setStyleSheet(f"font-size:12px;color:{p['sub']};padding:2px 0;")
+        self.mc_summary.setStyleSheet(f"font-size:11px;color:{p['sub']};")
+        self.long_val.setStyleSheet(f"font-size:11px;color:{p['sub']};min-width:34px;")
+        self.short_val.setStyleSheet(f"font-size:11px;color:{p['sub']};min-width:34px;")
+        self.legend2.setStyleSheet(f"font-size:11px;color:{p['sub']};")
 
     # ---- 懒加载：首次可见时启动选品排行后台任务 ----
     def showEvent(self, event):
@@ -693,7 +873,7 @@ class PredictOpsPage(BasePage):
         df = self.mdm.get_bars(self.cur_symbol, self.cur_period, 600)
         if df.empty:
             return
-        ind = add_indicators(df)
+        ind = cached_add_indicators(self.cur_symbol, self.cur_period, df)
         bars = df_to_bars(df)
         self.chart.set_data(bars, ma={"MA10": ind["MA10"].tolist(),
                                       "MA20": ind["MA20"].tolist()})
@@ -862,11 +1042,13 @@ class PredictOpsPage(BasePage):
     def _refresh_linkage_label(self) -> None:
         """刷新控制栏的联动状态标签：展示回测库反哺的调参画像（命中率 + 权重）。"""
         try:
-            t = BUS.get_tuning(self.cur_symbol)
+            from ..ai.linkage_bus import BUS as _BUS
+            t = _BUS.get_tuning(self.cur_symbol)
             g = (t.get("global") or {})
             n = int(g.get("n", 0) or 0)
             if n == 0:
                 self.linkage_lbl.setText("🔗 联动：回测库空（预测未反哺）")
+                self._linkage_accent = False
                 self.linkage_lbl.setStyleSheet(
                     f"font-size:11px;color:{pal()['sub']};")
                 return
@@ -880,6 +1062,7 @@ class PredictOpsPage(BasePage):
             self.linkage_lbl.setText(
                 f"🔗 联动：回测库 {n} 条 · 方向一致 {cons*100:.0f}% · "
                 f"权重 {base:.2f}{extra}{hit_txt}")
+            self._linkage_accent = True
             self.linkage_lbl.setStyleSheet(
                 f"font-size:11px;color:{pal()['accent']};")
         except Exception:  # noqa: BLE001
@@ -900,11 +1083,47 @@ class PredictOpsPage(BasePage):
         def work():
             """构造指标研判提示词并调用 AI 模型。"""
             try:
+                # 1. 确保最新配置（含 API 密钥）已应用到 LLM 客户端
+                from ..ai.config import get_ai_config
+                ai_cfg = get_ai_config(self.config)
+                ai_cfg.apply()
+                
+                # 2. 诊断：检查 API 密钥是否真正已加载到客户端
+                from ..ai.llm_client import get_client, api_status
+                client = get_client()
+                status = api_status()
+                
+                # 调试日志：打印关键状态
+                print(f"[AI指标研判] 配置状态: configured={status.get('configured')}, "
+                      f"usable={status.get('usable')}, client.api_key={'已设置' if client.api_key else '未设置'}")
+                
+                if not status.get("usable"):
+                    # 给出更具体的错误提示
+                    if not status.get("configured"):
+                        return "⚠️ AI 模型不可用：未检测到 API 密钥。\n" \
+                               "请在顶部「AI」菜单 →「模型配置」中填入 Agnes AI API 密钥并点击「应用」，" \
+                               "或设置环境变量 QV_AGNES_API_KEY。"
+                    elif not status.get("requests_available"):
+                        return "⚠️ AI 模型不可用：缺少 requests 库。\n" \
+                               "请运行 `pip install requests` 安装依赖。"
+                    else:
+                        return "⚠️ AI 模型不可用：已配置密钥但连接失败。\n" \
+                               "请检查网络连通性，或在「AI」菜单 →「模型配置」中点击「测试连接」验证。"
+                
+                # 3. 调用 AI
                 from ..ai.llm_client import chat
                 prompt = self._build_indicator_ai_prompt(sym, ind, res)
-                return chat(self._AI_INDICATOR_SYSTEM, prompt)
+                result = chat(self._AI_INDICATOR_SYSTEM, prompt)
+                
+                if result is None:
+                    return "⚠️ AI 调用返回空结果（可能网络超时或 API 限流）。\n" \
+                           "请稍后重试，或在「AI」菜单中检查 API 状态。"
+                return result
+                
             except Exception as e:  # noqa: BLE001
-                return f"AI 调用失败：{e}"
+                import traceback
+                traceback.print_exc()
+                return f"AI 调用异常：{type(e).__name__}: {e}"
 
         def done(text):
             """处理done。
@@ -914,9 +1133,7 @@ class PredictOpsPage(BasePage):
             self._ai_running = False
             self.ai_ind_btn.setEnabled(True)
             self.ai_ind_btn.setText("🤖 AI 指标研判")
-            self._show_ai_indicator_dialog(
-                text or "⚠️ AI 模型当前不可用（请在顶部「AI」菜单配置 API 密钥，"
-                        "或确认网络可达）。")
+            self._show_ai_indicator_dialog(text)
 
         def err(e):
             """处理err。
@@ -998,6 +1215,12 @@ class PredictOpsPage(BasePage):
     # ---- 选品评分 ----
     def _run_screen(self):
         """后台运行选品评分。失败时在状态栏提示，便于排查而非静默空白。"""
+        now = time.time()
+        if self._screen_cache is not None and (now - self._screen_cache_ts) < self._screen_cache_ttl:
+            # 使用缓存结果
+            self._results, self._cats = self._screen_cache
+            self._refresh_screen_table()
+            return
         def work():
             """处理work。"""
             return _screen(self.mdm, self.store)
@@ -1005,16 +1228,18 @@ class PredictOpsPage(BasePage):
         def done(payload):
             """处理done。
             
-                参数:
-                    payload"""
+            参数:
+                payload"""
             self._results, self._cats = payload
+            self._screen_cache = payload
+            self._screen_cache_ts = now
             self._refresh_screen_table()
 
         def err(e):
             """处理err。
             
-                参数:
-                    e"""
+            参数:
+                e"""
             self.status_lbl.setText(f"选品评分加载失败: {e}")
 
         self._run_worker(work, done, on_err=err)
@@ -1038,25 +1263,24 @@ class PredictOpsPage(BasePage):
             else:
                 score_item.setForeground(QColor("#64748b"))
             tbl.setItem(row, 1, score_item)
-            # 20日%
+            # 20日%（C5 中国惯例：涨=红、跌=绿；原代码反向，已纠正）
+            _p = pal()
             ret_item = QTableWidgetItem(f"{r['ret']:+.1f}%")
-            ret_item.setForeground(QColor("#22c55e") if r["ret"] >= 0
-                                   else QColor("#ef4444"))
+            ret_item.setForeground(QColor(_p["up"] if r["ret"] >= 0
+                                          else _p["down"]))
             tbl.setItem(row, 2, ret_item)
-            # AI方向
+            # AI方向（多=红、空=绿；中性用琥珀提示色）
             pu = r.get("pu", 0.5)
             ai_dir = "偏多" if pu >= 0.55 else ("偏空" if pu <= 0.45 else "中性")
-            ai_col = "#22c55e" if pu >= 0.55 else ("#ef4444" if pu <= 0.45 else "#f59e0b")
+            ai_col = _p["up"] if pu >= 0.55 else (
+                _p["down"] if pu <= 0.45 else "#f59e0b")
             ai_item = QTableWidgetItem(ai_dir)
             ai_item.setForeground(QColor(ai_col))
             tbl.setItem(row, 3, ai_item)
             # 操作按钮
             btn = QPushButton("分析")
             btn.setObjectName("secondary")
-            btn.setStyleSheet(
-                "QPushButton{background:#eef2ff;color:#4f46e5;border:1px solid #c7d2fe;"
-                "border-radius:4px;padding:2px 8px;font-size:11px;}"
-                "QPushButton:hover{background:#e0e7ff;}")
+            # M4-05⑤：移除硬编码浅色配色，改由 QSS #secondary（token 同源）统一着色
             sym = r["sym"]
             btn.clicked.connect(lambda checked, s=sym: self._select_and_predict(s))
             tbl.setCellWidget(row, 4, btn)
@@ -1157,6 +1381,7 @@ class PredictOpsPage(BasePage):
         horizon = self.hor_spin.value()
         self.start_btn.setEnabled(False)
         self.start_btn.setText("预测中…")
+        self.stop_btn.setEnabled(True)
         self.status_lbl.setText("正在执行预测流程：结算历史 → 获取资讯 → 自适应选参 → KP预测 → 校准…")
         sym, per = self.cur_symbol, self.cur_period
 
@@ -1167,14 +1392,23 @@ class PredictOpsPage(BasePage):
                 name, category = r[1], r[2]
                 break
 
-        def work():
+        def work(worker):
             # ① 学习结算
-            """处理work。"""
+            """处理work（M5-07③：注入 worker —— 资讯抓取支持协作式取消）。"""
+            # 延迟导入：仅在实际预测时才加载 AI 模块，避免启动阻塞
+            from ..ai.feedback import (
+                evaluate_all_open, quick_regime, adaptive_config,
+                calibrated_confidence, reliability_calibration,
+            )
+            from ..ai import news_feed
+            from ..core.exceptions import InterruptionError
             try:
                 settle = evaluate_all_open(store, mdm, max_n=40)
             except Exception:
                 settle = {"evaluated": 0, "hits": 0, "rate": None}
             df = mdm.get_bars(sym, per, 600)
+            # M3-10：留存训练数据引用，供「🧩 模型状态」面板显示训练区间与样本量
+            self._last_train_df = df
             # ② 自适应选参
             regime0 = quick_regime(df)
             try:
@@ -1182,15 +1416,32 @@ class PredictOpsPage(BasePage):
             except Exception:
                 cfg = {"extended_features": True, "use_ensemble": True,
                        "source": "default", "rate": None}
-            # ③ 多源资讯
+            # ③ 多源资讯 (with caching)
             try:
-                all_news = news_feed.fetch_all_news(limit=60, force=True)
+                now = time.time()
+                if self._news_cache is not None and (now - self._news_cache_ts) < self._news_cache_interval:
+                    all_news = self._news_cache
+                else:
+                    # M5-07③：改用 fetch_all_news（带 should_abort/on_progress）——
+                    # 点「停止预测」后不再等待剩余源；进度经 progress 信号上报
+                    all_news = news_feed.fetch_all_news(
+                        limit=60, force=False, per_source_timeout=8,
+                        on_progress=lambda d, t, txt: worker.emit_progress(
+                            int(d / t * 100), f"资讯 {txt}"),
+                        should_abort=worker.isInterruptionRequested)
+                    self._news_cache = all_news
+                    self._news_cache_ts = now
                 bias_info = news_feed.news_bias_for_symbol(
                     sym, name, category, all_news)
+            except InterruptionError:
+                raise
             except Exception:
                 bias_info = {"bias": 0.0, "matched": 0, "samples": []}
                 all_news = {"items": [], "sources": {}, "by_source": {},
                             "by_category": {}}
+            # M5-07③：资讯阶段结束的中断检查点（取消后不进入训练）
+            if worker.isInterruptionRequested():
+                raise InterruptionError("预测已被用户中断")
             # ③.5 盈利策略库信号（回测中心自动进化的可盈利策略，自动应用）
             try:
                 strat_sig = evolved_signal_for(sym, df)
@@ -1204,7 +1455,8 @@ class PredictOpsPage(BasePage):
             # 自适应权重：策略样本越充分、信号越强，融合权重越高（0.3~0.75），
             # 让回测沉淀的高质量策略在研判中占据合理主导，弱信号时不喧宾夺主。
             # —— 回测中心反哺：读取全市场盈利回测调参画像，自我调整融合权重 ——
-            tuning = BUS.get_tuning(sym)
+            from ..ai.linkage_bus import BUS as _BUS
+            tuning = _BUS.get_tuning(sym)
             g_tune = (tuning.get("global") or {})
             s_tune = (tuning.get("symbol") or {})
             consensus = float(g_tune.get("consensus", 0.0))
@@ -1226,12 +1478,27 @@ class PredictOpsPage(BasePage):
                 g_tune.get("prefer_ensemble", False))
             cfg["extended_features"] = ext
             cfg["use_ensemble"] = ens
-            fit = self.predictor.fit(df, seq_len=20, epochs=25,
-                                     extended_features=ext,
-                                     use_ensemble=ens)
-            res = self.predictor.predict(df, horizon=horizon,
+            # 延迟初始化 predictor
+            if self._predictor is None:
+                from ..ai.predictor import FuturesPredictor
+                self._predictor = FuturesPredictor()
+            # 使用缓存的拟合结果（如果可用且未过期）
+            cache_key = (sym, per, ext, ens)
+            now = time.time()
+            if self._fit_cache is not None and \
+               self._fit_cache[0] == cache_key and \
+               (now - self._fit_cache[1]) < self._fit_cache_ttl:
+                fit = self._fit_cache[2]
+            else:
+                fit = self._predictor.fit(df, seq_len=20, epochs=25,
+                                         extended_features=ext,
+                                         use_ensemble=ens,
+                                         symbol=sym, period=per)
+                self._fit_cache = (cache_key, now, fit)
+            res = self._predictor.predict(df, horizon=horizon,
                                          news_bias=fused_bias,
-                                         news_samples=bias_info["samples"])
+                                         news_samples=bias_info["samples"],
+                                         symbol=sym, period=per)
             # ⑤ 置信度校准：优先样本外「可靠性校准」（按模型概率分箱的实际命中率），
             #    样本不足时回退到扁平 regime 命中率（旧行为）。
             cfg_key = "enhanced" if cfg["extended_features"] else "baseline"
@@ -1246,11 +1513,12 @@ class PredictOpsPage(BasePage):
             except Exception:
                 calib_fn, calib_info = None, None
                 conf = res["p_up"]
+            # M3-12 ①：过去这里会带着 calibrate_p_up 再跑一次完整 predict()，
+            # 但重跑唯一生效的副作用只有 p_up 融合（其余字段不依赖 p_up），
+            # 却要重做特征工程 + 递归/集成外推 + 全套指标研判 → 单次预测耗时翻倍。
+            # 改为就地应用校准函数，语义等价、耗时归零。
             if abs(conf - res["p_up"]) > 1e-9:
-                res = self.predictor.predict(df, horizon=horizon,
-                                              news_bias=fused_bias,
-                                              news_samples=bias_info["samples"],
-                                              calibrate_p_up=conf)
+                self._predictor.apply_p_up_calibration(res, conf)
             res["symbol"] = sym
             res["period"] = per
             res["strategy_signal"] = strat_sig
@@ -1280,7 +1548,67 @@ class PredictOpsPage(BasePage):
             self.status_lbl.setText(f"预测出错: {e}")
             print("预测错误:", e)
 
-        self._run_worker(work, done, on_err=err)
+        self._run_worker(work, done, on_err=err, on_interrupted=self._on_pred_interrupted)
+
+    # ------------------------------------------------------------------
+    # M4-06⑤：预测长任务中断生命周期
+    # ------------------------------------------------------------------
+    def _end_prediction(self) -> None:
+        """恢复预测按钮可交互态（成功 / 失败 / 中断共用）。"""
+        self.start_btn.setEnabled(True)
+        self.start_btn.setText("🚀 开始预测")
+        self.stop_btn.setEnabled(False)
+
+    def _stop_prediction(self) -> None:
+        """请求中止当前预测流程（协作式：在下一个检查点生效）。"""
+        if not getattr(self, "_workers", None):
+            self._end_prediction()
+            return
+        self._workers[-1].requestInterruption()
+        self.stop_btn.setEnabled(False)
+        self.status_lbl.setText("已请求停止预测，正在等待当前子步骤结束…")
+
+    def _on_pred_interrupted(self) -> None:
+        """预测被用户中止：不写结果、不算失败，仅恢复界面。"""
+        self._end_prediction()
+        self.status_lbl.setText("⏹ 预测已停止（未产生结果）。")
+
+    def _end_replay(self) -> None:
+        """恢复回放按钮可交互态（成功 / 失败 / 中断共用）。"""
+        self._replaying = False
+        self.replay_btn.setEnabled(True)
+        self.replay_stop_btn.setEnabled(False)
+
+    def _stop_replay(self) -> None:
+        """请求中止当前历史回放（协作式：在下一个品种/窗口边界生效）。"""
+        if not getattr(self, "_workers", None):
+            self._end_replay()
+            return
+        self._workers[-1].requestInterruption()
+        self.replay_stop_btn.setEnabled(False)
+        self.replay_status.setText("已请求停止回放，正在等待当前品种结束…")
+
+    def _on_replay_interrupted(self) -> None:
+        """回放被用户中止：不落库、不算失败，仅恢复界面。"""
+        self._end_replay()
+        self.replay_prog.setVisible(False)
+        self.replay_status.setText("⏹ 回放已停止（未写入新样本）。")
+
+    def _on_replay_progress(self, pct: int, text: str) -> None:
+        """回放进度回调（M4-09）：真实百分比 + 「回放 x/y」。
+
+        参数:
+            pct: int — 0~100 真实百分比
+            text: str — 引擎上报的「回放 x/y」文本
+        """
+        if getattr(self, "_closed", False):
+            return
+        try:
+            self.replay_prog.setValue(pct)
+            self.replay_status.setText(
+                f"正在回放历史以积累校准样本…（{text}）")
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- 历史回放校准（批量灌入样本外校准样本） ----
     def _run_replay(self):
@@ -1294,7 +1622,9 @@ class PredictOpsPage(BasePage):
             return
         self._replaying = True
         self.replay_btn.setEnabled(False)
+        self.replay_stop_btn.setEnabled(True)
         self.replay_prog.setVisible(True)
+        self.replay_prog.setValue(0)
         self.replay_status.setText("正在回放历史以积累校准样本…")
 
         store = self.store
@@ -1303,27 +1633,39 @@ class PredictOpsPage(BasePage):
         if only_cur:
             samples = [(None, self.cur_symbol, self.cur_period)]
         else:
-            samples = discover_local_samples("data/real_samples")
+            from ..ai.calibration_replay import discover_local_samples as _discover
+            samples = _discover("data/real_samples")
             if not samples:
                 samples = [(None, self.cur_symbol, self.cur_period)]
 
+        total = len(samples)
+
         def work():
             """处理work。"""
+            from ..ai.calibration_replay import load_bars_from_csv, replay_symbol
+            # M4-09：修复既有遗漏——reliability_calibration 此前仅在预测 work 内导入，
+            # 回放 work 引用会抛 NameError；此处显式导入以保障回放完整闭环。
+            from ..ai.feedback import reliability_calibration
             added_total = 0
-            for (path, sym, per) in samples:
+            for idx, (path, sym, per) in enumerate(samples):
+                # M4-06：逐品种边界检查中断（协作式停止，在下一品种开始前生效）
+                self._workers[-1].check_interruption()
                 df = load_bars_from_csv(path) if path else None
                 if df is None:
                     try:
                         df = self.mdm.get_bars(self.cur_symbol, self.cur_period, 600)
                     except Exception:
                         df = None
-                if df is None:
-                    continue
-                # 单个品种回放（逐文件调用 replay_symbol，避免一次性载入全部大 CSV）
-                rr = replay_symbol(store, df, sym, period=per, horizon=horizon,
-                                   stride=8, max_samples=250,
-                                   progress_cb=lambda a, s: None)
-                added_total += rr["added"]
+                if df is not None:
+                    # 单个品种回放（逐文件调用 replay_symbol，避免一次性载入全部大 CSV）
+                    rr = replay_symbol(store, df, sym, period=per, horizon=horizon,
+                                       stride=8, max_samples=250,
+                                       progress_cb=lambda a, s: None)
+                    added_total += rr["added"]
+                # M4-09：真实百分比进度（含跳过样本也计入分母）
+                if total:
+                    self._workers[-1].emit_progress(
+                        int((idx + 1) / total * 100), f"回放 {idx + 1}/{total}")
             try:
                 fn, info = reliability_calibration(store, regime=None, min_samples=20)
             except Exception:
@@ -1337,8 +1679,8 @@ class PredictOpsPage(BasePage):
             
                 参数:
                     payload"""
-            self._replaying = False
-            self.replay_btn.setEnabled(True)
+            self._end_replay()
+            self.replay_prog.setValue(100)
             self.replay_prog.setVisible(False)
             info = payload.get("info", {})
             if info.get("status") == "ok":
@@ -1362,11 +1704,78 @@ class PredictOpsPage(BasePage):
             
                 参数:
                     e"""
-            self._replaying = False
-            self.replay_btn.setEnabled(True)
+            self._end_replay()
+            self.replay_prog.setValue(100)
             self.replay_prog.setVisible(False)
             self.replay_status.setText(f"回放出错: {e}")
             print("回放出错:", e)
+
+        self._run_worker(work, done, on_err=err,
+                        on_progress=self._on_replay_progress,
+                        on_interrupted=self._on_replay_interrupted)
+
+    def _run_walk_forward(self):
+        """M3-05 ④：对当前品种跑真·Walk-Forward 滚动验证。
+
+        逐折重训成本较高（约为单次评估的 fold 数倍），故放在 worker 线程；
+        使用**独立**的 FuturesPredictor，绝不污染本页共享的 self.predictor。
+        结果展示折数、样本外方向准确率与 MAE，并写入页面日志。
+        """
+        if getattr(self, "_wf_running", False):
+            return
+        self._wf_running = True
+        self.wf_btn.setEnabled(False)
+        self.wf_prog.setVisible(True)
+        self.wf_status.setText("正在做 Walk-Forward 滚动验证（逐折重训，请稍候）…")
+
+        sym, per = self.cur_symbol, self.cur_period
+
+        def work():
+            """处理work。"""
+            from ..ai.predictor import FuturesPredictor
+            df = self.mdm.get_bars(sym, per, 600)
+            if df is None or len(df) < 80:
+                return {"error": "数据不足（需 ≥80 根 K 线）"}
+            # 独立实例：避免覆盖本页共享模型的归一化统计量
+            p = FuturesPredictor()
+            return p.evaluate(df, horizon=1, seq_len=20, epochs=10,
+                              extended_features=False, use_ensemble=False,
+                              symbol=sym, period=per, use_walk_forward=True)
+
+        def done(r):
+            """处理done。
+
+                参数:
+                    r"""
+            self._wf_running = False
+            self.wf_btn.setEnabled(True)
+            self.wf_prog.setVisible(False)
+            if not r or r.get("error"):
+                self.wf_status.setText(f"Walk-Forward 验证失败：{r.get('error') if r else '无结果'}")
+                return
+            n_folds = int(r.get("n_folds", 0))
+            acc = float(r.get("direction_acc", 0.0))
+            mae = float(r.get("mae", 0.0))
+            wf_on = bool(r.get("walk_forward"))
+            fold_txt = "、".join(f"#{f['fold']}[{f['train'][1]}→{f['test'][1]}]"
+                                 for f in (r.get("folds") or []))
+            self.wf_status.setText(
+                f"{'✅ 真·滚动' if wf_on else '⚠️ 已回退固定切分'}：{n_folds} 折 · "
+                f"样本外方向准确率 {acc:.1%} · MAE {mae:.5f} · "
+                f"OOS 样本 {r.get('val_samples', 0)}"
+                + (f"\n折叠（train_end→test_end）：{fold_txt}" if fold_txt else ""))
+            logger.info("Walk-Forward 验证 [%s]：%d 折，方向准确率 %.3f，MAE %.6f",
+                        sym, n_folds, acc, mae)
+
+        def err(e):
+            """处理err。
+
+                参数:
+                    e"""
+            self._wf_running = False
+            self.wf_btn.setEnabled(True)
+            self.wf_prog.setVisible(False)
+            self.wf_status.setText(f"Walk-Forward 验证出错: {e}")
 
         self._run_worker(work, done, on_err=err)
 
@@ -1391,6 +1800,7 @@ class PredictOpsPage(BasePage):
               [(center, smoothed, n, lo, hi), ...]；
         coverage: 已结算样本总数。样本不足（<20）时显示提示并标「样本不足」。
         """
+        from ..ai.feedback import mean_band_width
         valid = [(c, s, n) for (c, s, n, *_ ) in (bins or [])
                  if n > 0 and 0.0 <= s <= 1.0 and 0.0 <= c <= 1.0]
         if not valid or int(coverage or 0) < 20:
@@ -1433,11 +1843,15 @@ class PredictOpsPage(BasePage):
         if not (self._preloaded_gene and self._preloaded_symbol == sym):
             return strat_sig
         try:
+            from ..strategy.auto_evolve import (
+                ensemble_strategy_signal as _ensemble_sig,
+                describe_gene as _describe_gene,
+            )
             closes = df["close"].tolist()
             highs = df["high"].tolist() if "high" in df else closes
             lows = df["low"].tolist() if "low" in df else closes
-            d = int(round(ensemble_strategy_signal(self._preloaded_gene, closes, highs, lows) or 0))
-            pdesc = describe_gene(self._preloaded_gene)
+            d = int(round(_ensemble_sig(self._preloaded_gene, closes, highs, lows) or 0))
+            pdesc = _describe_gene(self._preloaded_gene)
             pre = {"desc": pdesc, "direction": d,
                    "preloaded": True, "source": "回测中心联动载入"}
             strat_sig.setdefault("detail", []).insert(0, pre)
@@ -1558,14 +1972,13 @@ class PredictOpsPage(BasePage):
         """预测完成后的UI更新。"""
         (res, fit, cfg, bias_info, conf, settle, all_news,
          ai_report, calib_info) = payload
-        self.start_btn.setEnabled(True)
-        self.start_btn.setText("🚀 开始预测")
+        self._end_prediction()
         self.status_lbl.setText(f"✅ 预测完成 — {res['symbol']} / {res['period']}")
         self._last_res = res
 
         # ---- 更新K线图 ----
         df = self.mdm.get_bars(res["symbol"], res["period"], 300)
-        ind = add_indicators(df)
+        ind = cached_add_indicators(res["symbol"], res["period"], df)
         bars = df_to_bars(df)
         self.chart.set_data(bars, ma={"MA10": ind["MA10"].tolist(),
                                       "MA20": ind["MA20"].tolist()})
@@ -1583,8 +1996,9 @@ class PredictOpsPage(BasePage):
 
         # 指标共振研判
         try:
-            reso = resonance(ind)
-            tr = trend_score(ind)
+            from ..analysis.signals import resonance as _resonance, trend_score as _trend_score
+            reso = _resonance(ind)
+            tr = _trend_score(ind)
         except Exception:
             reso = {"verdict": "信号不明", "score": 0}
             tr = {"state": "未知"}
@@ -1641,7 +2055,8 @@ class PredictOpsPage(BasePage):
                 name, category = r[1], r[2]
                 break
         try:
-            news_an = news_feed.analyze_symbol_news(sym, name, category,
+            from ..ai import news_feed as _nf
+            news_an = _nf.analyze_symbol_news(sym, name, category,
                                                     all_news)
         except Exception:
             news_an = {"bias": bias_info.get("bias", 0.0),
@@ -1719,8 +2134,9 @@ class PredictOpsPage(BasePage):
 
         # ---- 双向联动：把本次研判信号推送到回测中心，待其验证（自我训练闭环） ----
         try:
+            from ..ai.linkage_bus import BUS as _BUS
             strat = res.get("strategy_signal") or {}
-            BUS.push_prediction(res["symbol"], {
+            _BUS.push_prediction(res["symbol"], {
                 "p_up": float(res.get("p_up", 0.5)),
                 "p_down": float(res.get("p_down", 0.5)),
                 "expected_return_pct": float(res.get("expected_return_pct", 0.0)),
@@ -1735,6 +2151,13 @@ class PredictOpsPage(BasePage):
         except Exception:  # noqa: BLE001
             pass
         self._refresh_linkage_label()
+
+        # M3-10：本次预测刚训练完 predictor，模型状态面板同步刷新
+        # （训练区间 / 样本量 / 是否降级到此才有真实值）
+        try:
+            self._refresh_model_cards()
+        except Exception:  # noqa: BLE001
+            pass
 
         # 若选品排行/板块机会此前加载失败（空白），预测完成后自愈刷新一次
         if not self._results:
@@ -2113,7 +2536,125 @@ class PredictOpsPage(BasePage):
             参数:
                 t: str"""
         super().set_theme(t)
+        # M4-05：重绘构建期主题色 inline 样式（消除切主题后停留在旧配色）
+        self._style_static()
         for attr in ("chart", "macd", "kdj", "rsi", "reliability_chart", "prob_band"):
             c = getattr(self, attr, None)
             if c is not None and hasattr(c, "set_theme"):
                 c.set_theme(t)
+        # M3-10：占位行的标灰色随主题走，切换主题后须重刷一次
+        try:
+            self._refresh_model_cards()
+        except Exception:  # noqa: BLE001
+            pass
+        # M3-13：指示灯的红/绿/灰取自当前主题调色板，切换主题后必须重刷
+        try:
+            self._refresh_drift_light()
+        except Exception:  # noqa: BLE001
+            pass
+        # M4-05：选品排行表（评分/涨跌/AI方向着色）随主题重渲染（用缓存结果）
+        if self._results:
+            try:
+                self._refresh_screen_table()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ----------------------------- M3-10 模型状态 -----------------------------
+    def _on_left_tab_changed(self, idx: int) -> None:
+        """切到「🧩 模型状态」页时惰性刷新一次。"""
+        if idx != getattr(self, "_mc_tab_index", -1):
+            return
+        if getattr(self, "_mc_cards", None):
+            return          # 已刷新过，等用户手动点「刷新」或下次预测
+        try:
+            self._refresh_model_cards()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _refresh_model_cards(self) -> None:
+        """刷新「🧩 模型状态」面板。
+
+        每次都**实时探测**可选依赖（torch / sklearn / arch），因此装上或卸载依赖后
+        无需重启即可看到状态变化。占位实现（is_stub）整行标灰。
+        """
+        try:
+            from ..ai.model_card import (collect_model_cards, cards_to_rows,
+                                         format_cards_text)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("模型卡片模块不可用：%s", e)
+            return
+        # 注意：本页共享的 predictor 是 `self._predictor`（延迟初始化），
+        # 不是 `self.predictor`（后者只是文档注释里的旧称）。
+        pred = getattr(self, "_predictor", None)
+        df = getattr(self, "_last_train_df", None)
+        ext = getattr(pred, "external_model", None)
+        try:
+            cards = collect_model_cards(predictor=pred, df=df, external_model=ext)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("采集模型卡片失败：%s", e)
+            return
+        self._mc_cards = cards
+        rows = cards_to_rows(cards)
+        tbl = getattr(self, "mc_tbl", None)
+        if tbl is None:
+            return
+        tbl.setRowCount(len(rows))
+        muted = QColor(pal()["sub"])
+        normal = QColor(pal()["text"])
+        for i, (card, row) in enumerate(zip(cards, rows)):
+            for j, val in enumerate(row):
+                item = QTableWidgetItem(str(val))
+                # 占位实现 → 整行标灰（随主题色刷新，不用 inline stylesheet）
+                item.setForeground(muted if card.is_stub else normal)
+                tbl.setItem(i, j, item)
+        n_stub = sum(1 for c in cards if c.is_stub)
+        n_on = sum(1 for c in cards if c.enabled)
+        self.mc_summary.setText(
+            f"共 {len(cards)} 个候选模型：{n_on} 个启用，{n_stub} 个占位实现（灰字）"
+            + ("　·　训练区间 " + cards[0].train_range
+               if cards and cards[0].train_range else ""))
+        logger.info("模型状态面板已刷新：\n%s", format_cards_text(cards))
+        # 模型状态刷新时顺带更新漂移指示灯（同属「模型健康度」）
+        self._refresh_drift_light()
+
+    # ----------------------------- M3-13 模型漂移指示灯 -----------------------------
+    def _refresh_drift_light(self) -> None:
+        """刷新「模型漂移」指示灯（绿 ok / 红 drift / 灰 no_data）。
+
+        数据来源：`store.daily_hit_rates` 的按日命中率序列 vs 训练期（窗口前）基准。
+        任何异常都降级为灰色「未检测」，绝不因漂移检测失败影响主流程。
+        """
+        light = getattr(self, "drift_light", None)
+        text = getattr(self, "drift_text", None)
+        if light is None or text is None:
+            return
+        p = pal()
+        sym = getattr(self, "cur_symbol", "") or ""
+        # 颜色语义：红=告警（建议重训）、绿=正常、灰=样本不足/未检测
+        c_drift, c_ok, c_na = p["up"], p["down"], p["sub"]
+        try:
+            from ..ai.drift import detect_from_store
+            res = detect_from_store(self.store, sym)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("漂移指示灯刷新失败（%s）：%s", sym, e)
+            light.setStyleSheet(f"color:{c_na};font-size:16px;")
+            text.setText(f"模型漂移：{sym} 未检测（{e}）")
+            return
+        level = str(res.get("level") or "no_data")
+        score = float(res.get("drift_score") or 0.0)
+        if level == "drift":
+            light.setStyleSheet(f"color:{c_drift};font-size:16px;")
+            text.setText(
+                f"<b style='color:{c_drift}'>模型漂移 {score:.2f}</b>　"
+                f"近期命中率 {float(res.get('window_mean') or 0):.2f} "
+                f"vs 训练期 {float(res.get('baseline_mean') or 0):.2f}　"
+                f"→ 建议重训")
+        elif level == "ok":
+            light.setStyleSheet(f"color:{c_ok};font-size:16px;")
+            text.setText(
+                f"模型漂移 {score:.2f}（正常）　近 {int(res.get('n_days') or 0)} 天"
+                f"命中率 {float(res.get('window_mean') or 0):.2f} "
+                f"vs 训练期 {float(res.get('baseline_mean') or 0):.2f}")
+        else:
+            light.setStyleSheet(f"color:{c_na};font-size:16px;")
+            text.setText(f"模型漂移：{sym} {res.get('message') or '样本不足，暂不判定'}")

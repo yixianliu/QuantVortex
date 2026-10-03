@@ -23,12 +23,15 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from typing import Any, Optional
 
 from ..runtime import is_frozen
 from ..storage.config_manager import ConfigManager
+
+logger = logging.getLogger(__name__)
 
 
 AI_SECTION = "ai"
@@ -39,6 +42,9 @@ _ENV_KEY = "QV_AGNES_API_KEY"
 # 默认值（与 config/settings.json 中的 ai.* 保持一致）
 DEFAULTS = {
     "ai.timeout": 30,
+    "ai.model": "agnes-3.0-flash",
+    "ai.max_tokens": 1024,
+    "ai.temperature": 0.3,
 }
 
 
@@ -57,9 +63,15 @@ class AIConfig:
                 config: Optional[ConfigManager]"""
         self._config = config
         self._api_key: str | None = None
+        # M7-05：当前密钥是否来自环境变量（区分 key_source 的 env/memory）
+        self._key_from_env = False
         self._callbacks: list[callable] = []
         self._lock = threading.Lock()
         self._frozen = is_frozen()
+        # M3-08 ⑥：无 ConfigManager 时的「进程内默认值」副本。
+        # 旧实现 `set()` 直接改模块级 DEFAULTS → 一次 set 会**永久污染全局默认值**，
+        # 影响之后新建的每一个 AIConfig 实例（含单例重建）。改为实例级副本。
+        self._local_defaults: dict[str, Any] = dict(DEFAULTS)
 
         # 打包模式：启动时清除持久化的 api_key
         if self._frozen:
@@ -73,25 +85,27 @@ class AIConfig:
     # ------------------------------------------------------------------
     def get(self, key: str, default: Any = None) -> Any:
         """读取配置值（点分路径或 ai.* 前缀）。"""
-        if self._config is None:
-            return DEFAULTS.get(key, default)
         # 兼容 ai.timeout 和 timeout 两种写法
-        full = f"{AI_SECTION}.{key}" if not key.startswith(AI_SECTION) else key
+        # M3-08 ⑥：必须判 `"ai."` 前缀 —— 只判 `"ai"` 会把 `ai_foo` 这类键
+        # 误认为已带前缀，导致读到一个根本不存在的配置项。
+        full = (key if key.startswith(AI_SECTION + ".")
+                else f"{AI_SECTION}.{key}")
+        if self._config is None:
+            # 进程内副本按**完整键**存储，与 DEFAULTS 口径一致
+            return self._local_defaults.get(full, DEFAULTS.get(full, default))
         return self._config.get(full, DEFAULTS.get(full, default))
 
     def get_all(self) -> dict[str, Any]:
         """返回当前所有 AI 配置（不含默认值的部分）。"""
         if self._config is None:
-            return {k: v for k, v in DEFAULTS.items()}
-        result = {}
+            return dict(self._local_defaults)
+        # M3-08 ⑥：原实现连跑两遍**完全相同的** for 循环，第二遍（"显式覆盖"）
+        # 把第一遍的结果逐键覆盖成同一个值 —— 整段是死代码，删除。
+        # 保留第一遍语义：与默认值相同的项返回 None（对应 docstring「不含默认值的部分」）。
+        result: dict[str, Any] = {}
         for key, default in DEFAULTS.items():
             val = self._config.get(key)
             result[key] = val if val != default else None
-        # 显式覆盖
-        for key, default in DEFAULTS.items():
-            val = self._config.get(key)
-            if val is not None:
-                result[key] = val
         return result
 
     # ------------------------------------------------------------------
@@ -104,10 +118,13 @@ class AIConfig:
             with self._lock:
                 self._api_key = str(value) if value else None
             return
+        # M3-08 ⑥：前缀补全提到分支之前，保证有无 ConfigManager 时键口径一致
+        key = (key if key.startswith(AI_SECTION + ".")
+               else f"{AI_SECTION}.{key}")
         if self._config is None:
-            DEFAULTS[key] = value
+            # 改实例副本，不再污染模块级 DEFAULTS
+            self._local_defaults[key] = value
             return
-        key = f"{AI_SECTION}.{key}" if not key.startswith(AI_SECTION) else key
         self._config.set(key, value)
         self._config.save()
 
@@ -124,20 +141,42 @@ class AIConfig:
         """设置 API 密钥（仅内存，不落盘）。
 
         调试模式：UI 填写密钥时调用
-        打包模式：此方法被忽略，密钥只能从环境变量注入
+        打包模式：UI 填写密钥，仅内存持有（不落盘）
         """
-        if self._frozen:
-            return  # 打包模式不接受手动设置的密钥
         with self._lock:
             self._api_key = key.strip() if key else None
+            # UI 显式输入/清除 → 覆盖环境变量来源标记（M7-05 key_source）
+            self._key_from_env = False
 
     def get_api_key(self) -> str | None:
         """获取 API 密钥（仅内存）。
-
-        返回优先级：环境变量 > 内存持有 > None
+        
+        返回优先级：内存持有（UI配置） > 环境变量 > None
+        
+        说明：
+        - 首选从内存中的 UI 配置获取（用户明确设置，优先级最高）
+        - 其次从环境变量读取（兼容旧配置、打包模式备选）
+        - 最后返回 None（未配置）
         """
         with self._lock:
-            return self._api_key or self._env_key_value()
+            # 首选内存中的 UI 配置（优先级最高，明确由用户设置）
+            if self._api_key:
+                return self._api_key
+            # 其次从环境变量读取（兼容旧配置、打包模式备选）
+            return self._env_key_value()
+
+    def key_source(self) -> str:
+        """返回当前生效密钥的来源（M7-05 诊断页用，不含密钥值）。
+
+        返回:
+            ``"memory"``：本次会话由 UI 输入（优先级最高）
+            ``"env"``：来自环境变量 QV_AGNES_API_KEY
+            ``"none"``：未配置
+        """
+        with self._lock:
+            if self._api_key:
+                return "env" if self._key_from_env else "memory"
+        return "env" if self._env_key_value() else "none"
 
     def _env_key_value(self) -> str | None:
         """从环境变量读取密钥。"""
@@ -150,6 +189,7 @@ class AIConfig:
         if env_key:
             with self._lock:
                 self._api_key = env_key
+                self._key_from_env = True  # M7-05：记录来源
 
     # ------------------------------------------------------------------
     # 打包模式专用：清除持久化的 api_key
@@ -170,23 +210,21 @@ class AIConfig:
             # 写回 config（用 set 会触发 save，这里直接操作底层更简洁）
             self._config.set(f"{AI_SECTION}.api_key", None)
             self._config.save()
-            print(f"[安全] 打包模式：已清除 ai.api_key 持久化字段")
+            logger.info("[安全] 打包模式：已清除 ai.api_key 持久化字段")
 
     # ------------------------------------------------------------------
     # 热更新
     # ------------------------------------------------------------------
     def apply(self) -> None:
         """将配置应用到 AgnesLLMClient 单例（热更新，无需重启）。"""
-        from ..ai.llm_client import reload_from_config
+        from ..ai.llm_client import reload_from_config, get_client
+        # 1. 先同步非密钥参数（超时、模型名、max_tokens、temperature）
         reload_from_config(self._config)
-        # 同时更新内存中的密钥
-        with self._lock:
-            key = self._api_key
-        # 重新设置到客户端
-        from ..ai.llm_client import get_client
+        # 2. 再同步 API 密钥：使用 get_api_key() 保证优先级（环境变量 > 内存 > None）
+        #    这在打包模式下尤为重要：环境变量 QV_AGNES_API_KEY 为最高优先级
         client = get_client()
-        client.api_key = key
-        # 触发回调
+        client.api_key = self.get_api_key()
+        # 3. 触发回调
         with self._lock:
             for cb in list(self._callbacks):
                 try:
@@ -212,6 +250,9 @@ class AIConfig:
             "api_key_set": bool(self.get_api_key()),
             "mode": "frozen" if self._frozen else "debug",
             "timeout": self.get("timeout", 30),
+            "model": self.get("model", "agnes-3.0-flash"),
+            "max_tokens": self.get("max_tokens", 1024),
+            "temperature": self.get("temperature", 0.3),
         }
 
     def reset_to_defaults(self) -> None:

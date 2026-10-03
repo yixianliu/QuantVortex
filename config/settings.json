@@ -7,14 +7,17 @@
     "sqlite_path": "data/quant_analysis.db"
   },
   "analysis": {
-    "default_symbol": "rb.SHFE",
+    "default_symbol": "RB.SHFE",
     "default_period": "D",
     "predictor_seq_len": 20,
     "predictor_epochs": 25,
     "default_horizon": 12
   },
   "ai": {
-    "timeout": 30
+    "timeout": 30,
+    "model": "agnes-3.0-flash",
+    "max_tokens": 1024,
+    "temperature": 0.3
   },
   "data_path": "data"
 }

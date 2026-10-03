@@ -1,0 +1,233 @@
+{
+ "run_id": "20261003_015549_6a9748",
+ "created_at": "2026-10-03T01:58:07",
+ "params": {
+  "seed": 20240921,
+  "period": "D",
+  "pop_size": 10,
+  "max_generations": 200,
+  "symbol": "I.DCE"
+ },
+ "generations": [
+  {
+   "generation": 7,
+   "best_fitness": 49.5,
+   "best_genome": {
+    "type": "op",
+    "op": "AND",
+    "left": {
+     "type": "factor",
+     "name": "momentum",
+     "params": {
+      "period": 20,
+      "th": 0.03
+     },
+     "stop_mult": 2.5,
+     "tp_mult": 4.0,
+     "allow_long": false,
+     "allow_short": true,
+     "lots": 2
+    },
+    "right": {
+     "type": "factor",
+     "name": "donchian_break",
+     "params": {
+      "period": 25
+     },
+     "stop_mult": 2.0,
+     "tp_mult": 6.0,
+     "allow_long": false,
+     "allow_short": true,
+     "lots": 3
+    },
+    "stop_mult": 2.5,
+    "tp_mult": 4.0,
+    "allow_long": false,
+    "allow_short": true,
+    "lots": 2
+   },
+   "symbol": "HC.SHFE"
+  },
+  {
+   "generation": 8,
+   "best_fitness": -3.56,
+   "best_genome": {
+    "type": "op",
+    "op": "AND",
+    "left": {
+     "type": "op",
+     "op": "OR",
+     "left": {
+      "type": "factor",
+      "name": "boll_revert",
+      "params": {
+       "period": 40,
+       "num_std": 1.5
+      },
+      "stop_mult": 2.0,
+      "tp_mult": 3.0,
+      "allow_long": false,
+      "allow_short": true,
+      "lots": 1
+     },
+     "right": {
+      "type": "factor",
+      "name": "ma_cross",
+      "params": {
+       "fast": 8,
+       "slow": 20
+      },
+      "stop_mult": 3.0,
+      "tp_mult": 4.0,
+      "allow_long": false,
+      "allow_short": true,
+      "lots": 5
+     }
+    },
+    "right": {
+     "type": "factor",
+     "name": "donchian_break",
+     "params": {
+      "period": 25
+     },
+     "stop_mult": 2.0,
+     "tp_mult": 6.0,
+     "allow_long": false,
+     "allow_short": true,
+     "lots": 3
+    },
+    "stop_mult": 2.5,
+    "tp_mult": 4.0,
+    "allow_long": false,
+    "allow_short": true,
+    "lots": 2
+   },
+   "symbol": "HC.SHFE"
+  },
+  {
+   "generation": 9,
+   "best_fitness": 9.59,
+   "best_genome": {
+    "type": "factor",
+    "name": "willr",
+    "params": {
+     "period": 25
+    },
+    "stop_mult": 3.0,
+    "tp_mult": 6.0,
+    "allow_long": false,
+    "allow_short": true,
+    "lots": 5
+   },
+   "symbol": "I.DCE"
+  },
+  {
+   "generation": 10,
+   "best_fitness": 51.71,
+   "best_genome": {
+    "type": "op",
+    "op": "OR",
+    "left": {
+     "type": "factor",
+     "name": "ma_cross",
+     "params": {
+      "fast": 10,
+      "slow": 100
+     },
+     "stop_mult": 2.5,
+     "tp_mult": 2.0,
+     "allow_long": false,
+     "allow_short": true,
+     "lots": 2
+    },
+    "right": {
+     "type": "factor",
+     "name": "ma_cross",
+     "params": {
+      "fast": 10,
+      "slow": 100
+     },
+     "stop_mult": 2.5,
+     "tp_mult": 2.0,
+     "allow_long": false,
+     "allow_short": true,
+     "lots": 2
+    },
+    "stop_mult": 1.5,
+    "tp_mult": 2.0,
+    "allow_long": true,
+    "allow_short": false,
+    "lots": 1
+   },
+   "symbol": "I.DCE"
+  },
+  {
+   "generation": 11,
+   "best_fitness": 51.81,
+   "best_genome": {
+    "type": "op",
+    "op": "OR",
+    "left": {
+     "type": "factor",
+     "name": "ma_cross",
+     "params": {
+      "fast": 10,
+      "slow": 100
+     },
+     "stop_mult": 2.5,
+     "tp_mult": 2.0,
+     "allow_long": false,
+     "allow_short": true,
+     "lots": 2
+    },
+    "right": {
+     "type": "factor",
+     "name": "ma_cross",
+     "params": {
+      "fast": 10,
+      "slow": 100
+     },
+     "stop_mult": 2.5,
+     "tp_mult": 2.0,
+     "allow_long": false,
+     "allow_short": true,
+     "lots": 2
+    },
+    "stop_mult": 1.5,
+    "tp_mult": 2.0,
+    "allow_long": true,
+    "allow_short": false,
+    "lots": 2
+   },
+   "symbol": "I.DCE"
+  },
+  {
+   "generation": 12,
+   "best_fitness": null,
+   "best_genome": null,
+   "symbol": "I.DCE"
+  }
+ ],
+ "best": {
+  "genome": null,
+  "fitness": 76.84,
+  "metrics": {
+   "start_equity": 1000000.0,
+   "end_equity": 1007603.09,
+   "total_return": 0.0076,
+   "annual_return": 0.0027,
+   "sharpe": 2.13,
+   "max_drawdown": 0.0019,
+   "win_rate": 0.4667,
+   "profit_factor": 3.526,
+   "avg_win": 1105.69,
+   "avg_loss": -274.42,
+   "max_consecutive_loss": 4,
+   "var_95": -0.0001,
+   "num_fills": 31,
+   "num_closing_trades": 15,
+   "long_opens": 9,
+   "short_opens": 7
+  }
+ }
+}

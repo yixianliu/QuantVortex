@@ -164,22 +164,31 @@ class EvolutionController:
         return g
 
     def mutate(self, genome: Genome, tracks: Sequence[str] = TRACKS) -> Genome:
+        """逐轨变异：**每轨恰好变异一次**。
+
+        M2-10：修复原实现「外层 ``for t in tracks`` 循环 × 内层同时对三轨调用
+        ``_mutate_track``」造成的重复变异 —— 默认三轨时循环跑 3 次、每次都对
+        strategy/model/risk 全部变异一次，等于每轨被变异 3 次（共 9 次），
+        变异强度失控且同 seed 结果不可复现。现改为单趟：先补齐缺失轨，
+        再对参与变异的轨各变异一次。
+        """
         out = genome.clone()
-        for t in tracks:
-            if getattr(out, t) is None:
-                # 缺失轨注入默认随机基因后变异
-                if t == "strategy":
-                    out.strategy = self._strategy_generator(self.rng)
-                elif t == "model":
-                    out.model = _random_model_gene(self.rng, self.model_space)
-                elif t == "risk":
-                    out.risk = _random_risk_gene(self.rng, self.risk_space)
-            out = Genome(
-                strategy=self._mutate_track("strategy", out.strategy or {}, self.rng) if "strategy" in tracks and out.strategy is not None else out.strategy,
-                model=self._mutate_track("model", out.model or {}, self.rng) if "model" in tracks and out.model is not None else out.model,
-                risk=self._mutate_track("risk", out.risk or {}, self.rng) if "risk" in tracks and out.risk is not None else out.risk,
-            )
-        return out
+        # 1) 缺失轨注入默认随机基因（仅对参与变异的轨）
+        if "strategy" in tracks and out.strategy is None:
+            out.strategy = self._strategy_generator(self.rng)
+        if "model" in tracks and out.model is None:
+            out.model = _random_model_gene(self.rng, self.model_space)
+        if "risk" in tracks and out.risk is None:
+            out.risk = _random_risk_gene(self.rng, self.risk_space)
+        # 2) 逐轨各变异一次
+        return Genome(
+            strategy=self._mutate_track("strategy", out.strategy or {}, self.rng)
+            if ("strategy" in tracks and out.strategy is not None) else out.strategy,
+            model=self._mutate_track("model", out.model or {}, self.rng)
+            if ("model" in tracks and out.model is not None) else out.model,
+            risk=self._mutate_track("risk", out.risk or {}, self.rng)
+            if ("risk" in tracks and out.risk is not None) else out.risk,
+        )
 
     def crossover(self, a: Genome, b: Genome, tracks: Sequence[str] = TRACKS) -> Genome:
         """逐轨按 key 随机混合 a/b 基因。"""

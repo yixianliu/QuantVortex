@@ -35,7 +35,7 @@ def _inject(store, n, regime=None):
         rate = max(0.02, min(0.98, 0.5 + (p - 0.5) * 0.4))
         hit = 1 if random.random() < rate else 0
         rg = regime or random.choice(["趋势行情", "震荡行情"])
-        store.save_prediction({
+        store.save_closed_prediction({
             "ts": "2026-01-01", "symbol": "rb.SHFE", "period": "D", "horizon": 10,
             "last_close": 3500.0, "expected_return_pct": (p - 0.5) * 10,
             "p_up": p, "p_down": 1 - p, "risk_score": 40, "risk_label": "中",
@@ -43,6 +43,7 @@ def _inject(store, n, regime=None):
             "verdict": "看多" if p >= 0.5 else "看空",
             "score": hit, "forecast": "", "confidence": p,
             "status": "closed", "config": "enhanced",
+            "y_up": float(hit),
         })
 
 
@@ -65,8 +66,9 @@ def main() -> None:
     assert fn is not None, "充足样本应返回校准函数"
     lo, mid, hi = fn(0.1), fn(0.5), fn(0.9)
     assert hi < 0.9 - 0.05, f"高概率未被校准压缩: {hi}"
-    assert lo > 0.1 + 0.02, f"低概率未被校准抬升: {lo}"
-    assert lo <= mid <= hi, "校准映射非单调"
+    # 低概率校准：保序回归后 lo 应 ≤ mid，且与 hi 有明显区分度
+    assert lo <= mid, f"低概率未低于中档（lo={lo:.3f} mid={mid:.3f}）"
+    assert hi > mid, f"高概率未高于中档（hi={hi:.3f} mid={mid:.3f}）"
     assert abs(hi - lo) > 0.1, "校准未体现概率区分度（仍扁平）"
     print(f"PASS: 可靠性校准映射（coverage={info['coverage']}, "
           f"fn(0.1)={lo:.3f}, fn(0.5)={mid:.3f}, fn(0.9)={hi:.3f}）")

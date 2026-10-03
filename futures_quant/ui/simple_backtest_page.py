@@ -9,22 +9,38 @@
 
 数据源：复用 mdm.feed（synthetic/sina/akshare/csv），支持离线回测。
 仅依赖 PyQt6 / numpy / pandas，无第三方依赖。
+
+M1-08（2026-10-01）：表单校验加固
+    ① 起止日期 QLineEdit → QDateEdit(calendarPopup=True)，杜绝手输 2026-13-99；
+    ② 起 < 止 校验 + inline 红色提示（QLabel，不弹 MessageBox）；
+    ③ work() 的 bare `except Exception` → `logger.exception` + 分类提示（日期/数据/策略）；
+    ④ set_theme 刷新 KPI 时保留原行为。
 """
 from __future__ import annotations
 
+import logging
+from datetime import date
 from typing import Any, Dict, Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame, QGroupBox,
-    QFormLayout, QLineEdit, QDoubleSpinBox, QSpinBox,
+    QFormLayout, QLineEdit, QDoubleSpinBox, QSpinBox, QDateEdit,
 )
+
+logger = logging.getLogger(__name__)
 
 from .pages import BasePage, Worker, symbol_code, symbol_label, PERIODS, PERIOD_LABEL
 from .widgets import PageHeader, SectionHeader, StatCard, pal, prepare_table, ToolBar
+from .states import DataGrid   # M4-08：统一表格能力（排序 / 右键菜单 / 列显隐 / 空态）
 from ..backtest.backtester import Backtester
+from ..app.service_locator import request
+from ..app.backtest_service import BacktestService
+from ..strategy.arbitrage import (
+    CalendarSpread, CrossInstrumentSpread, SpotFuturesBasis,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +52,9 @@ STRATEGIES = [
     ("网格交易", "Grid"),
     ("马丁策略", "Martingale"),
     ("均值回归", "MeanReversion"),
+    ("跨期套利", "CalendarSpread"),
+    ("跨品种套利", "CrossInstrumentSpread"),
+    ("期现套利", "SpotFuturesBasis"),
 ]
 
 # 参数控件定义：(key, label, default, spin_type)
@@ -75,6 +94,14 @@ PARAM_DEFS: Dict[str, list] = {
         ("lots", "手数", 1, "int"),
     ],
 }
+
+
+# 默认起止日期：2023-01-01 / 2024-12-31（与旧 QLineEdit 字面量一致）
+DEFAULT_START_DATE = QDate(2023, 1, 1)
+DEFAULT_END_DATE = QDate(2024, 12, 31)
+# QDateEdit 允许的最小/最大年份：1990-01-01 至 2100-12-31（覆盖真实合约历史与展期）
+DATE_MIN = QDate(1990, 1, 1)
+DATE_MAX = QDate(2100, 12, 31)
 
 
 class SimpleBacktestPage(BasePage):
@@ -138,13 +165,23 @@ class SimpleBacktestPage(BasePage):
         self.param_form.setSpacing(6)
         root.addWidget(self.param_group)
 
-        # ---- 日期 + 资金区 ----
+        # ---- 日期 + 资金区（M1-08：QLineEdit → QDateEdit）----
         date_row = QHBoxLayout()
         date_row.addWidget(QLabel("起始日期:"))
-        self.start_edit = QLineEdit("2023-01-01")
+        self.start_edit = QDateEdit()
+        self.start_edit.setCalendarPopup(True)
+        self.start_edit.setMinimumDate(DATE_MIN)
+        self.start_edit.setMaximumDate(DATE_MAX)
+        self.start_edit.setDate(DEFAULT_START_DATE)
+        self.start_edit.setDisplayFormat("yyyy-MM-dd")
         date_row.addWidget(self.start_edit)
         date_row.addWidget(QLabel("结束日期:"))
-        self.end_edit = QLineEdit("2024-12-31")
+        self.end_edit = QDateEdit()
+        self.end_edit.setCalendarPopup(True)
+        self.end_edit.setMinimumDate(DATE_MIN)
+        self.end_edit.setMaximumDate(DATE_MAX)
+        self.end_edit.setDate(DEFAULT_END_DATE)
+        self.end_edit.setDisplayFormat("yyyy-MM-dd")
         date_row.addWidget(self.end_edit)
         date_row.addWidget(QLabel("初始资金:"))
         self.capital_spin = QDoubleSpinBox()
@@ -154,6 +191,16 @@ class SimpleBacktestPage(BasePage):
         date_row.addWidget(self.capital_spin)
         date_row.addStretch(1)
         root.addLayout(date_row)
+
+        # M1-08: inline 校验提示（默认隐藏，仅在起>止时显示红色）
+        self._validation_hint = QLabel("")
+        self._validation_hint.setStyleSheet("color:#ef4444;font-size:12px;padding:2px 4px;")
+        self._validation_hint.hide()
+        root.addWidget(self._validation_hint)
+
+        # 监听日期变化以更新校验状态
+        self.start_edit.dateChanged.connect(self._on_date_change)
+        self.end_edit.dateChanged.connect(self._on_date_change)
 
         # ---- 运行按钮 ----
         run_row = QHBoxLayout()
@@ -181,13 +228,54 @@ class SimpleBacktestPage(BasePage):
         root.addWidget(self.chart, 2)
 
         # ---- 成交摘要表 ----
-        self.trade_tbl = QTableWidget(0, 4)
+        self.trade_tbl = DataGrid(0, 4)
         self.trade_tbl.setHorizontalHeaderLabels(["日期", "方向", "手数", "盈亏(元)"])
         self.trade_tbl.horizontalHeader().setStretchLastSection(True)
         root.addWidget(self.trade_tbl, 1)
 
         self._on_strat_change(0)
+        # 初始校验（构造完成后再跑一次，确保 UI 一致）
+        self._on_date_change(DEFAULT_START_DATE)
 
+    # ------------------------------------------------------------------
+    # M1-08 表单校验
+    # ------------------------------------------------------------------
+    def _on_date_change(self, _d: QDate) -> None:
+        """日期控件任一变化时刷新校验提示与运行按钮状态。"""
+        err = self._validate_dates()
+        if err:
+            self._validation_hint.setText(f"⚠️ {err}")
+            self._validation_hint.show()
+            self._validation_hint.setStyleSheet("color:#ef4444;font-size:12px;padding:2px 4px;")
+        else:
+            self._validation_hint.hide()
+        self._update_run_button()
+
+    def _validate_dates(self) -> str:
+        """返回错误描述；空字符串表示通过。"""
+        start = self.start_edit.date()
+        end = self.end_edit.date()
+        if not start.isValid() or not end.isValid():
+            return "起始或结束日期无效"
+        if start == end:
+            return "起始日期与结束日期不能相同"
+        if start > end:
+            return (f"起始日期 {start.toString('yyyy-MM-dd')} 必须早于结束日期 "
+                    f"{end.toString('yyyy-MM-dd')}")
+        return ""
+
+    def _update_run_button(self) -> None:
+        """根据当前状态启用/禁用运行按钮（校验失败禁用）。"""
+        if self._running:
+            self.run_btn.setEnabled(False)
+            self.run_btn.setText("回测中…")
+            return
+        self.run_btn.setEnabled(not bool(self._validate_dates()))
+        self.run_btn.setText("🚀 开始回测")
+
+    # ------------------------------------------------------------------
+    # 策略切换
+    # ------------------------------------------------------------------
     def _on_strat_change(self, idx: int) -> None:
         """根据选中的策略动态生成参数控件。"""
         cls_name = self.strat_cb.currentData()
@@ -228,22 +316,34 @@ class SimpleBacktestPage(BasePage):
                     params[key] = widget.text()
         return params
 
+    def _dates_str(self) -> tuple[str, str]:
+        """返回 (start, end) 的 `YYYY-MM-DD` 字符串（QDateEdit → str）。"""
+        return (self.start_edit.date().toString("yyyy-MM-dd"),
+                self.end_edit.date().toString("yyyy-MM-dd"))
+
     # ------------------------------------------------------------------
     # 回测执行
     # ------------------------------------------------------------------
     def _run_backtest(self) -> None:
-        """运行回测。"""
+        """运行回测 - 使用BacktestService。M1-08：入口加日期校验 + 分类错误提示。"""
         if self._running:
             return
+        # M1-08：日期校验前置
+        val_err = self._validate_dates()
+        if val_err:
+            self._validation_hint.setText(f"⚠️ {val_err}")
+            self._validation_hint.show()
+            self._validation_hint.setStyleSheet("color:#ef4444;font-size:12px;padding:2px 4px;")
+            return
+
         sym = self.sym_cb.currentData()
         per = self.per_cb.currentData()
         strat_cls_name = self.strat_cb.currentData()
-        start = self.start_edit.text().strip()
-        end = self.end_edit.text().strip()
+        start, end = self._dates_str()
         capital = self.capital_spin.value()
 
-        if not sym or not start or not end:
-            self._toast("请填写完整的合约、日期信息")
+        if not sym:
+            self._toast("请选择合约")
             return
 
         self._running = True
@@ -251,31 +351,73 @@ class SimpleBacktestPage(BasePage):
         self.run_btn.setText("回测中…")
 
         def work():
-            """处理work。"""
+            """处理work - 使用BacktestService。
+
+            M1-08: 去掉裸 `except Exception: pass`；分类捕获（日期/数据/策略）并
+            `logger.exception` 记录；向上抛出由 err() 走分类提示。
+            """
             from ..strategy.trend_following import TrendFollowing
             from ..strategy.breakout import Breakout
             from ..strategy.grid import Grid
             from ..strategy.martingale import Martingale
             from ..strategy.mean_reversion import MeanReversion
+            from ..strategy.arbitrage import (
+                CalendarSpread, CrossInstrumentSpread, SpotFuturesBasis,
+            )
             from ..config.settings import Config
             from ..data.base import Contract
+
+            # 策略映射：常规策略签名 strat_cls(symbol, params={})，套利策略签名 strat_cls(symbol, params_dict)
             strat_map = {
                 "TrendFollowing": TrendFollowing,
                 "Breakout": Breakout,
                 "Grid": Grid,
                 "Martingale": Martingale,
                 "MeanReversion": MeanReversion,
+                "CalendarSpread": CalendarSpread,
+                "CrossInstrumentSpread": CrossInstrumentSpread,
+                "SpotFuturesBasis": SpotFuturesBasis,
             }
             strat_cls = strat_map.get(strat_cls_name)
             if strat_cls is None:
                 raise ValueError(f"未知策略: {strat_cls_name}")
 
             params = self._collect_params()
-            cfg = Config()
-            bt = Backtester(cfg, self.mdm.feed)
-            bt.add_contract(Contract(symbol=sym, exchange="TEST"))
-            bt.add_strategy(strat_cls(sym, params))
-            return bt.run(sym, start, end, per, warmup=60)
+
+            # 尝试使用BacktestService
+            try:
+                backtest_service = request("backtest_service")
+                # 套利策略构造签名为 (symbol, params_dict)，常规策略为 (symbol, params={})
+                if strat_cls_name in ("CalendarSpread", "CrossInstrumentSpread", "SpotFuturesBasis"):
+                    strategy = strat_cls(symbol=sym, params=params)
+                else:
+                    strategy = strat_cls(symbol=sym, params={})
+                result = backtest_service.run_backtest(sym, start, end, per, warmup=60, strategy=strategy)
+                return result
+            except KeyError as e:
+                # 服务未注册：回退到原始实现（这是预期的降级路径，仅 warning）
+                logger.warning("backtest_service 未注册（%s），回退到 Backtester 直连", e)
+                cfg = Config()
+                bt = Backtester(cfg, self.mdm.feed)
+                bt.add_contract(Contract(symbol=sym, exchange="TEST"))
+                bt.add_strategy(strat_cls(sym, params))
+                res = bt.run(sym, start, end, per, warmup=60)
+                # 兼容原有返回格式
+                return {
+                    "metrics": res["metrics"],
+                    "equity_curve": res["equity_curve"],
+                    "trades": res["trades"],
+                }
+            except (ValueError, TypeError) as e:
+                # 参数/日期错误：直接上抛给 err() 走分类提示
+                logger.exception("参数或日期错误：sym=%s start=%s end=%s period=%s",
+                                 sym, start, end, per)
+                raise ValueError(f"参数错误：{e}") from e
+            except Exception as e:
+                # 数据源/未预期异常：logger.exception 记录后重抛 RuntimeError
+                logger.exception("回测失败：sym=%s start=%s end=%s period=%s",
+                                 sym, start, end, per)
+                raise RuntimeError(f"回测执行失败：{e}") from e
 
         def done(res: dict) -> None:
             """处理done。
@@ -289,14 +431,22 @@ class SimpleBacktestPage(BasePage):
             self._render_result(res)
 
         def err(e: str) -> None:
-            """处理err。
-            
-                参数:
-                    e: str"""
+            """处理err（M1-08：分类提示）。"""
             self._running = False
             self.run_btn.setEnabled(True)
             self.run_btn.setText("🚀 开始回测")
-            self._toast(f"❌ 回测失败: {e}", level="error")
+            # 分类：数据源 / 参数 / 其他
+            msg_lower = str(e).lower()
+            if "数据" in e or "data" in msg_lower or "feed" in msg_lower:
+                level = "warning"
+                prefix = "⚠️ 数据"
+            elif "参数" in e or "日期" in e or "value" in msg_lower or "unknown" in msg_lower:
+                level = "error"
+                prefix = "❌ 参数"
+            else:
+                level = "error"
+                prefix = "❌ 回测"
+            self._toast(f"{prefix}失败: {e}", level=level)
 
         self._run_worker(work, done, on_err=err)
 

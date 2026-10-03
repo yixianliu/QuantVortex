@@ -77,7 +77,9 @@ def test_fetch_list_source_parsing():
     class FakeResp:
         status_code = 200
         content = html.encode("utf-8")
-    nf._SESSION.get = lambda *a, **k: FakeResp()
+    # M5-03：_get 改走 http_client 单例（连接池/限流/UA 轮换/robots 门），
+    # 故在单例上打桩 .get（而非旧的 _SESSION.get）即可离线驱动解析。
+    nf._get_http_client().get = lambda *a, **k: FakeResp()
     items = nf._fetch_list_source(
         "https://finance.sina.com.cn/futures/",
         nf._SINA_RE, "新浪财经", enc="utf-8", limit=10, enrich=False)

@@ -13,6 +13,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .cache import IndicatorCache, get_instance, cached_indicator
+
 
 # ----------------------------- 趋势类 -----------------------------
 def sma(series: pd.Series, n: int) -> pd.Series:
@@ -240,10 +242,22 @@ def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
             close: pd.Series
             volume: pd.Series
     
-        返回:
-            pd.Series"""
+    返回:
+        pd.Series"""
     sign = np.sign(close.diff().fillna(0))
     return (sign * volume).cumsum()
+
+
+def atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+    """平均真实波幅（Wilder 平滑，标准公式）。
+
+    防未来函数：第 i 根的 ATR 仅依赖 close[i] 及之前的 TR/历史数据，
+    使用 ewm(alpha=1/n, adjust=False) 因果递归，不回看未来。
+    """
+    prev_close = close.shift(1)
+    tr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()],
+                   axis=1).max(axis=1)
+    return tr.ewm(alpha=1.0 / n, adjust=False).mean()
 
 
 def vol_ma(volume: pd.Series, n: int = 5) -> pd.Series:
@@ -256,6 +270,47 @@ def vol_ma(volume: pd.Series, n: int = 5) -> pd.Series:
         返回:
             pd.Series"""
     return volume.rolling(n, min_periods=1).mean()
+
+
+def vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, n: int = 20) -> pd.Series:
+    """成交量加权平均价 VWAP。
+    
+    防未来函数：使用滚动窗口右对齐。
+    """
+    typical_price = (high + low + close) / 3.0
+    cum_vol = volume.rolling(n, min_periods=1).sum()
+    cum_tp_vol = (typical_price * volume).rolling(n, min_periods=1).sum()
+    return cum_tp_vol / cum_vol.replace(0, np.nan)
+
+
+def hv(close: pd.Series, n: int = 20) -> pd.Series:
+    """历史波动率 HV，按年化 252 个交易日。
+    
+    防未来函数：滚动标准差。
+    """
+    log_ret = np.log(close / close.shift(1))
+    return log_ret.rolling(n, min_periods=n).std() * np.sqrt(252)
+
+
+def garch(close: pd.Series, n: int = 20) -> pd.Series:
+    """GARCH(1,1) 条件波动率近似实现。
+    
+    若 arch 包可用则使用真实拟合，否则退化为 EWMA 波动率。
+    防未来函数：仅使用历史数据滚动计算。
+    """
+    try:
+        from arch import arch_model
+        log_ret = np.log(close / close.shift(1)).dropna()
+        am = arch_model(log_ret, vol='Garch', p=1, q=1)
+        res = am.fit(disp='off')
+        vol = res.conditional_volatility
+        # 与原序列对齐
+        idx = close.index[-len(vol):]
+        return pd.Series(vol.values, index=idx)
+    except Exception:
+        # 降级：EWMA 波动率
+        log_ret = np.log(close / close.shift(1))
+        return log_ret.ewm(span=n, adjust=False).std() * np.sqrt(252)
 
 
 # ----------------------------- 聚合入口 -----------------------------
@@ -293,4 +348,69 @@ def add_indicators(
     out["OBV"] = obv(close, vol)
     out["VOL_MA5"] = vol_ma(vol, 5)
     out["ROC12"] = roc(close, 12)
+    out["ATR14"] = atr(high, low, close, 14)
+
+    # ------------------------------------------------------------------
+    # M3-01：补齐下游 8 个「恒零特征」的真实计算。
+    # 这些列此前从未被产出，导致 features.build_features 走
+    # `else: fill_data[f] = 0.0` 静默填 0 —— 模型吃进 8 个全零列而不自知。
+    # 命名与 EXTENDED_FEATURES 保持一致（小写）。
+    # ------------------------------------------------------------------
+    # 布林带分位：价格在布林通道中的相对位置（0=下轨，1=上轨）
+    if {"BOLL_UP", "BOLL_LOW"}.issubset(out.columns):
+        band = (out["BOLL_UP"] - out["BOLL_LOW"]).replace(0, np.nan)
+        out["boll_pct"] = ((out["close"] - out["BOLL_LOW"]) / band).clip(0, 1).fillna(0.5)
+    else:
+        out["boll_pct"] = 0.5
+
+    # DI 方向：+DI 与 -DI 之差（>0 多头占优，<0 空头占优）
+    if {"PLUS_DI", "MINUS_DI"}.issubset(out.columns):
+        out["dir_di"] = (out["PLUS_DI"] - out["MINUS_DI"]).fillna(0.0)
+    else:
+        out["dir_di"] = 0.0
+
+    # 均线乖离：价格相对 MA20 / MA60 的相对偏离
+    out["ma20_gap"] = ((close / out["MA20"].replace(0, np.nan)) - 1.0).fillna(0.0) \
+        if "MA20" in out.columns else 0.0
+    out["ma60_gap"] = ((close / out["MA60"].replace(0, np.nan)) - 1.0).fillna(0.0) \
+        if "MA60" in out.columns else 0.0
+
+    # 成交量：5 日均量与量比（现量 / 5 日均量）
+    if "volume" in out.columns:
+        vol_ma5 = vol.rolling(5, min_periods=1).mean()
+        out["vol5"] = vol_ma5.fillna(0.0)
+        out["vol_ratio"] = (vol / vol_ma5.replace(0, np.nan)).fillna(1.0)
+    else:
+        out["vol5"] = 0.0
+        out["vol_ratio"] = 1.0
+
+    # OBV 变化率：能量潮的 5 日变动（捕捉量能趋势）
+    if "OBV" in out.columns:
+        out["obv_chg"] = out["OBV"].diff(5).fillna(0.0)
+    else:
+        out["obv_chg"] = 0.0
+
+    # ATR 占比：真实波幅 / 收盘价（归一化波动率，跨品种可比）
+    if "ATR14" in out.columns:
+        out["atr_pct"] = (out["ATR14"] / close.replace(0, np.nan)).fillna(0.0)
+    else:
+        out["atr_pct"] = 0.0
+
     return out
+
+
+# ----------------------------- 缓存聚合入口 -----------------------------
+def cached_add_indicators(symbol: str, period: str, df: pd.DataFrame) -> pd.DataFrame:
+    """带 LRU 缓存的 add_indicators，同一 (symbol, period, df) 命中缓存时直接返回。
+
+    注意：df 作为缓存键的一部分（基于 id），不同调用传入相同数据但不同对象时仍会重算；
+    适用于 UI 反复调用相同 symbol/period 场景，避免重复 rolling/ewm 运算。
+    """
+    cache = get_instance()
+    key = f"add_indicators|{symbol}|{period}|{df.shape}|{df.index[-1] if len(df) else 0}"
+    cached = cache.get(symbol, period, "add_indicators", (df.shape, str(df.index[-1]) if len(df) else ""))
+    if cached is not None:
+        return cached
+    result = add_indicators(df)
+    cache.put(symbol, period, "add_indicators", result, (df.shape, str(df.index[-1]) if len(df) else ""))
+    return result

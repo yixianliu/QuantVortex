@@ -20,8 +20,16 @@ pymysql>=1.1
 # ctpbee>=0.6
 # pyctp
 
+# ---- AI 增强模型（可选，需 torch）----
+# 双向 LSTM + Attention 升级版本：
+#   提升期货趋势预测准确率，支持时序注意力与早停；
+#   无 torch 时自动降级为 numpy 单隐层 LSTM。
+# 安装：pip install torch --user
+torch>=2.0
+
 # ---- 打包部署（生成 exe，仅打包时安装）----
 # pyinstaller>=6.0
 
 # 说明：技术指标体系与 AI 预测（LSTM）均已用原生 numpy 实现，无需 TA-Lib / scikit-learn；
 #       K 线图与预测曲线用原生 QPainter 绘制，无需 pyqtgraph / plotly。
+#       torch 为可选依赖，安装后可启用双向 LSTM + Attention 增强模式。

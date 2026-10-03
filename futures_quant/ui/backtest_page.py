@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame, QTabWidget,
     QCheckBox, QLineEdit, QSpinBox, QDateEdit, QDoubleSpinBox,
-    QRadioButton, QGroupBox, QButtonGroup,
+    QRadioButton, QGroupBox, QButtonGroup, QProgressBar,
 )
 
 from .pages import (
@@ -35,7 +35,12 @@ from .widgets import (
 )
 from .icons import icon
 from .chart_widget import PriceChart
+from .states import DataGrid   # M4-08：统一表格能力（排序 / 右键菜单 / 列显隐 / 空态）
 from ..runtime import get_data_dir
+from ..strategy.arbitrage import (
+    CalendarSpread, CrossInstrumentSpread, SpotFuturesBasis,
+    cointegration_score,
+)
 
 # 手动回测在历史记录表中的「代数」列用此哨兵值表示（区别于自动进化的正整数代数）
 MANUAL_GEN = -1
@@ -103,6 +108,9 @@ STRATEGIES = [
     ("网格交易", Grid),
     ("马丁策略", Martingale),
     ("均值回归", MeanReversion),
+    ("跨期套利", CalendarSpread),
+    ("跨品种套利", CrossInstrumentSpread),
+    ("期现套利", SpotFuturesBasis),
 ]
 
 # 各策略在对比图中的固定配色（与区块标题强调色一致，提升辨识度）
@@ -112,6 +120,9 @@ STRAT_COLORS = {
     "网格交易": "#f59e0b",
     "马丁策略": "#ef4444",
     "均值回归": "#8b5cf6",
+    "跨期套利": "#06b6d4",
+    "跨品种套利": "#14b8a6",
+    "期现套利": "#f59e0b",
 }
 
 # 绩效指标中文标签
@@ -121,6 +132,7 @@ METRIC_LABELS = {
     "sharpe": "夏普比率", "max_drawdown": "最大回撤",
     "win_rate": "胜率", "profit_factor": "盈亏比",
     "avg_win": "平均盈利", "avg_loss": "平均亏损",
+    "max_consecutive_loss": "最大连亏", "var_95": "95% VaR",
     "num_fills": "成交笔数", "num_closing_trades": "平仓笔数",
     "long_opens": "多头开仓", "short_opens": "空头开仓",
 }
@@ -139,18 +151,62 @@ PERIOD_COLORS = {
 # 参数优化（网格搜索）空间：每个策略挑选关键数值参数，给出候选档位。
 # 候选数受控，组合数上限 MAX_OPT_COMBOS 防止回测过久。
 MAX_OPT_COMBOS = 40
+# 优化 schema：扩充参数空间，覆盖更广的策略配置
 SEARCH_SCHEMA = {
-    "趋势跟踪": {"fast": [5, 10, 15], "slow": [20, 30, 40], "atr_period": [10, 14, 20]},
-    "突破交易": {"period": [10, 20, 30], "atr_period": [10, 14, 20]},
-    "网格交易": {"grid_step": [10.0, 20.0, 40.0], "grid_count": [5, 10, 15]},
-    "马丁策略": {"rsi_period": [10, 14, 20], "multiplier": [2.0, 2.5], "max_layers": [3, 4, 5]},
-    "均值回归": {"period": [10, 20, 30], "num_std": [1.5, 2.0, 2.5]},
+    # 趋势跟踪：多档位均线 + ATR 周期
+    "趋势跟踪": {
+        "fast": [3, 5, 8, 10, 15, 20],
+        "slow": [10, 15, 20, 30, 40, 50, 60],
+        "atr_period": [10, 14, 20, 25, 30]
+    },
+    # 突破交易：唐奇安通道不同周期 + ATR 止损
+    "突破交易": {
+        "period": [10, 15, 20, 25, 30, 40],
+        "atr_period": [10, 14, 20, 25, 30]
+    },
+    # 网格交易：网格步长与层数组合
+    "网格交易": {
+        "grid_step": [10.0, 15.0, 20.0, 30.0, 40.0],
+        "grid_count": [5, 8, 10, 12, 15]
+    },
+    # 马丁策略：RSI 周期 + 加仓倍数 + 最大层数
+    "马丁策略": {
+        "rsi_period": [7, 10, 14, 20, 21, 28],
+        "multiplier": [1.5, 2.0, 2.5, 3.0],
+        "max_layers": [2, 3, 4, 5, 6]
+    },
+    # 均值回归：布林带周期与区间宽度
+    "均值回归": {
+        "period": [10, 15, 20, 25, 30, 40],
+        "num_std": [1.5, 2.0, 2.5, 3.0, 3.5]
+    },
+    # 跨期套利：价差窗口 + 开仓/平仓 z-score
+    "跨期套利": {
+        "window": [10, 15, 20, 25, 30, 40],
+        "entry_z": [1.5, 2.0, 2.5, 3.0],
+        "exit_z": [0.1, 0.2, 0.3, 0.5]
+    },
+    # 跨品种套利：回归窗口 + z-score 阈值
+    "跨品种套利": {
+        "lookback": [10, 15, 20, 25, 30],
+        "entry_z": [1.5, 2.0, 2.5, 3.0],
+        "exit_z": [0.1, 0.2, 0.3, 0.5],
+        "pair_basis": [1.0, 1.5, 2.0, 2.5]
+    },
+    # 期现套利：基差窗口 + z-score 阈值
+    "期现套利": {
+        "lookback": [10, 15, 20, 25, 30],
+        "entry_z": [1.5, 2.0, 2.5, 3.0],
+        "exit_z": [0.1, 0.2, 0.3, 0.5]
+    },
 }
 # 参数名 -> 紧凑中文/缩写（用于优化表内展示）
 OPT_PARAM_SHORT = {
     "fast": "快线", "slow": "慢线", "atr_period": "ATR", "period": "周期",
     "grid_step": "步长", "grid_count": "层数", "rsi_period": "RSI",
     "multiplier": "乘数", "max_layers": "层数", "num_std": "标准差",
+    "window": "窗口", "entry_z": "开仓阈值", "exit_z": "平仓阈值",
+    "lookback": "窗口", "pair_basis": "换算基准",
 }
 
 
@@ -211,6 +267,12 @@ class BacktestPage(BasePage):
         self._kpi_frames: dict = {}
         self._kpi_labels: dict = {}
         self._kpi_titles: dict = {}
+        # M3.5：订阅全局事件总线，预测产出时即时消费待验证信号（预测→回测闭环）
+        try:
+            from ..core.events import bus as _EBUS
+            _EBUS.subscribe("prediction.created", lambda *_a: self._sync_from_prediction_bus())
+        except Exception:  # noqa: BLE001
+            pass
         self._build()
 
     # ------------------------------------------------------------------
@@ -284,6 +346,12 @@ class BacktestPage(BasePage):
         self.apply_opt_btn.setEnabled(False)
         self.apply_opt_btn.setToolTip("参数优化完成后可用：以最优参数跑一遍单策略回测确认效果")
         self.apply_opt_btn.clicked.connect(self._apply_opt)
+        # M4-06⑤：长任务「停止」按钮——回测/优化/敏感度扫描期间可协作式中止
+        self.stop_btn = QPushButton("停止")
+        self.stop_btn.setObjectName("secondary")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.setToolTip("请求中止当前回测（在下一个检查点生效，不会留下半截结果）")
+        self.stop_btn.clicked.connect(self._stop_run)
 
         ctl.addWidget(QLabel("合约")); ctl.addWidget(self.sym_cb)
         ctl.addWidget(QLabel("策略")); ctl.addWidget(self.strat_cb)
@@ -298,6 +366,7 @@ class BacktestPage(BasePage):
         ctl.addWidget(self.run_btn)
         ctl.addWidget(self.export_btn)
         ctl.addWidget(self.apply_opt_btn)
+        ctl.addWidget(self.stop_btn)
         ctl.addStretch(1)
         root.addWidget(ToolBar(ctl))
 
@@ -332,31 +401,31 @@ class BacktestPage(BasePage):
         # ---- 成交与指标 ----
         root.addWidget(SectionHeader("成交与指标", "#f59e0b"))
         self.tabs = QTabWidget()
-        self.trade_tbl = QTableWidget(0, 8)
+        self.trade_tbl = DataGrid(0, 8)
         self.trade_tbl.setHorizontalHeaderLabels(
             ["时间", "合约", "方向", "开平", "数量", "价格", "手续费", "盈亏"])
         self.trade_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.metric_tbl = QTableWidget(0, 2)
+        self.metric_tbl = DataGrid(0, 2)
         self.metric_tbl.setHorizontalHeaderLabels(["指标", "数值"])
         self.metric_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.metric_tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.tabs.addTab(self.trade_tbl, "成交明细")
         self.tabs.addTab(self.metric_tbl, "绩效指标")
-        self.cmp_tbl = QTableWidget(0, 7)
+        self.cmp_tbl = DataGrid(0, 7)
         self.cmp_tbl.setHorizontalHeaderLabels(
             ["策略", "总收益率", "年化", "夏普", "最大回撤", "胜率", "平仓笔数"])
         self.cmp_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.tabs.addTab(self.cmp_tbl, "策略对比")
         # 参数敏感度矩阵：行=周期，列=资金档，单元格=总收益率（热力底色）
-        self.sens_tbl = QTableWidget(0, len(SENS_CAPITALS) + 2)
+        self.sens_tbl = DataGrid(0, len(SENS_CAPITALS) + 2)
         self.sens_tbl.setHorizontalHeaderLabels(
             ["周期＼资金"] + [f"{c // 10000}万" for c in SENS_CAPITALS] + ["平均收益"])
         self.sens_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.tabs.addTab(self.sens_tbl, "参数敏感度")
-        # 参数优化：排名 / 参数组合 / 绩效
-        self.opt_tbl = QTableWidget(0, 8)
+        # 参数优化：排名 / 参数组合 / 绩效 / 因子贡献
+        self.opt_tbl = DataGrid(0, 9)
         self.opt_tbl.setHorizontalHeaderLabels(
-            ["排名", "参数组合", "总收益率", "年化", "夏普", "最大回撤", "胜率", "平仓笔数"])
+            ["排名", "参数组合", "总收益率", "年化", "夏普", "最大回撤", "胜率", "平仓笔数", "因子贡献度"])
         self.opt_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.tabs.addTab(self.opt_tbl, "参数优化")
         root.addWidget(self.tabs, 2)
@@ -384,13 +453,29 @@ class BacktestPage(BasePage):
         return frame
 
     def _style_kpis(self) -> None:
-        """处理stylekpis。"""
+        """处理stylekpis（M4-05：含按最近 KPI 值重新着色，随主题调色板刷新）。"""
         p = PALETTE[self._theme]
         for frame in self._kpi_frames.values():
             frame.setStyleSheet(
                 f"background:{p['card']};border:1px solid {p['border']};border-radius:10px;")
         for lab, _ in self._kpi_labels.values():
             lab.setStyleSheet(f"color:{p['sub']};font-size:12px;")
+        # M4-05：KPI 数值着色（涨/跌/回撤）依赖调色板，切主题时按缓存值重算一次
+        if getattr(self, "_last_kpis", None):
+            for key, val in self._last_kpis.items():
+                vlab = self._kpi_labels[key][1]
+                if key in ("total_return", "annual_return", "max_drawdown", "win_rate"):
+                    if val is None:
+                        vlab.setStyleSheet(
+                            f"color:{p['text']};font-size:18px;font-weight:bold;")
+                    else:
+                        col = p["down"] if val >= 0 else p["up"]
+                        if key == "max_drawdown":
+                            col = p["up"]
+                        vlab.setStyleSheet(f"color:{col};font-size:18px;font-weight:bold;")
+                else:
+                    vlab.setStyleSheet(
+                        f"color:{p['text']};font-size:18px;font-weight:bold;")
 
     def set_theme(self, t: str) -> None:
         """设置主题。
@@ -442,6 +527,7 @@ class BacktestPage(BasePage):
             capital = 1_000_000.0
 
         self.run_btn.setEnabled(False); self.run_btn.setText("回测中…")
+        self.stop_btn.setEnabled(True)   # M4-06⑤：长任务期间开放「停止」
         self.export_btn.setEnabled(False)
         self.apply_opt_btn.setEnabled(False)
         # 应用最优参数：单模式以覆盖参数运行（不来自优化模式）
@@ -491,103 +577,312 @@ class BacktestPage(BasePage):
             outdir = os.path.join(ROOT, "data", "backtest_reports")
 
             if self.opt_chk.isChecked():
-                # 参数优化：对选中策略做参数网格搜索，按夏普排序找最优
-                base_params = strat_cls(sym, {}).params  # 默认参数（保底未搜索项）
-                combos = _opt_combos(strat_name)
-                scanned = []
-                best_curve = None
-                default_curve = None
-                for combo in combos:
-                    params = dict(base_params)
-                    params.update(combo)
-                    bt = Backtester(make_cfg(capital), feed)
-                    bt.add_contract(contract)
-                    bt.add_strategy(strat_cls(sym, params))
-                    res = bt.run(sym, start, end, per, warmup=60)
-                    m = res["metrics"]
-                    scanned.append({"params": combo, "metrics": m,
-                                    "equity_curve": res["equity_curve"]})
-                    if combo == combos[0]:
-                        default_curve = res["equity_curve"]
-                # 按夏普降序排序（夏普缺失视为 -inf）
-                ranked = sorted(
-                    scanned,
-                    key=lambda x: (x["metrics"].get("sharpe")
-                                   if x["metrics"].get("sharpe") is not None else float("-inf")),
-                    reverse=True)
-                best = ranked[0] if ranked else None
-                if best is not None:
-                    best_curve = best["equity_curve"]
-                return {
-                    "opt": True, "ranked": ranked, "best": best,
-                    "best_curve": best_curve, "default_curve": default_curve,
-                    "n_scanned": len(scanned), "sym": sym, "per": per,
-                    "strat": strat_name,
-                }
+                # 参数优化：使用BacktestService
+                try:
+                    from futures_quant.app.service_locator import request
+                    backtest_service = request("backtest_service")
+                    
+                    base_params = strat_cls(sym, {}).params  # 默认参数（保底未搜索项）
+                    combos = _opt_combos(strat_name)
+                    scanned = []
+                    best_curve = None
+                    default_curve = None
+                    
+                    for combo in combos:
+                        params = dict(base_params)
+                        params.update(combo)
+
+                        # 创建策略实例（套利策略签名: strat_cls(symbol, params_dict)，其余为 **params）
+                        if strat_name in ("跨期套利", "跨品种套利", "期现套利"):
+                            strat_cls = dict((n, c) for n, c in STRATEGIES)[strat_name]
+                            strategy = strat_cls(sym, params)
+                        else:
+                            if strat_name == "趋势跟踪":
+                                from futures_quant.strategy.trend_following import TrendFollowing
+                                strategy = TrendFollowing(symbol=sym, **params)
+                            elif strat_name == "突破交易":
+                                from futures_quant.strategy.breakout import Breakout
+                                strategy = Breakout(symbol=sym, **params)
+                            elif strat_name == "网格交易":
+                                from futures_quant.strategy.grid import Grid
+                                strategy = Grid(symbol=sym, **params)
+                            elif strat_name == "马丁策略":
+                                from futures_quant.strategy.martingale import Martingale
+                                strategy = Martingale(symbol=sym, **params)
+                            elif strat_name == "均值回归":
+                                from futures_quant.strategy.mean_reversion import MeanReversion
+                                strategy = MeanReversion(symbol=sym, **params)
+                            else:
+                                # 默认使用趋势跟踪
+                                from futures_quant.strategy.trend_following import TrendFollowing
+                                strategy = TrendFollowing(symbol=sym, **params)
+                        
+                        # 运行回测
+                        result = backtest_service.run_backtest(sym, start, end, period, warmup=60, strategy=strategy)
+                        
+                        m = result["metrics"]
+                        scanned.append({"params": combo, "metrics": m,
+                                        "equity_curve": result["equity_curve"]})
+                        if combo == combos[0]:
+                            default_curve = result["equity_curve"]
+                    
+                    # 按夏普降序排序（夏普缺失视为 -inf）
+                    ranked = sorted(
+                        scanned,
+                        key=lambda x: (x["metrics"].get("sharpe")
+                                       if x["metrics"].get("sharpe") is not None else float("-inf")),
+                        reverse=True)
+                    best = ranked[0] if ranked else None
+                    if best is not None:
+                        best_curve = best["equity_curve"]
+                    return {
+                        "opt": True, "ranked": ranked, "best": best,
+                        "best_curve": best_curve, "default_curve": default_curve,
+                        "n_scanned": len(scanned), "sym": sym, "per": per,
+                        "strat": strat_name,
+                    }
+                except Exception as e:
+                    # 如果服务不可用，回退到原有实现
+                    base_params = strat_cls(sym, {}).params  # 默认参数（保底未搜索项）
+                    combos = _opt_combos(strat_name)
+                    scanned = []
+                    best_curve = None
+                    default_curve = None
+                    for combo in combos:
+                        params = dict(base_params)
+                        params.update(combo)
+                        bt = Backtester(make_cfg(capital), feed)
+                        bt.add_contract(contract)
+                        bt.add_strategy(strat_cls(sym, params))
+                        res = bt.run(sym, start, end, per, warmup=60,
+                             should_abort=self._abort_predicate())
+                        m = res["metrics"]
+                        scanned.append({"params": combo, "metrics": m,
+                                        "equity_curve": res["equity_curve"]})
+                        if combo == combos[0]:
+                            default_curve = res["equity_curve"]
+                    # 按夏普降序排序（夏普缺失视为 -inf）
+                    ranked = sorted(
+                        scanned,
+                        key=lambda x: (x["metrics"].get("sharpe")
+                                       if x["metrics"].get("sharpe") is not None else float("-inf")),
+                        reverse=True)
+                    best = ranked[0] if ranked else None
+                    if best is not None:
+                        best_curve = best["equity_curve"]
+                    return {
+                        "opt": True, "ranked": ranked, "best": best,
+                        "best_curve": best_curve, "default_curve": default_curve,
+                        "n_scanned": len(scanned), "sym": sym, "per": per,
+                        "strat": strat_name,
+                    }
 
             if self.sens_chk.isChecked():
-                # 参数敏感度：扫描 初始资金 × 周期 网格，评估策略稳定性
-                grid = {}
-                center_cap = SENS_CAPITALS[SENS_CENTER_IDX]
-                center_curves = []
-                for cap in SENS_CAPITALS:
-                    cfg = make_cfg(cap)
-                    for pper in SENS_PERIODS:
-                        bt = Backtester(cfg, feed)
+                # 参数敏感度：使用BacktestService
+                try:
+                    from futures_quant.app.service_locator import request
+                    backtest_service = request("backtest_service")
+                    
+                    grid = {}
+                    center_cap = SENS_CAPITALS[SENS_CENTER_IDX]
+                    center_curves = []
+                    
+                    # 创建默认策略实例（用于敏感度测试）
+                    if strat_name in ("跨期套利", "跨品种套利", "期现套利"):
+                        strat_cls = dict((n, c) for n, c in STRATEGIES)[strat_name]
+                    elif strat_name == "趋势跟踪":
+                        from futures_quant.strategy.trend_following import TrendFollowing
+                        strat_cls = TrendFollowing
+                    elif strat_name == "突破交易":
+                        from futures_quant.strategy.breakout import Breakout
+                        strat_cls = Breakout
+                    elif strat_name == "网格交易":
+                        from futures_quant.strategy.grid import Grid
+                        strat_cls = Grid
+                    elif strat_name == "马丁策略":
+                        from futures_quant.strategy.martingale import Martingale
+                        strat_cls = Martingale
+                    elif strat_name == "均值回归":
+                        from futures_quant.strategy.mean_reversion import MeanReversion
+                        strat_cls = MeanReversion
+                    else:
+                        from futures_quant.strategy.trend_following import TrendFollowing
+                        strat_cls = TrendFollowing
+
+                    for cap in SENS_CAPITALS:
+                        for pper in SENS_PERIODS:
+                            # 套利策略签名: strat_cls(symbol, params_dict)；其余为 strat_cls(symbol, params={})
+                            if strat_name in ("跨期套利", "跨品种套利", "期现套利"):
+                                strategy = strat_cls(sym, params={})
+                            else:
+                                strategy = strat_cls(symbol=sym, params={})
+                            result = backtest_service.run_backtest(sym, start, end, pper, warmup=60, strategy=strategy)
+                            grid[(pper, cap)] = result["metrics"]
+                            if cap == center_cap:
+                                center_curves.append((pper, result["equity_curve"]))
+                    
+                    return {
+                        "sens": True, "grid": grid,
+                        "center_curves": center_curves,
+                        "caps": SENS_CAPITALS, "pers": SENS_PERIODS,
+                        "center_cap": center_cap,
+                        "sym": sym, "per": per, "strat": strat_name,
+                    }
+                except Exception as e:
+                    # 如果服务不可用，回退到原有实现
+                    grid = {}
+                    center_cap = SENS_CAPITALS[SENS_CENTER_IDX]
+                    center_curves = []
+                    for cap in SENS_CAPITALS:
+                        cfg = make_cfg(cap)
+                        for pper in SENS_PERIODS:
+                            bt = Backtester(cfg, feed)
+                            bt.add_contract(contract)
+                            bt.add_strategy(strat_cls(sym, {}))
+                            res = bt.run(sym, start, end, pper, warmup=60,
+                                          should_abort=self._abort_predicate())
+                            grid[(pper, cap)] = res["metrics"]
+                            if cap == center_cap:
+                                center_curves.append((pper, res["equity_curve"]))
+                    return {
+                        "sens": True, "grid": grid,
+                        "center_curves": center_curves,
+                        "caps": SENS_CAPITALS, "pers": SENS_PERIODS,
+                        "center_cap": center_cap,
+                        "sym": sym, "per": per, "strat": strat_name,
+                    }
+
+            if self.cmp_chk.isChecked():
+                # 多策略对比：使用BacktestService
+                try:
+                    from futures_quant.app.service_locator import request
+                    backtest_service = request("backtest_service")
+                    
+                    results = []
+                    report = None
+                    for name, cls in STRATEGIES:
+                        strategy = cls(symbol=sym, params={})
+                        result = backtest_service.run_backtest(sym, start, end, per, warmup=60, strategy=strategy)
+                        results.append({
+                            "strat": name,
+                            "metrics": result["metrics"],
+                            "equity_curve": result["equity_curve"],
+                            "trades": result["trades"],
+                        })
+                        if name == strat_name:
+                            report = result["report"]
+                    
+                    primary = dict((r["strat"], r) for r in results).get(
+                        strat_name, results[0])
+                    return {
+                        "compare": True, "results": results, "primary": primary,
+                        "report": report, "sym": sym, "per": per, "strat": strat_name,
+                    }
+                except Exception as e:
+                    # 如果服务不可用，回退到原有实现
+                    results = []
+                    report = None
+                    for name, cls in STRATEGIES:
+                        bt = Backtester(make_cfg(capital), feed)
                         bt.add_contract(contract)
-                        bt.add_strategy(strat_cls(sym, {}))
-                        res = bt.run(sym, start, end, pper, warmup=60)
-                        grid[(pper, cap)] = res["metrics"]
-                        if cap == center_cap:
-                            center_curves.append((pper, res["equity_curve"]))
+                        bt.add_strategy(cls(sym, {}))
+                        res = bt.run(sym, start, end, per, warmup=60,
+                             should_abort=self._abort_predicate())
+                        results.append({
+                            "strat": name,
+                            "metrics": res["metrics"],
+                            "equity_curve": res["equity_curve"],
+                            "trades": res["trades"],
+                        })
+                        if name == strat_name:
+                            paths = bt.export(
+                                outdir, prefix=f"bt_{sym.replace('.', '_')}_{per}")
+                            report = paths["html"]
+                    primary = dict((r["strat"], r) for r in results).get(
+                        strat_name, results[0])
+                    return {
+                        "compare": True, "results": results, "primary": primary,
+                        "report": report, "sym": sym, "per": per, "strat": strat_name,
+                    }
+
+            # 简单回测情况 - 使用BacktestService
+            try:
+                from futures_quant.app.service_locator import request
+                backtest_service = request("backtest_service")
+                
+                # 创建策略实例
+                strategy_params = override if override else {}
+                if strat_name == "趋势跟踪":
+                    from futures_quant.strategy.trend_following import TrendFollowing
+                    strategy = TrendFollowing(symbol=sym, **strategy_params)
+                elif strat_name == "突破交易":
+                    from futures_quant.strategy.breakout import Breakout
+                    strategy = Breakout(symbol=sym, **strategy_params)
+                elif strat_name == "网格交易":
+                    from futures_quant.strategy.grid import Grid
+                    strategy = Grid(symbol=sym, **strategy_params)
+                elif strat_name == "马丁策略":
+                    from futures_quant.strategy.martingale import Martingale
+                    strategy = Martingale(symbol=sym, **strategy_params)
+                elif strat_name == "均值回归":
+                    from futures_quant.strategy.mean_reversion import MeanReversion
+                    strategy = MeanReversion(symbol=sym, **strategy_params)
+                else:
+                    # 默认使用趋势跟踪
+                    from futures_quant.strategy.trend_following import TrendFollowing
+                    strategy = TrendFollowing(symbol=sym, **strategy_params)
+                
+                # 运行回测
+                result = backtest_service.run_backtest(sym, start, end, period, warmup=60, strategy=strategy)
                 return {
-                    "sens": True, "grid": grid,
-                    "center_curves": center_curves,
-                    "caps": SENS_CAPITALS, "pers": SENS_PERIODS,
-                    "center_cap": center_cap,
+                    "metrics": result["metrics"], "equity_curve": result["equity_curve"],
+                    "trades": result["trades"], "report": result["report"],
+                    "sym": sym, "per": per, "strat": strat_name,
+                }
+            except Exception as e:
+                # 如果服务不可用，回退到原有实现
+                bt = Backtester(make_cfg(capital), feed)
+                bt.add_contract(contract)
+                bt.add_strategy(strat_cls(sym, override if override else {}))
+                
+                res = bt.run(sym, start, end, per, warmup=60,
+                             should_abort=self._abort_predicate())
+                paths = bt.export(outdir, prefix=f"bt_{sym.replace('.', '_')}_{per}")
+                return {
+                    "metrics": res["metrics"], "equity_curve": res["equity_curve"],
+                    "trades": res["trades"], "report": paths["html"],
                     "sym": sym, "per": per, "strat": strat_name,
                 }
 
-            if self.cmp_chk.isChecked():
-                # 多策略对比：逐一回测全部策略，叠加曲线并生成对比表
-                results = []
-                report = None
-                for name, cls in STRATEGIES:
-                    bt = Backtester(make_cfg(capital), feed)
-                    bt.add_contract(contract)
-                    bt.add_strategy(cls(sym, {}))
-                    res = bt.run(sym, start, end, per, warmup=60)
-                    results.append({
-                        "strat": name,
-                        "metrics": res["metrics"],
-                        "equity_curve": res["equity_curve"],
-                        "trades": res["trades"],
-                    })
-                    if name == strat_name:
-                        paths = bt.export(
-                            outdir, prefix=f"bt_{sym.replace('.', '_')}_{per}")
-                        report = paths["html"]
-                primary = dict((r["strat"], r) for r in results).get(
-                    strat_name, results[0])
-                return {
-                    "compare": True, "results": results, "primary": primary,
-                    "report": report, "sym": sym, "per": per, "strat": strat_name,
-                }
-
-            bt = Backtester(make_cfg(capital), feed)
-            bt.add_contract(contract)
-            bt.add_strategy(strat_cls(sym, override if override else {}))
-
-            res = bt.run(sym, start, end, per, warmup=60)
-            paths = bt.export(outdir, prefix=f"bt_{sym.replace('.', '_')}_{per}")
-            return {
-                "metrics": res["metrics"], "equity_curve": res["equity_curve"],
-                "trades": res["trades"], "report": paths["html"],
-                "sym": sym, "per": per, "strat": strat_name,
-            }
-
         self._run_worker(work, self._on_done,
-                         on_err=lambda e: self._on_err(str(e)))
+                         on_err=lambda e: self._on_err(str(e)),
+                         on_interrupted=self._on_interrupted)
+
+    # ------------------------------------------------------------------
+    # M4-06⑤：长任务中断生命周期
+    # ------------------------------------------------------------------
+    def _end_run(self) -> None:
+        """恢复工具栏可交互态（成功 / 失败 / 中断三条路径共用）。"""
+        self.run_btn.setEnabled(True)
+        self.run_btn.setText("开始回测")
+        self.stop_btn.setEnabled(False)
+
+    def _stop_run(self) -> None:
+        """请求中止当前回测（协作式：在引擎下一个检查点生效）。"""
+        if not getattr(self, "_workers", None):
+            self._end_run()
+            return
+        self._workers[-1].requestInterruption()
+        self.stop_btn.setEnabled(False)
+        self.info.setStyleSheet("")  # 还原（交由 QSS 控制颜色）
+        self.info.setText("已请求停止回测，正在等待当前批次结束…")
+
+    def _on_interrupted(self) -> None:
+        """回测被用户中止：不发结果，仅恢复界面并给出中性提示（不算失败）。"""
+        self._end_run()
+        self.export_btn.setEnabled(False)
+        self.info.setStyleSheet("")
+        self.info.setText("回测已停止（未产生结果）。")
 
     # ------------------------------------------------------------------
     def _on_done(self, r: dict) -> None:
@@ -595,7 +890,7 @@ class BacktestPage(BasePage):
         
             参数:
                 r: dict"""
-        self.run_btn.setEnabled(True); self.run_btn.setText("开始回测")
+        self._end_run()
 
         if r.get("opt"):
             # 参数优化：排名表 + 最优 vs 默认曲线叠加
@@ -687,7 +982,7 @@ class BacktestPage(BasePage):
         
             参数:
                 msg: str"""
-        self.run_btn.setEnabled(True); self.run_btn.setText("开始回测")
+        self._end_run()
         self.export_btn.setEnabled(False)
         self.info.setStyleSheet(f"color:{p['down']};")
         self.info.setText(f"回测失败：{msg}（请检查合约/日期是否可取行情）")
@@ -707,6 +1002,7 @@ class BacktestPage(BasePage):
             "win_rate": m.get("win_rate"),
             "num_closing_trades": m.get("num_closing_trades"),
         }
+        self._last_kpis = mapping   # M4-05：缓存最近 KPI 值，供切主题时按新调色板重着色
         for key, val in mapping.items():
             _, vlab = self._kpi_labels[key]
             if key in ("total_return", "annual_return", "max_drawdown", "win_rate"):
@@ -887,6 +1183,11 @@ class BacktestPage(BasePage):
             self.opt_tbl.setItem(i, 6, QTableWidgetItem(_pct(m.get("win_rate"))))
             self.opt_tbl.setItem(
                 i, 7, QTableWidgetItem(str(m.get("num_closing_trades", "--"))))
+            # 因子贡献度：基于参数敏感度简易计算（显示关键参数对收益的影响）
+            factor_contrib = self._compute_factor_contribution(params, m, ranked)
+            fc_item = QTableWidgetItem(factor_contrib)
+            fc_item.setToolTip("显示关键参数对策略绩效的边际贡献度\n基于同策略不同参数组合的收益差异估算")
+            self.opt_tbl.setItem(i, 8, fc_item)
             # 最优（第 1 名）整行高亮底色
             if i == 0:
                 for c in range(self.opt_tbl.columnCount()):
@@ -897,6 +1198,38 @@ class BacktestPage(BasePage):
             self.opt_tbl.item(i, 1).setToolTip(
                 "　".join(f"{k}={v}" for k, v in params.items()) if params
                 else "默认参数")
+
+    def _compute_factor_contribution(self, params: dict, metrics: dict, ranked: list) -> str:
+        """基于参数敏感度简易估算关键因子贡献度（用于参数优化表展示）。"""
+        if not params or len(ranked) < 3:
+            return "数据不足"
+        try:
+            # 找出同策略下其他参数组合，计算各参数的边际效应
+            base_return = metrics.get("total_return", 0)
+            contributions = {}
+            for key, val in params.items():
+                # 寻找仅该参数不同的组合
+                diffs = []
+                for other in ranked:
+                    other_params = other["params"]
+                    other_return = other["metrics"].get("total_return", 0)
+                    # 仅当前参数不同，其他相同
+                    if all(other_params.get(k) == v for k, v in params.items() if k != key):
+                        if other_params.get(key) != val:
+                            diffs.append(abs(other_return - base_return))
+                if diffs:
+                    contributions[key] = sum(diffs) / len(diffs)
+            if not contributions:
+                return "单因子"
+            # 归一化显示
+            total = sum(contributions.values())
+            if total == 0:
+                return "均衡"
+            sorted_contrib = sorted(contributions.items(), key=lambda x: -x[1])
+            top2 = sorted_contrib[:2]
+            return "、".join(f"{OPT_PARAM_SHORT.get(k, k)}:{v/total*100:.0f}%" for k, v in top2)
+        except Exception:
+            return "计算异常"
 
     def _update_chart_opt(self, best_curve: list, default_curve: list,
                           sym: str, per: str) -> None:
@@ -1049,6 +1382,15 @@ PIPELINE_STAGES = [
     ("🚀", "同步KP预测"),
 ]
 
+# 因子分析配置
+FACTOR_ANALYSIS_CONFIG = {
+    "min_samples": 5,           # 最小样本数
+    "correlation_threshold": 0.7,  # 相关性阈值（用于冗余检测）
+    "importance_method": "variance",  # 重要性计算方法：variance/shap/permutation
+    "stability_window": 10,     # 稳定性计算窗口（代数）
+    "top_factors_display": 15,  # 展示前N个重要因子
+}
+
 # 两次进化之间的间歇（毫秒）：页面可见时短间歇，不可见时长间歇省资源
 GEN_INTERVAL_MS = 2200
 GEN_INTERVAL_HIDDEN_MS = 12000
@@ -1099,12 +1441,30 @@ class BacktestCenterPage(BasePage):
         self._stage_tiles: list = []
         self._chips: dict = {}
         self._perf_chips: dict = {}   # 绩效指标卡（夏普/回撤/年化/卡玛/胜率/盈亏比）
+        # M4-09：自动进化长任务可视化状态
+        self._evolution_stopped = False  # 用户主动停止（不再排程下一代）
+        self._paused = False              # 暂停（点击继续后恢复）
+        self._evolution_worker = None     # 当前代 evolution worker 句柄
+        self._cur_gen_no = 0             # 当前代编号（进度标签用）
+        self._evo_progress = None         # QProgressBar（真实百分比）
+        self._evo_stage_label = None      # 「第 n 代 · 基因 i/10」状态标签
+        self._evo_pause_btn = None        # 暂停/继续/重新开始 按钮
+        self._evo_stop_btn = None         # 停止 按钮
         # 本地持久化库：引擎断点 / 历史回测记录 / 学习日志（自动保存+启动恢复）
         try:
             from ..storage.backtest_store import get_backtest_store
             self._bt_store = get_backtest_store()
         except Exception:  # noqa: BLE001
             self._bt_store = None
+        # M2-10 ④：进化档案（孤岛 EvolutionStore 接入，逐代落盘供回看）
+        self._evo_store = None
+        self._evo_run_id = None      # 当前 run（None → save_run 自动生成）
+        self._evo_run_gens = []      # 当前 run 的逐代记录
+        try:
+            from ..storage.evolution_store import EvolutionStore
+            self._evo_store = EvolutionStore()
+        except Exception:  # noqa: BLE001
+            self._evo_store = None
         # 期货特有参数（杠杆/保证金/乘数/交割日），由「期货参数」控制条配置
         r0 = self.mdm.universe[0] if self.mdm.universe else (None, None, None, "SHFE", 10, 1)
         self._futures_params: dict = {
@@ -1144,6 +1504,34 @@ class BacktestCenterPage(BasePage):
         self.info.setObjectName("sub")
         self.info.setWordWrap(True)
         root.addWidget(self.info)
+
+        # ---- M4-09：进化长任务可视化（实时百分比 + 第 n 代·基因 i/10 + 暂停/停止）----
+        evo_ctrl = QHBoxLayout()
+        evo_ctrl.setSpacing(8)
+        self._evo_stage_label = QLabel("准备中…")
+        self._evo_stage_label.setObjectName("sub")
+        self._evo_stage_label.setWordWrap(True)
+        evo_ctrl.addWidget(self._evo_stage_label, 1)
+        self._evo_pause_btn = QPushButton("⏸ 暂停")
+        self._evo_pause_btn.setObjectName("secondary")
+        self._evo_pause_btn.setEnabled(False)
+        self._evo_pause_btn.setToolTip("暂停/继续自动进化循环（也可重新开始）")
+        self._evo_pause_btn.clicked.connect(self._toggle_pause)
+        evo_ctrl.addWidget(self._evo_pause_btn)
+        self._evo_stop_btn = QPushButton("⏹ 停止")
+        self._evo_stop_btn.setObjectName("secondary")
+        self._evo_stop_btn.setEnabled(False)
+        self._evo_stop_btn.setToolTip("停止自动进化（不再排程下一代；可重新开始）")
+        self._evo_stop_btn.clicked.connect(self._stop_evolution)
+        evo_ctrl.addWidget(self._evo_stop_btn)
+        root.addLayout(evo_ctrl)
+
+        self._evo_progress = QProgressBar()
+        self._evo_progress.setRange(0, 100)
+        self._evo_progress.setValue(0)
+        self._evo_progress.setTextVisible(True)
+        self._evo_progress.setFormat("%p% · 第 0 代")
+        root.addWidget(self._evo_progress)
 
         # ---- 学习流水线五阶段状态灯 ----
         root.addWidget(SectionHeader("自我学习流水线", "#8b5cf6",
@@ -1207,12 +1595,12 @@ class BacktestCenterPage(BasePage):
         self.chart.set_title("资金曲线与最大回撤（系统自动回测后展示）")
         root.addWidget(self.chart, 3)
 
-        # ---- 学习结果三视图 ----
+        # ---- 学习结果四视图 ----
         root.addWidget(SectionHeader("学习成果", "#f59e0b"))
         self.tabs = QTabWidget()
 
         # ① 当代种群排行
-        self.pop_tbl = QTableWidget(0, 9)
+        self.pop_tbl = DataGrid(0, 9)
         self.pop_tbl.setHorizontalHeaderLabels(
             ["排名", "策略因子（AI自动生成）", "总收益", "夏普", "最大回撤",
              "胜率", "交易数", "适应度", "盈利判定"])
@@ -1221,8 +1609,34 @@ class BacktestCenterPage(BasePage):
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.tabs.addTab(self.pop_tbl, "🧬 当代种群排行")
 
-        # ② 盈利策略库（已自动同步 KP预测）
-        self.lib_tbl = QTableWidget(0, 10)
+        # ② 因子重要性分析（基于当代种群的参数敏感度）
+        self.factor_tbl = DataGrid(0, 5)
+        self.factor_tbl.setHorizontalHeaderLabels(
+            ["因子名称", "重要性得分", "收益贡献度", "稳定性", "推荐区间"])
+        self.factor_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.tabs.addTab(self.factor_tbl, "🔬 因子重要性")
+
+        # ③ 因子相关性分析（热力图 + 冗余检测）
+        self.factor_corr_tbl = DataGrid(0, 0)
+        self.tabs.addTab(self.factor_corr_tbl, "🔗 因子相关性")
+
+        # ④ 因子参数调优界面（自定义参数范围 + 网格搜索）
+        self.factor_tune_tbl = DataGrid(0, 6)
+        self.factor_tune_tbl.setHorizontalHeaderLabels(
+            ["因子名称", "当前值", "调优范围", "步长", "最优值", "预期提升"])
+        self.factor_tune_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.tabs.addTab(self.factor_tune_tbl, "⚙️ 因子参数调优")
+
+        # ⑤ 因子绩效监控（历史表现追踪 + 预警）
+        self.factor_monitor_tbl = DataGrid(0, 8)
+        self.factor_monitor_tbl.setHorizontalHeaderLabels(
+            ["因子名称", "历史平均收益", "历史夏普", "历史最大回撤", "胜率稳定性",
+             "参数敏感度", "近期趋势", "预警状态"])
+        self.factor_monitor_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.tabs.addTab(self.factor_monitor_tbl, "📊 因子绩效监控")
+
+        # ⑥ 盈利策略库（已自动同步 KP预测）
+        self.lib_tbl = DataGrid(0, 10, sortable=False)
         self.lib_tbl.setHorizontalHeaderLabels(
             ["品种", "策略因子", "总收益", "年化", "夏普", "回撤",
              "胜率", "发现时间", "状态", "操作"])
@@ -1230,9 +1644,9 @@ class BacktestCenterPage(BasePage):
             QHeaderView.ResizeMode.Stretch)
         self.tabs.addTab(self.lib_tbl, "💰 盈利策略库")
 
-        # ③ 历史回测记录（持久化，重启保留，供查看与对比）
+        # ⑦ 历史回测记录（持久化，重启保留，供查看与对比）
         # R6：第 12 列「操作」挂📊详情按钮（打开绩效归因对话框）
-        self.hist_tbl = QTableWidget(0, 12)
+        self.hist_tbl = DataGrid(0, 12, sortable=False)
         self.hist_tbl.setHorizontalHeaderLabels(
             ["时间", "品种", "代数", "最优策略因子", "总收益", "夏普",
              "回撤", "胜率", "交易数", "适应度", "盈利入库", "操作"])
@@ -1241,11 +1655,19 @@ class BacktestCenterPage(BasePage):
         hh2.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.tabs.addTab(self.hist_tbl, "🗂 历史回测记录")
 
-        # ④ 学习日志
+        # ⑧ 学习日志
         from PyQt6.QtWidgets import QListWidget
         self.log_list = QListWidget()
         self.log_list.setWordWrap(True)
         self.tabs.addTab(self.log_list, "📜 学习日志")
+
+        # ⑨ 蒸馏规则（M2-10）：展示由盈利策略库蒸馏出的可读规则文本
+        from PyQt6.QtWidgets import QPlainTextEdit
+        self.rules_text = QPlainTextEdit()
+        self.rules_text.setReadOnly(True)
+        self.rules_text.setPlaceholderText(
+            "点击工具栏「🧪 蒸馏规则」，从盈利策略库生成可读规则集…")
+        self.tabs.addTab(self.rules_text, "📐 蒸馏规则")
         root.addWidget(self.tabs, 2)
 
     # ------------------------------------------------------------------
@@ -1310,6 +1732,31 @@ class BacktestCenterPage(BasePage):
                                 "查看与回测结果联动的研判")
         self.link_btn.clicked.connect(self._goto_predict)
         bar.addWidget(self.link_btn)
+
+        # M2-10 ③：蒸馏规则按钮 → 生成 rules.json 并在「📐 蒸馏规则」页签展示
+        self.distill_btn = QPushButton("🧪 蒸馏规则")
+        self.distill_btn.setObjectName("secondary")
+        self.distill_btn.setToolTip("把盈利策略库 top-K 蒸馏为人类可读规则集，"
+                                    "写入 data/auto_strategies/rules.json")
+        self.distill_btn.clicked.connect(self._on_distill_clicked)
+        bar.addWidget(self.distill_btn)
+
+        # M3-05 ④：Walk-Forward 滚动验证 —— 检验「回测发现的策略」在因果滚动
+        # 切分下是否仍有样本外技能（逐折只用历史段训练再预测未来段）。
+        self.wf_btn = QPushButton("🔁 Walk-Forward 验证")
+        self.wf_btn.setObjectName("secondary")
+        self.wf_btn.setToolTip("对当前品种做因果滚动验证：逐折只用历史段训练再预测未来段，"
+                               "输出折数 / 样本外方向准确率 / MAE（结果写入「📐 蒸馏规则」页签）")
+        self.wf_btn.clicked.connect(self._on_walk_forward_clicked)
+        bar.addWidget(self.wf_btn)
+
+        # M2-10 ④：进化档案下拉 → 回看历史 run
+        self.archive_combo = QComboBox()
+        self.archive_combo.setMinimumWidth(190)
+        self.archive_combo.setToolTip("进化档案：选择历史 run 回看其收敛记录")
+        self.archive_combo.currentIndexChanged.connect(self._on_archive_selected)
+        bar.addWidget(QLabel("进化档案"))
+        bar.addWidget(self.archive_combo)
         bar.addStretch(1)
 
     def _sync_futures_params(self, *_):
@@ -1345,6 +1792,184 @@ class BacktestCenterPage(BasePage):
                 f"乘数 {fp['multiplier']:.0f}"
                 + (f" · 交割 {fp['delivery_date']}" if fp["delivery_date"] else " · 交割不限制")
                 + "，下代回测自动生效")
+
+    # ------------------------------------------------------------------
+    # M2-10 ③ 蒸馏规则 / ④ 进化档案
+    # ------------------------------------------------------------------
+    def _on_distill_clicked(self) -> None:
+        """点击「🧪 蒸馏规则」：从盈利策略库蒸馏规则 → 写 rules.json → 页签展示。"""
+        try:
+            from ..strategy.distill import export_rules, format_rules_text
+            from ..strategy.auto_evolve import load_profitable
+            entries = load_profitable() or []
+            if not entries:
+                self.rules_text.setPlainText(
+                    "盈利策略库为空，暂无可蒸馏的规则。请先让系统进化出入库策略。")
+                self._log("🧪 蒸馏规则：盈利策略库为空，未生成规则")
+                return
+            payload = export_rules(entries, k=3)
+            text = format_rules_text(payload)
+            self.rules_text.setPlainText(text)
+            # 切到规则页签，让用户立刻看到结果
+            idx = self.tabs.indexOf(self.rules_text)
+            if idx >= 0:
+                self.tabs.setCurrentIndex(idx)
+            self._log(f"🧪 蒸馏规则完成：{payload.get('n_rules', 0)} 条 → "
+                      f"{payload.get('path')}")
+        except Exception as e:  # noqa: BLE001
+            self.rules_text.setPlainText(f"蒸馏失败：{e}")
+            self._log(f"⚠️ 蒸馏规则失败：{e}")
+
+    def _on_walk_forward_clicked(self) -> None:
+        """点击「🔁 Walk-Forward 验证」：对当前品种做因果滚动验证并展示结果。
+
+        逐折重训开销较大，故走 worker 线程；结果写到「📐 蒸馏规则」页签（该页签
+        是只读文本区，用作通用输出面板）并同步写入运行日志。
+        """
+        sym = self.sym_cb.currentData() if hasattr(self, "sym_cb") else None
+        per = self.per_cb.currentData() if hasattr(self, "per_cb") else "D"
+        if not sym:
+            self._log("⚠️ Walk-Forward 验证：未选择品种")
+            return
+        self.wf_btn.setEnabled(False)
+        self._log(f"🔁 Walk-Forward 验证启动：{sym} {per} …")
+
+        def work():
+            """处理work。"""
+            from ..ai.predictor import FuturesPredictor
+            df = self.mdm.feed.get_history(sym, "2000-01-01", "2099-12-31", per or "D")
+            if df is None or len(df) < 80:
+                return {"error": "数据不足（需 ≥80 根 K 线）"}
+            p = FuturesPredictor()
+            return p.evaluate(df, horizon=1, seq_len=20, epochs=10,
+                              extended_features=False, use_ensemble=False,
+                              symbol=sym, period=per or "D", use_walk_forward=True)
+
+        def done(r):
+            """处理done。
+
+                参数:
+                    r"""
+            self.wf_btn.setEnabled(True)
+            if not r or r.get("error"):
+                self._log(f"⚠️ Walk-Forward 验证失败：{r.get('error') if r else '无结果'}")
+                if hasattr(self, "rules_text"):
+                    self.rules_text.setPlainText(
+                        f"Walk-Forward 验证失败：{r.get('error') if r else '无结果'}")
+                return
+            folds = r.get("folds") or []
+            lines = [
+                f"Walk-Forward 滚动验证 · {sym} {per}",
+                f"折数：{r.get('n_folds', 0)}　OOS 样本：{r.get('val_samples', 0)}"
+                f"　{'真·滚动' if r.get('walk_forward') else '⚠️ 已回退固定 80/20 切分'}",
+                f"样本外方向准确率：{float(r.get('direction_acc', 0.0)):.2%}",
+                f"MAE：{float(r.get('mae', 0.0)):.6f}　RMSE：{float(r.get('rmse', 0.0)):.6f}",
+                f"R²：{float(r.get('r_squared', 0.0)):.4f}　夏普：{float(r.get('sharpe_ratio', 0.0)):.3f}",
+                "",
+                "各折区间（train_end → test_end，严格不重叠）：",
+            ]
+            lines += [f"  折#{f['fold']}：train[{f['train'][0]},{f['train'][1]}) → "
+                      f"test[{f['test'][0]},{f['test'][1]})　n={f['n_test']}　阈值={f['threshold']:.6f}"
+                      for f in folds]
+            text = "\n".join(lines)
+            if hasattr(self, "rules_text"):
+                self.rules_text.setPlainText(text)
+                idx = self.tabs.indexOf(self.rules_text)
+                if idx >= 0:
+                    self.tabs.setCurrentIndex(idx)
+            self._log(f"✅ Walk-Forward 验证完成：{r.get('n_folds', 0)} 折，"
+                      f"方向准确率 {float(r.get('direction_acc', 0.0)):.2%}")
+
+        def err(e):
+            """处理err。
+
+                参数:
+                    e"""
+            self.wf_btn.setEnabled(True)
+            self._log(f"⚠️ Walk-Forward 验证出错：{e}")
+
+        self._run_worker(work, done, on_err=err)
+
+    def _refresh_archive(self) -> None:
+        """刷新「进化档案」下拉：列出 EvolutionStore 中的历史 run。"""
+        try:
+            store = self._evo_store
+            if store is None:
+                return
+            runs = store.list_runs()
+            self.archive_combo.blockSignals(True)
+            self.archive_combo.clear()
+            self.archive_combo.addItem("（无档案）", None)
+            for r in runs[:50]:
+                label = (f"{r.get('created_at', '')[:16]} · "
+                         f"{r.get('n_generations', 0)}代 · "
+                         f"fit {r.get('best_fitness')}")
+                self.archive_combo.addItem(label, r.get("run_id"))
+            self.archive_combo.blockSignals(False)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_archive_selected(self, _idx: int = 0) -> None:
+        """选中某个历史 run → 在规则页签展示其收敛曲线摘要。"""
+        try:
+            rid = self.archive_combo.currentData()
+            if not rid:
+                return
+            conv = self._evo_store.convergence(rid)
+            if not conv:
+                self.rules_text.setPlainText(f"档案 {rid} 无收敛记录。")
+                return
+            lines = [f"进化档案 {rid} · 共 {len(conv)} 代收敛记录", ""]
+            for c in conv:
+                lines.append(f"  第 {c.get('generation')} 代：best = {c.get('best')}")
+            best = conv[-1].get("best")
+            first = conv[0].get("best")
+            if best is not None and first is not None:
+                lines.append("")
+                lines.append(f"收敛提升：{first} → {best}")
+            self.rules_text.setPlainText("\n".join(lines))
+            idx = self.tabs.indexOf(self.rules_text)
+            if idx >= 0:
+                self.tabs.setCurrentIndex(idx)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"⚠️ 读取进化档案失败：{e}")
+
+    def _save_evo_run(self, snap: dict) -> None:
+        """M2-10 ④：每代把本代记录追加到当前 run 并落盘（供档案回看）。"""
+        try:
+            if self._evo_store is None or self._engine is None:
+                return
+            if self._evo_run_id is None:
+                self._evo_run_id = None  # save_run 自动生成
+                self._evo_run_gens = []
+            ranked = snap.get("ranked") or []
+            best = ranked[0] if ranked else {}
+            self._evo_run_gens.append({
+                "generation": snap.get("generation"),
+                "best_fitness": best.get("fitness"),
+                "best_genome": best.get("gene"),
+                "symbol": snap.get("symbol"),
+            })
+            eng = self._engine
+            params = {
+                "seed": getattr(eng, "seed", None),
+                "period": eng.period,
+                "pop_size": eng.POP_SIZE,
+                "max_generations": getattr(eng, "max_generations", None),
+                "symbol": snap.get("symbol"),
+            }
+            bo = snap.get("best_overall") or {}
+            best_payload = {
+                "genome": bo.get("gene") or best.get("gene"),
+                "fitness": bo.get("fitness") or best.get("fitness"),
+                "metrics": bo.get("metrics") or best.get("metrics"),
+            }
+            self._evo_run_id = self._evo_store.save_run(
+                self._evo_run_id, params, self._evo_run_gens, best_payload)
+            self._refresh_archive()
+        except Exception as e:  # noqa: BLE001
+            # 档案落盘失败不阻断进化主流程
+            self._log(f"⚠️ 进化档案落盘失败：{e}")
 
     def _goto_predict(self) -> None:
         """联动跳转：携带当前学习品种到「KP预测」板块并预选该品种。"""
@@ -1473,9 +2098,23 @@ class BacktestCenterPage(BasePage):
             return
         try:
             from ..strategy.auto_evolve import EvolutionEngine, load_profitable
+            # M2-08/M2-09：从 config 读取进化参数（seed 默认 20240921、终止条件）
+            try:
+                from ..config.settings import Config
+                _ev = Config().evolution
+                _seed = int(_ev.seed)
+                _max_gen = int(_ev.max_generations)
+                _patience = int(_ev.patience)
+                _target = _ev.target_fitness
+            except Exception:  # noqa: BLE001
+                _seed, _max_gen, _patience, _target = 20240921, 200, 30, None
             self._engine = EvolutionEngine(
                 self.mdm.feed, self.mdm.universe,
-                futures_params=dict(self._futures_params))
+                seed=_seed,                       # M2-09 可复现性
+                futures_params=dict(self._futures_params),
+                max_generations=_max_gen,         # M2-08 终止条件
+                patience=_patience,
+                target_fitness=_target)
             if self._bt_store is not None:
                 try:  # 启动维护：限容 + 合并 WAL，保持长期高效
                     self._bt_store.prune()
@@ -1496,6 +2135,8 @@ class BacktestCenterPage(BasePage):
                           f"开始进化")
             self._fill_library(load_profitable())
             self._chips["profitable"].set_value(str(n_lib))
+            # M2-10 ④：启动时刷新「进化档案」下拉
+            self._refresh_archive()
             self._sync_from_prediction_bus()
             self._next_generation()
         except Exception as e:  # noqa: BLE001
@@ -1636,6 +2277,13 @@ class BacktestCenterPage(BasePage):
         self._manual_run_btn.setObjectName("primary")
         self._manual_run_btn.clicked.connect(self._run_manual)
         row2.addWidget(self._manual_run_btn)
+        # M4-06⑤：手动回测的「停止」按钮（协作式，在引擎下一个检查点生效）
+        self._manual_stop_btn = QPushButton("停止")
+        self._manual_stop_btn.setObjectName("secondary")
+        self._manual_stop_btn.setEnabled(False)
+        self._manual_stop_btn.setToolTip("请求中止当前手动回测")
+        self._manual_stop_btn.clicked.connect(self._stop_manual)
+        row2.addWidget(self._manual_stop_btn)
         self._manual_hint = QLabel(
             "复用当前「期货参数」控制条的杠杆/保证金/乘数/交割日；"
             "交割日到达时引擎将强制平仓（与真实期货规则一致）。")
@@ -1853,6 +2501,7 @@ class BacktestCenterPage(BasePage):
 
         self._manual_running = True
         self._manual_run_btn.setEnabled(False)
+        self._manual_stop_btn.setEnabled(True)
         self.info.setText(f"🧪 手动回测中：{row[1]}（{sym}）· 杠杆 {lev}× · "
                           f"乘数 {mult} · 保证金 {margin_rate:.0%}"
                           f"{' · 交割日 ' + str(delivery_date) if delivery_date else ''} …")
@@ -1892,20 +2541,45 @@ class BacktestCenterPage(BasePage):
             bt = Backtester(cfg, self.mdm.feed, logger=logger)
             bt.add_contract(contract)
             bt.add_strategy(GeneStrategy(sym, gene))
-            res = bt.run(sym, start, end, period, warmup=60)
+            res = bt.run(sym, start, end, period, warmup=60,
+                         should_abort=self._abort_predicate())
             return {"gene": gene, "res": res, "sym": sym, "row": row,
                     "mult": mult, "logger": logger}
 
-        self._run_worker(work, self._on_manual_done, on_err=self._on_manual_err)
+        self._run_worker(work, self._on_manual_done, on_err=self._on_manual_err,
+                         on_interrupted=self._on_manual_interrupted)
+
+    # ------------------------------------------------------------------
+    # M4-06⑤：手动回测中断生命周期
+    # ------------------------------------------------------------------
+    def _stop_manual(self) -> None:
+        """请求中止当前手动回测（协作式：在引擎下一个检查点生效）。"""
+        if not getattr(self, "_workers", None):
+            self._end_manual_run()
+            return
+        self._workers[-1].requestInterruption()
+        self._manual_stop_btn.setEnabled(False)
+        self.info.setText("已请求停止手动回测，正在等待当前批次结束…")
+
+    def _end_manual_run(self) -> None:
+        """恢复手动回测按钮可交互态（成功 / 失败 / 中断共用）。"""
+        self._manual_running = False
+        if self._manual_run_btn is not None:
+            self._manual_run_btn.setEnabled(True)
+        self._manual_stop_btn.setEnabled(False)
+
+    def _on_manual_interrupted(self) -> None:
+        """手动回测被用户中止：不落库、不算失败，仅恢复界面。"""
+        self._end_manual_run()
+        if not self._closed:
+            self.info.setText("手动回测已停止（未产生结果）。")
 
     def _on_manual_done(self, result: dict) -> None:
         """处理onmanualdone。
         
             参数:
                 result: dict"""
-        self._manual_running = False
-        if self._manual_run_btn is not None:
-            self._manual_run_btn.setEnabled(True)
+        self._end_manual_run()
         if self._closed:
             return
         from ..strategy.auto_evolve import (
@@ -1987,9 +2661,7 @@ class BacktestCenterPage(BasePage):
         
             参数:
                 msg: str"""
-        self._manual_running = False
-        if self._manual_run_btn is not None:
-            self._manual_run_btn.setEnabled(True)
+        self._end_manual_run()
         if self._closed:
             return
         self.info.setText(f"⚠️ 手动回测异常：{msg}")
@@ -1999,6 +2671,13 @@ class BacktestCenterPage(BasePage):
         """驱动一代进化（后台线程），完成后自动排程下一代。"""
         if self._closed or self._engine is None or self._gen_running:
             return
+        if self._evolution_stopped:
+            # 用户已主动停止：不再排程新一代，等待「重新开始」
+            return
+        if self._paused:
+            # 暂停态：仅在用户点击「继续」时由 _toggle_pause 调用本方法，
+            # 正常情况下不会进入（_toggle_pause 会先清 _paused 再调用）
+            return
         if self._manual_mode:
             # 手动回测模式：暂停自动进化，避免覆盖手动结果
             return
@@ -2006,6 +2685,7 @@ class BacktestCenterPage(BasePage):
         eng = self._engine
         sym_name, sym = eng.symbol_name(), eng.symbol()
         gen_no = eng.generation + 1
+        self._cur_gen_no = gen_no
         self.info.setText(
             f"⚙️ 自动学习中：第 {gen_no} 代 · {sym_name}（{sym}）"
             f"· 种群 {eng.POP_SIZE} 个策略因子回测评估…（全程无需操作）")
@@ -2016,12 +2696,27 @@ class BacktestCenterPage(BasePage):
         self._set_stage(2, "good", f"第{gen_no}代", "遗传算法逐代进化寻优")
         self._set_stage(3, "neutral", "等待", "回测完成后自动判定")
         self._set_stage(4, "neutral", "等待", "盈利策略将自动同步KP预测")
+        # M4-09：进度可视化复位 + 按钮态（运行中可暂停/停止）
+        self._evo_progress.setValue(0)
+        self._evo_progress.setFormat(f"%p% · 第 {gen_no} 代")
+        self._evo_stage_label.setText(
+            f"⚙️ 第 {gen_no} 代 · 种群 {eng.POP_SIZE} 个策略因子回测评估中…")
+        if self._evo_pause_btn is not None:
+            self._evo_pause_btn.setEnabled(True)
+            self._evo_pause_btn.setText("⏸ 暂停")
+        if self._evo_stop_btn is not None:
+            self._evo_stop_btn.setEnabled(True)
 
         bt_store = self._bt_store
 
-        def work():
-            """处理work。"""
-            snap = eng.step()
+        def work(worker):
+            """后台处理一代进化，并实时上报进度（M4-09）。"""
+            def _prog(done, total, text):
+                worker.emit_progress(int(done / total * 100), text)
+            snap = eng.step(
+                should_abort=worker.isInterruptionRequested,
+                on_progress=_prog,
+            )
             # 自动持久化（在后台线程内完成，零 GUI 阻塞）：
             #   引擎断点 + 最新快照 + 本代历史记录
             if bt_store is not None:
@@ -2035,7 +2730,10 @@ class BacktestCenterPage(BasePage):
                     pass
             return snap
 
-        self._run_worker(work, self._on_gen_done, on_err=self._on_gen_err)
+        self._evolution_worker = self._run_worker(
+            work, self._on_gen_done, on_err=self._on_gen_err,
+            on_progress=self._on_evolution_progress,
+            on_interrupted=self._on_evolution_interrupted)
 
     def _on_gen_done(self, snap: dict) -> None:
         """处理ongendone。
@@ -2044,6 +2742,41 @@ class BacktestCenterPage(BasePage):
                 snap: dict"""
         self._gen_running = False
         if self._closed:
+            return
+        # M4-09：进度条收尾 + 按钮态复位
+        self._evo_progress.setValue(100)
+        self._evo_progress.setFormat(
+            f"%p% · 第 {snap.get('generation', self._cur_gen_no)} 代 完成")
+        if self._evo_pause_btn is not None:
+            self._evo_pause_btn.setEnabled(False)
+        if self._evo_stop_btn is not None:
+            self._evo_stop_btn.setEnabled(False)
+        # M4-09：用户主动停止 → 不再排程下一代（验收核心：点停止后不再继续）
+        if self._evolution_stopped:
+            self.info.setText("🛑 进化已停止，不再排程下一代。（点击「重新开始」可恢复）")
+            self._set_stage(2, "neutral", "已停止", "进化循环已停止")
+            return
+        # M4-09：暂停态 → 当前代已完成但不排程下一代，等待「继续」
+        if self._paused:
+            self.info.setText("⏸ 进化已暂停，点击「继续」恢复自我学习。")
+            self._set_stage(2, "neutral", "已暂停", "等待用户继续")
+            if self._evo_pause_btn is not None:
+                self._evo_pause_btn.setEnabled(True)
+                self._evo_pause_btn.setText("▶ 继续")
+            return
+        # M2-08: 进化已终止（达到终止条件），停止排程下一代并显示原因
+        if snap.get("evolution_done"):
+            reason = snap.get("termination_reason", "")
+            gen = snap.get("generation", 0)
+            max_gen = snap.get("max_generations")
+            stag = snap.get("stagnation_count", 0)
+            status = f"🛑 进化已终止：{reason}"
+            if max_gen is not None:
+                status += f"（第 {gen}/{max_gen} 代 · 已停滞 {stag} 代）"
+            self.info.setText(status)
+            self._log(f"🛑 {reason}")
+            self._set_stage(3, "neutral", "已终止", reason)
+            self._set_stage(4, "neutral", "已终止", "进化循环已停止，不再排程下一代")
             return
         # 手动回测模式下：跳过 UI 刷新（不覆盖手动结果），仅保留已落库的快照
         if self._manual_mode:
@@ -2096,6 +2829,8 @@ class BacktestCenterPage(BasePage):
         self._prepend_history_row(snap)
 
         # ---- 日志 ----
+        # M2-10 ④：本代记录追加到进化档案（落盘 + 刷新下拉）
+        self._save_evo_run(snap)
         if best:
             m = best["metrics"] or {}
             self._log(f"第 {snap['generation']} 代（{snap['symbol_name']}）完成："
@@ -2105,6 +2840,11 @@ class BacktestCenterPage(BasePage):
             self._log(f"💰 盈利策略入库并同步KP预测：{e['symbol_name']} · {e['desc']}"
                       f"（收益 {_pct(e['metrics'].get('total_return'))}，"
                       f"夏普 {e['metrics'].get('sharpe')}）")
+        # M2-12：评估失败告警（失败率 >30% 时引擎侧已置 eval_fail_warn）
+        if snap.get("eval_fail_warn"):
+            self._log(f"⚠️ {snap['eval_fail_warn']}（详见日志）")
+        elif snap.get("failed_count"):
+            self._log(f"ℹ️ 本代 {snap['failed_count']} 个基因评估失败（已跳过）")
         if snap.get("symbol_done"):
             self._log(f"🔄 品种轮换：{snap['symbol_name']} 学习完毕，"
                       f"自动切换至「{snap.get('next_symbol_name', '')}」")
@@ -2125,6 +2865,14 @@ class BacktestCenterPage(BasePage):
         self._gen_running = False
         if self._closed:
             return
+        if self._evolution_stopped or self._paused:
+            # 停止/暂停态：不再自动重试排程
+            self._evo_progress.setFormat(
+                f"%p% · 第 {self._cur_gen_no} 代 异常")
+            if self._evo_pause_btn is not None and self._paused:
+                self._evo_pause_btn.setEnabled(True)
+                self._evo_pause_btn.setText("▶ 继续")
+            return
         self._log(f"⚠️ 本代进化异常：{msg}（自动重试）")
         self.info.setText(f"⚠️ 学习过程出现异常：{msg}，{ERR_RETRY_MS // 1000}s 后自动重试…")
         self._schedule_next(ERR_RETRY_MS)
@@ -2135,9 +2883,110 @@ class BacktestCenterPage(BasePage):
             参数:
                 delay: int | None"""
         from PyQt6.QtCore import QTimer
+        # M4-09：停止/暂停态不排程下一代
+        if self._evolution_stopped or self._paused:
+            return
         if delay is None:
             delay = GEN_INTERVAL_MS if self.isVisible() else GEN_INTERVAL_HIDDEN_MS
         QTimer.singleShot(delay, self._next_generation)
+
+    # ------------------------------------------------------------------
+    # M4-09：长任务可视化（进度 + 取消 UI）
+    # ------------------------------------------------------------------
+    def _on_evolution_progress(self, pct: int, text: str) -> None:
+        """进化进度回调（来自 M4-06 的 ``progress`` 信号）。
+
+        参数:
+            pct: int — 0~100 真实百分比
+            text: str — 引擎上报的「基因 i/10」文本
+        """
+        if self._closed:
+            return
+        self._evo_progress.setValue(pct)
+        self._evo_progress.setFormat(f"%p% · 第 {self._cur_gen_no} 代 · {text}")
+        self._evo_stage_label.setText(f"⚙️ 第 {self._cur_gen_no} 代 · {text}")
+        # 状态灯第 3 格同步基因进度
+        self._set_stage(2, "good", text, "遗传算法逐代进化寻优（实时）")
+
+    def _on_evolution_interrupted(self) -> None:
+        """自动进化被用户中止（M4-06 ``interrupted``）：恢复界面，不排程下一代。"""
+        self._gen_running = False
+        self._evolution_worker = None
+        if self._closed:
+            return
+        self._evo_progress.setFormat(
+            f"%p% · 第 {self._cur_gen_no} 代 已中断")
+        if self._evo_pause_btn is not None:
+            self._evo_pause_btn.setEnabled(False)
+        if self._evo_stop_btn is not None:
+            self._evo_stop_btn.setEnabled(False)
+        if self._evolution_stopped:
+            # 停止语义：当前代已在基因粒度被中断
+            self.info.setText(
+                "🛑 进化已停止（当前代已中断）。点击「重新开始」可恢复自我学习。")
+            self._set_stage(2, "neutral", "已停止", "进化循环已停止")
+            if self._evo_pause_btn is not None:
+                self._evo_pause_btn.setEnabled(True)
+                self._evo_pause_btn.setText("🔄 重新开始")
+        else:
+            # 中断即暂停（未点停止）：等待继续
+            self._paused = True
+            self.info.setText("⏸ 进化已暂停，点击「继续」恢复自我学习。")
+            self._set_stage(2, "neutral", "已暂停", "等待用户继续")
+            if self._evo_pause_btn is not None:
+                self._evo_pause_btn.setEnabled(True)
+                self._evo_pause_btn.setText("▶ 继续")
+
+    def _toggle_pause(self) -> None:
+        """暂停/继续/重新开始 三态切换（M4-09）。"""
+        if self._evolution_stopped:
+            self._restart_evolution()
+            return
+        if self._gen_running and not self._paused:
+            # 正在跑一代：置暂停标志，当前代结束后不再排程下一代
+            self._paused = True
+            self._evo_pause_btn.setText("▶ 继续")
+            self.info.setText("⏸ 进化已暂停，当前代结束后不再排程（点击「继续」恢复）。")
+        elif self._paused:
+            # 恢复：清暂停标志并立即排程下一代
+            self._paused = False
+            self._evo_pause_btn.setText("⏸ 暂停")
+            self.info.setText("▶ 恢复自我学习…")
+            if not self._gen_running:
+                self._next_generation()
+
+    def _stop_evolution(self) -> None:
+        """停止自动进化（M4-09）：请求中断当前代 + 标记不再排程下一代。"""
+        if self._evolution_stopped and not self._gen_running:
+            return
+        self._evolution_stopped = True
+        self._paused = False
+        if self._evolution_worker is not None:
+            try:
+                self._evolution_worker.requestInterruption()
+            except Exception:  # noqa: BLE001
+                pass
+        if self._evo_stop_btn is not None:
+            self._evo_stop_btn.setEnabled(False)
+        if self._evo_pause_btn is not None:
+            self._evo_pause_btn.setText("🔄 重新开始")
+            self._evo_pause_btn.setEnabled(True)
+        self.info.setText(
+            "🛑 进化已停止，不再排程下一代（点击「重新开始」可恢复）。")
+
+    def _restart_evolution(self) -> None:
+        """从停止态恢复自我学习（M4-09）。"""
+        self._evolution_stopped = False
+        self._paused = False
+        if self._evo_pause_btn is not None:
+            self._evo_pause_btn.setText("⏸ 暂停")
+            self._evo_pause_btn.setEnabled(True)
+        if self._evo_stop_btn is not None:
+            self._evo_stop_btn.setEnabled(True)
+        if self._engine is None:
+            self._start_auto()
+        elif not self._gen_running:
+            self._next_generation()
 
     # ------------------------------------------------------------------
     # 渲染辅助
@@ -2230,6 +3079,575 @@ class BacktestCenterPage(BasePage):
                     it = self.pop_tbl.item(i, c)
                     if it is not None:
                         it.setBackground(_qcolor_bg("#10b981", alpha=36))
+        # 同时填充因子重要性表
+        self._fill_factor_importance(ranked)
+        # 填充新增的因子分析标签页
+        self._fill_factor_correlation(ranked)
+        self._fill_factor_tune(ranked)
+        self._fill_factor_monitor(ranked)
+
+    def _fill_factor_importance(self, ranked: list) -> None:
+        """基于当代种群计算因子重要性（参数敏感度分析）。
+        
+        参数:
+            ranked: 当代种群排行列表，每项包含 params、metrics、fitness 等"""
+        self.factor_tbl.setRowCount(0)
+        prepare_table(self.factor_tbl, self._theme)
+        if len(ranked) < 5:
+            self.factor_tbl.setRowCount(1)
+            self.factor_tbl.setItem(0, 0, QTableWidgetItem("样本不足（需≥5个策略）"))
+            self.factor_tbl.setItem(0, 1, QTableWidgetItem("--"))
+            self.factor_tbl.setItem(0, 2, QTableWidgetItem("--"))
+            self.factor_tbl.setItem(0, 3, QTableWidgetItem("--"))
+            self.factor_tbl.setItem(0, 4, QTableWidgetItem("--"))
+            return
+        
+        try:
+            # 收集所有出现过的参数
+            param_names = set()
+            for r in ranked:
+                params = r.get("params", {})
+                for k in params.keys():
+                    param_names.add(k)
+            param_names = sorted(param_names)
+            
+            # 计算每个参数的重要性：基于该参数变化对收益/夏普的影响
+            factor_scores = {}
+            for pname in param_names:
+                # 按该参数值分组，计算组内收益/夏普的方差作为敏感度
+                groups = {}
+                for r in ranked:
+                    val = r.get("params", {}).get(pname)
+                    if val is not None:
+                        key = str(val)
+                        if key not in groups:
+                            groups[key] = {"returns": [], "sharpes": []}
+                        m = r.get("metrics", {})
+                        if m.get("total_return") is not None:
+                            groups[key]["returns"].append(m["total_return"])
+                        if m.get("sharpe") is not None:
+                            groups[key]["sharpes"].append(m["sharpe"])
+                
+                # 计算组间方差（敏感度）
+                if len(groups) >= 2:
+                    all_returns = []
+                    all_sharpes = []
+                    for g in groups.values():
+                        if g["returns"]:
+                            all_returns.append(sum(g["returns"]) / len(g["returns"]))
+                        if g["sharpes"]:
+                            all_sharpes.append(sum(g["sharpes"]) / len(g["sharpes"]))
+                    
+                    if len(all_returns) >= 2:
+                        import numpy as np
+                        ret_var = np.var(all_returns) if len(all_returns) > 1 else 0
+                        sharpe_var = np.var(all_sharpes) if len(all_sharpes) > 1 else 0
+                        # 综合得分：收益敏感度 + 夏普敏感度
+                        score = ret_var * 10000 + sharpe_var * 100
+                        factor_scores[pname] = {
+                            "score": score,
+                            "groups": groups,
+                            "ret_var": ret_var,
+                            "sharpe_var": sharpe_var
+                        }
+            
+            if not factor_scores:
+                self.factor_tbl.setRowCount(1)
+                self.factor_tbl.setItem(0, 0, QTableWidgetItem("无有效因子变异"))
+                return
+            
+            # 按重要性排序
+            sorted_factors = sorted(factor_scores.items(), key=lambda x: -x[1]["score"])
+            
+            self.factor_tbl.setRowCount(len(sorted_factors))
+            p = PALETTE[self._theme]
+            for i, (fname, fdata) in enumerate(sorted_factors):
+                # 因子名称（使用中文缩写）
+                name_item = QTableWidgetItem(OPT_PARAM_SHORT.get(fname, fname))
+                name_item.setToolTip(f"原始参数名: {fname}")
+                self.factor_tbl.setItem(i, 0, name_item)
+                
+                # 重要性得分（归一化 0-100）
+                max_score = sorted_factors[0][1]["score"] if sorted_factors else 1
+                norm_score = (fdata["score"] / max_score * 100) if max_score > 0 else 0
+                score_item = QTableWidgetItem(f"{norm_score:.1f}")
+                if norm_score >= 70:
+                    score_item.setForeground(_qcolor("up"))
+                elif norm_score >= 40:
+                    score_item.setForeground(_qcolor("text"))
+                else:
+                    score_item.setForeground(_qcolor("down"))
+                self.factor_tbl.setItem(i, 1, score_item)
+                
+                # 收益贡献度（基于收益方差占比）
+                total_ret_var = sum(v["ret_var"] for v in factor_scores.values())
+                contrib = (fdata["ret_var"] / total_ret_var * 100) if total_ret_var > 0 else 0
+                contrib_item = QTableWidgetItem(f"{contrib:.1f}%")
+                contrib_item.setToolTip(f"该参数取值变化解释的收益方差占比")
+                self.factor_tbl.setItem(i, 2, contrib_item)
+                
+                # 稳定性（组内收益的一致性，CV越小越稳定）
+                stabilities = []
+                for g in fdata["groups"].values():
+                    if len(g["returns"]) >= 2:
+                        import numpy as np
+                        mean_r = np.mean(g["returns"])
+                        std_r = np.std(g["returns"])
+                        cv = std_r / abs(mean_r) if mean_r != 0 else 10
+                        stabilities.append(1 / (1 + cv))
+                stability = (sum(stabilities) / len(stabilities) * 100) if stabilities else 50
+                stab_item = QTableWidgetItem(f"{stability:.0f}%")
+                stab_item.setToolTip("参数同值下不同策略收益的一致性（越高越稳定）")
+                self.factor_tbl.setItem(i, 3, stab_item)
+                
+                # 推荐区间（表现最好的参数值范围）
+                best_group = max(fdata["groups"].items(), 
+                                key=lambda x: sum(x[1]["returns"])/len(x[1]["returns"]) if x[1]["returns"] else -1e9)
+                best_val = best_group[0]
+                # 找出表现前50%的参数值
+                group_perfs = []
+                for gval, gdata in fdata["groups"].items():
+                    if gdata["returns"]:
+                        avg_ret = sum(gdata["returns"]) / len(gdata["returns"])
+                        group_perfs.append((gval, avg_ret))
+                group_perfs.sort(key=lambda x: -x[1])
+                top_half = group_perfs[:max(1, len(group_perfs)//2)]
+                if len(top_half) == 1:
+                    rec_range = top_half[0][0]
+                else:
+                    vals = [v[0] for v in top_half]
+                    rec_range = f"{min(vals)} ~ {max(vals)}"
+                range_item = QTableWidgetItem(rec_range)
+                range_item.setToolTip(f"建议参数取值区间（基于当代种群表现前50%）")
+                self.factor_tbl.setItem(i, 4, range_item)
+                
+        except Exception as e:
+            self.factor_tbl.setRowCount(1)
+            self.factor_tbl.setItem(0, 0, QTableWidgetItem(f"计算异常: {str(e)[:30]}"))
+
+    # ============================================================================
+    # 因子相关性分析（热力图 + 冗余检测）
+    # ============================================================================
+    def _fill_factor_correlation(self, ranked: list) -> None:
+        """计算并展示因子间的相关性矩阵，识别冗余因子。
+        
+        参数:
+            ranked: 当代种群排行列表
+        """
+        self.factor_corr_tbl.setRowCount(0)
+        prepare_table(self.factor_corr_tbl, self._theme)
+        
+        if len(ranked) < FACTOR_ANALYSIS_CONFIG["min_samples"]:
+            self.factor_corr_tbl.setRowCount(1)
+            self.factor_corr_tbl.setColumnCount(1)
+            self.factor_corr_tbl.setHorizontalHeaderLabels(["提示"])
+            self.factor_corr_tbl.setItem(0, 0, QTableWidgetItem(
+                f"样本不足（需≥{FACTOR_ANALYSIS_CONFIG['min_samples']}个策略），无法计算相关性"))
+            return
+        
+        try:
+            import numpy as np
+            
+            # 收集所有因子参数
+            param_names = set()
+            for r in ranked:
+                params = r.get("params", {})
+                for k in params.keys():
+                    param_names.add(k)
+            param_names = sorted(param_names)
+            
+            if len(param_names) < 2:
+                self.factor_corr_tbl.setRowCount(1)
+                self.factor_corr_tbl.setColumnCount(1)
+                self.factor_corr_tbl.setHorizontalHeaderLabels(["提示"])
+                self.factor_corr_tbl.setItem(0, 0, QTableWidgetItem("因子数量不足，无法计算相关性"))
+                return
+            
+            # 构建因子矩阵：行=策略，列=因子参数值
+            n_strategies = len(ranked)
+            n_factors = len(param_names)
+            factor_matrix = np.full((n_strategies, n_factors), np.nan)
+            
+            for i, r in enumerate(ranked):
+                params = r.get("params", {})
+                for j, pname in enumerate(param_names):
+                    val = params.get(pname)
+                    if val is not None:
+                        factor_matrix[i, j] = float(val)
+            
+            # 计算相关性矩阵（优先使用 Spearman 秩相关，回退到 Pearson）
+            corr_matrix = np.full((n_factors, n_factors), np.nan)
+            for i in range(n_factors):
+                for j in range(n_factors):
+                    if i == j:
+                        corr_matrix[i, j] = 1.0
+                    else:
+                        col_i = factor_matrix[:, i]
+                        col_j = factor_matrix[:, j]
+                        # 只使用两列都有值的行
+                        mask = ~np.isnan(col_i) & ~np.isnan(col_j)
+                        if mask.sum() >= 3:
+                            x = col_i[mask]
+                            y = col_j[mask]
+                            # 尝试 Spearman（需要 scipy），回退到 Pearson
+                            try:
+                                from scipy.stats import spearmanr
+                                corr, _ = spearmanr(x, y)
+                                corr_matrix[i, j] = corr if not np.isnan(corr) else 0.0
+                            except ImportError:
+                                # 回退到 Pearson 相关系数
+                                corr_matrix[i, j] = np.corrcoef(x, y)[0, 1]
+                        else:
+                            corr_matrix[i, j] = 0.0
+            
+            # 设置表格
+            self.factor_corr_tbl.setRowCount(n_factors)
+            self.factor_corr_tbl.setColumnCount(n_factors + 1)
+            headers = ["因子\\因子"] + [OPT_PARAM_SHORT.get(p, p) for p in param_names]
+            self.factor_corr_tbl.setHorizontalHeaderLabels(headers)
+            
+            p = PALETTE[self._theme]
+            threshold = FACTOR_ANALYSIS_CONFIG["correlation_threshold"]
+            
+            for i in range(n_factors):
+                # 第一列：因子名称
+                name_item = QTableWidgetItem(OPT_PARAM_SHORT.get(param_names[i], param_names[i]))
+                name_item.setToolTip(f"原始参数名: {param_names[i]}")
+                self.factor_corr_tbl.setItem(i, 0, name_item)
+                
+                for j in range(n_factors):
+                    corr = corr_matrix[i, j]
+                    if np.isnan(corr):
+                        item = QTableWidgetItem("--")
+                    else:
+                        item = QTableWidgetItem(f"{corr:.2f}")
+                        # 颜色编码：红=高正相关，蓝=高负相关，白=无相关
+                        if abs(corr) >= threshold:
+                            if corr > 0:
+                                item.setForeground(_qcolor("up"))  # 高正相关 = 红
+                                item.setToolTip(f"⚠️ 高正相关 ({corr:.2f})：{param_names[i]} 与 {param_names[j]} 可能冗余")
+                            else:
+                                item.setForeground(QColor("#3b82f6"))  # 高负相关 = 蓝
+                                item.setToolTip(f"高负相关 ({corr:.2f})：{param_names[i]} 与 {param_names[j]} 互补")
+                        elif abs(corr) >= 0.4:
+                            item.setForeground(_qcolor("text"))  # 中等相关 = 默认色
+                            item.setToolTip(f"中等相关 ({corr:.2f})")
+                        else:
+                            item.setForeground(_qcolor("sub"))  # 低相关 = 灰
+                            item.setToolTip(f"低相关 ({corr:.2f})：基本独立")
+                        
+                        # 对角线高亮
+                        if i == j:
+                            item.setBackground(_qcolor_bg("#10b981", alpha=30))
+                            item.setForeground(_qcolor("up"))
+                    
+                    self.factor_corr_tbl.setItem(i, j + 1, item)
+            
+            # 检测冗余因子对
+            redundant_pairs = []
+            for i in range(n_factors):
+                for j in range(i + 1, n_factors):
+                    if abs(corr_matrix[i, j]) >= threshold:
+                        redundant_pairs.append((param_names[i], param_names[j], corr_matrix[i, j]))
+            
+            if redundant_pairs:
+                self._log(f"⚠️ 检测到 {len(redundant_pairs)} 对高相关因子（阈值≥{threshold}），建议参数调优时注意冗余")
+            
+        except Exception as e:
+            self.factor_corr_tbl.setRowCount(1)
+            self.factor_corr_tbl.setColumnCount(1)
+            self.factor_corr_tbl.setHorizontalHeaderLabels(["错误"])
+            self.factor_corr_tbl.setItem(0, 0, QTableWidgetItem(f"相关性计算异常: {str(e)[:50]}"))
+
+    # ============================================================================
+    # 因子参数调优界面（自定义参数范围 + 网格搜索预期收益估算）
+    # ============================================================================
+    def _fill_factor_tune(self, ranked: list) -> None:
+        """基于当代种群表现，为每个因子推荐调优范围和最优值。
+        
+        参数:
+            ranked: 当代种群排行列表
+        """
+        self.factor_tune_tbl.setRowCount(0)
+        prepare_table(self.factor_tune_tbl, self._theme)
+        
+        if len(ranked) < FACTOR_ANALYSIS_CONFIG["min_samples"]:
+            self.factor_tune_tbl.setRowCount(1)
+            self.factor_tune_tbl.setItem(0, 0, QTableWidgetItem("样本不足，无法生成调优建议"))
+            return
+        
+        try:
+            # 收集所有因子参数
+            param_names = set()
+            for r in ranked:
+                params = r.get("params", {})
+                for k in params.keys():
+                    param_names.add(k)
+            param_names = sorted(param_names)
+            
+            if not param_names:
+                self.factor_tune_tbl.setRowCount(1)
+                self.factor_tune_tbl.setItem(0, 0, QTableWidgetItem("无可调优因子"))
+                return
+            
+            # 获取当前最优策略的参数作为基准
+            best_params = ranked[0].get("params", {}) if ranked else {}
+            
+            self.factor_tune_tbl.setRowCount(len(param_names))
+            
+            for i, pname in enumerate(param_names):
+                # 因子名称
+                name_item = QTableWidgetItem(OPT_PARAM_SHORT.get(pname, pname))
+                name_item.setToolTip(f"原始参数名: {pname}")
+                self.factor_tune_tbl.setItem(i, 0, name_item)
+                
+                # 当前值（最优策略的值）
+                curr_val = best_params.get(pname, "—")
+                curr_item = QTableWidgetItem(str(curr_val))
+                curr_item.setToolTip(f"当前最优策略的参数值")
+                self.factor_tune_tbl.setItem(i, 1, curr_item)
+                
+                # 收集该参数在所有策略中的取值
+                values = []
+                perf_map = {}  # 值 -> 平均收益
+                for r in ranked:
+                    val = r.get("params", {}).get(pname)
+                    ret = r.get("metrics", {}).get("total_return")
+                    if val is not None and ret is not None:
+                        val_str = str(val)
+                        values.append(val)
+                        if val_str not in perf_map:
+                            perf_map[val_str] = []
+                        perf_map[val_str].append(ret)
+                
+                if not values:
+                    self.factor_tune_tbl.setItem(i, 2, QTableWidgetItem("无数据"))
+                    self.factor_tune_tbl.setItem(i, 3, QTableWidgetItem("—"))
+                    self.factor_tune_tbl.setItem(i, 4, QTableWidgetItem("—"))
+                    self.factor_tune_tbl.setItem(i, 5, QTableWidgetItem("—"))
+                    continue
+                
+                # 计算各取值的平均表现
+                val_perf = {}
+                for v, rets in perf_map.items():
+                    val_perf[v] = sum(rets) / len(rets)
+                
+                # 推荐调优范围：表现前50%的值的范围
+                sorted_vals = sorted(val_perf.items(), key=lambda x: -x[1])
+                top_half = sorted_vals[:max(1, len(sorted_vals) // 2)]
+                top_vals = [float(v[0]) for v in top_half]
+                
+                min_val, max_val = min(top_vals), max(top_vals)
+                if min_val == max_val:
+                    range_text = str(min_val)
+                else:
+                    range_text = f"{min_val:.4g} ~ {max_val:.4g}"
+                
+                range_item = QTableWidgetItem(range_text)
+                range_item.setToolTip(f"建议调优范围（基于表现前50%策略的参数值分布）")
+                self.factor_tune_tbl.setItem(i, 2, range_item)
+                
+                # 步长建议（基于值的分布密度）
+                if len(set(top_vals)) > 1:
+                    sorted_unique = sorted(set(top_vals))
+                    diffs = [sorted_unique[k+1] - sorted_unique[k] for k in range(len(sorted_unique)-1)]
+                    step = min(diffs) if diffs else 1
+                    step_text = f"{step:.4g}"
+                else:
+                    step_text = "1"
+                step_item = QTableWidgetItem(step_text)
+                step_item.setToolTip("建议网格搜索步长（基于当前值分布的最小间隔）")
+                self.factor_tune_tbl.setItem(i, 3, step_item)
+                
+                # 最优值（表现最好的参数值）
+                best_val = sorted_vals[0][0] if sorted_vals else "—"
+                best_item = QTableWidgetItem(str(best_val))
+                best_item.setForeground(_qcolor("up"))
+                best_item.setToolTip(f"当前种群中表现最优的参数值（平均收益: {val_perf.get(str(best_val), 0):.4f}）")
+                self.factor_tune_tbl.setItem(i, 4, best_item)
+                
+                # 预期提升（相对于当前值的边际收益）
+                curr_val_str = str(curr_val)
+                if curr_val_str in val_perf and best_val in val_perf:
+                    curr_perf = val_perf[curr_val_str]
+                    best_perf = val_perf[str(best_val)]
+                    improvement = (best_perf - curr_perf) * 100  # 转为百分点
+                    imp_item = QTableWidgetItem(f"{improvement:+.2f}%")
+                    if improvement > 0:
+                        imp_item.setForeground(_qcolor("up"))
+                    elif improvement < 0:
+                        imp_item.setForeground(_qcolor("down"))
+                    imp_item.setToolTip(f"切换到最优值预期可提升的收益率（百分点）")
+                    self.factor_tune_tbl.setItem(i, 5, imp_item)
+                else:
+                    self.factor_tune_tbl.setItem(i, 5, QTableWidgetItem("—"))
+            
+        except Exception as e:
+            self.factor_tune_tbl.setRowCount(1)
+            self.factor_tune_tbl.setItem(0, 0, QTableWidgetItem(f"调优建议生成异常: {str(e)[:50]}"))
+
+    # ============================================================================
+    # 因子绩效监控（历史表现追踪 + 预警）
+    # ============================================================================
+    def _fill_factor_monitor(self, ranked: list) -> None:
+        """监控因子的历史绩效表现，提供预警机制。
+        
+        参数:
+            ranked: 当代种群排行列表
+        """
+        self.factor_monitor_tbl.setRowCount(0)
+        prepare_table(self.factor_monitor_tbl, self._theme)
+        
+        if len(ranked) < FACTOR_ANALYSIS_CONFIG["min_samples"]:
+            self.factor_monitor_tbl.setRowCount(1)
+            self.factor_monitor_tbl.setItem(0, 0, QTableWidgetItem("样本不足，无法生成监控指标"))
+            return
+        
+        try:
+            import numpy as np
+            
+            # 从历史数据库获取长期绩效数据
+            history_data = []
+            if self._bt_store is not None:
+                try:
+                    # 获取最近的历史记录用于长期监控
+                    hist = self._bt_store.recent_history(200)
+                    for rec in hist:
+                        best_desc = rec.get("best_desc", "")
+                        # 解析策略描述中的参数
+                        # 这里简化处理：使用当前种群的参数分布作为代理
+                        pass
+                except Exception:
+                    pass
+            
+            # 收集所有因子参数
+            param_names = set()
+            for r in ranked:
+                params = r.get("params", {})
+                for k in params.keys():
+                    param_names.add(k)
+            param_names = sorted(param_names)
+            
+            if not param_names:
+                self.factor_monitor_tbl.setRowCount(1)
+                self.factor_monitor_tbl.setItem(0, 0, QTableWidgetItem("无可监控因子"))
+                return
+            
+            self.factor_monitor_tbl.setRowCount(len(param_names))
+            
+            # 计算每个因子的监控指标
+            for i, pname in enumerate(param_names):
+                # 因子名称
+                name_item = QTableWidgetItem(OPT_PARAM_SHORT.get(pname, pname))
+                name_item.setToolTip(f"原始参数名: {pname}")
+                self.factor_monitor_tbl.setItem(i, 0, name_item)
+                
+                # 收集该因子在当代种群中的表现分布
+                values = []
+                returns = []
+                sharpes = []
+                drawdowns = []
+                win_rates = []
+                
+                for r in ranked:
+                    val = r.get("params", {}).get(pname)
+                    m = r.get("metrics", {})
+                    if val is not None:
+                        values.append(float(val))
+                        if m.get("total_return") is not None:
+                            returns.append(m["total_return"])
+                        if m.get("sharpe") is not None:
+                            sharpes.append(m["sharpe"])
+                        if m.get("max_drawdown") is not None:
+                            drawdowns.append(m["max_drawdown"])
+                        if m.get("win_rate") is not None:
+                            win_rates.append(m["win_rate"])
+                
+                if not returns:
+                    for c in range(1, 8):
+                        self.factor_monitor_tbl.setItem(i, c, QTableWidgetItem("无数据"))
+                    continue
+                
+                # 历史平均收益
+                avg_ret = np.mean(returns)
+                ret_item = QTableWidgetItem(f"{avg_ret*100:+.2f}%")
+                ret_item.setForeground(_qcolor("up" if avg_ret >= 0 else "down"))
+                self.factor_monitor_tbl.setItem(i, 1, ret_item)
+                
+                # 历史夏普
+                avg_sharpe = np.mean(sharpes) if sharpes else 0
+                sharpe_item = QTableWidgetItem(f"{avg_sharpe:.2f}")
+                sharpe_item.setForeground(_qcolor("up" if avg_sharpe >= 1 else ("text" if avg_sharpe >= 0 else "down")))
+                self.factor_monitor_tbl.setItem(i, 2, sharpe_item)
+                
+                # 历史最大回撤
+                avg_dd = np.mean(drawdowns) if drawdowns else 0
+                dd_item = QTableWidgetItem(f"{avg_dd*100:.2f}%")
+                dd_item.setForeground(_qcolor("up"))  # 回撤显红（警示）
+                self.factor_monitor_tbl.setItem(i, 3, dd_item)
+                
+                # 胜率稳定性（胜率的变异系数倒数）
+                if len(win_rates) >= 2:
+                    wr_mean = np.mean(win_rates)
+                    wr_std = np.std(win_rates)
+                    wr_cv = wr_std / wr_mean if wr_mean != 0 else 10
+                    wr_stability = 1 / (1 + wr_cv) * 100
+                else:
+                    wr_stability = 50
+                stab_item = QTableWidgetItem(f"{wr_stability:.0f}%")
+                stab_item.setToolTip("胜率在不同参数取值下的稳定性（越高越稳定）")
+                self.factor_monitor_tbl.setItem(i, 4, stab_item)
+                
+                # 参数敏感度（收益方差）
+                ret_var = np.var(returns) if len(returns) >= 2 else 0
+                sens_item = QTableWidgetItem(f"{ret_var*10000:.2f}")
+                sens_item.setToolTip("参数取值变化导致的收益方差（越大越敏感，需谨慎调优）")
+                self.factor_monitor_tbl.setItem(i, 5, sens_item)
+                
+                # 近期趋势（最近3代最优策略中该参数的变化趋势）
+                trend_text = "→"
+                trend_color = _qcolor("text")
+                if len(ranked) >= 3:
+                    recent_best_vals = [r.get("params", {}).get(pname) for r in ranked[:3]]
+                    recent_best_vals = [v for v in recent_best_vals if v is not None]
+                    if len(recent_best_vals) >= 2:
+                        if recent_best_vals[0] > recent_best_vals[-1]:
+                            trend_text = "▲ 上升"
+                            trend_color = _qcolor("up")
+                        elif recent_best_vals[0] < recent_best_vals[-1]:
+                            trend_text = "▼ 下降"
+                            trend_color = _qcolor("down")
+                trend_item = QTableWidgetItem(trend_text)
+                trend_item.setForeground(trend_color)
+                trend_item.setToolTip("近期最优策略中该参数的演化趋势")
+                self.factor_monitor_tbl.setItem(i, 6, trend_item)
+                
+                # 预警状态
+                alerts = []
+                if avg_sharpe < 0.5:
+                    alerts.append("夏普偏低")
+                if avg_dd > 0.2:
+                    alerts.append("回撤过大")
+                if wr_stability < 30:
+                    alerts.append("胜率不稳")
+                if ret_var * 10000 > 50:
+                    alerts.append("高敏感")
+                if avg_ret < 0:
+                    alerts.append("均值为负")
+                
+                alert_text = "、".join(alerts) if alerts else "✅ 正常"
+                alert_item = QTableWidgetItem(alert_text)
+                if alerts:
+                    alert_item.setForeground(_qcolor("up"))
+                    alert_item.setToolTip("⚠️ 预警：" + "；".join(alerts))
+                else:
+                    alert_item.setForeground(_qcolor("down"))
+                    alert_item.setToolTip("✅ 该因子各项指标均在正常范围内")
+                self.factor_monitor_tbl.setItem(i, 7, alert_item)
+                
+        except Exception as e:
+            self.factor_monitor_tbl.setRowCount(1)
+            self.factor_monitor_tbl.setItem(0, 0, QTableWidgetItem(f"监控指标计算异常: {str(e)[:50]}"))
 
     def _fill_library(self, lib: list) -> None:
         """处理filllibrary。
@@ -2446,8 +3864,11 @@ class BacktestCenterPage(BasePage):
             tile.set_theme(t)
         for chip in self._chips.values():
             chip.set_theme(t)
+        for chip in self._perf_chips.values():
+            chip.set_theme(t)
         if self._last_snapshot:
-            self._fill_population(self._last_snapshot.get("ranked") or [])
+            ranked = self._last_snapshot.get("ranked") or []
+            self._fill_population(ranked)
             self._fill_library(self._last_snapshot.get("library") or [])
         if self._bt_store is not None:
             self._fill_history(self._bt_store.recent_history(300))

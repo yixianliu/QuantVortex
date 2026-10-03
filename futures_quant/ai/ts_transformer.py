@@ -4,8 +4,12 @@ M5.4 TS-Transformer（可选 torch）：多头自注意力 + 位置编码 + 时�
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from typing import Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 try:
     import torch
@@ -33,9 +37,16 @@ class PositionalEncoding(nn.Module if TORCH_AVAILABLE else object):
             self.max_len = max_len
             self.pe = np.zeros((max_len, d_model))
             position = np.arange(0, max_len, dtype=np.float32).reshape(-1, 1)
-            div_term = np.exp(np.arange(0, d_model, 2).astype(np.float32) * (-np.log(10000.0) / d_model))
-            self.pe[:, 0::2] = np.sin(position * div_term)
-            self.pe[:, 1::2] = np.cos(position * div_term)
+            # M3-06：`arange(0, d_model, 2)` 的长度在 **d_model 为奇数**时是
+            # ceil(d/2)，而 `pe[:, 1::2]` 只有 floor(d/2) 列 → 广播直接崩
+            # （如 feature_size=5 时 TSWrapper 构造即 ValueError）。
+            # 按偶/奇位各自的列数分别取用 div_term。
+            k_even = (d_model + 1) // 2
+            k_odd = d_model // 2
+            div_term = np.exp(np.arange(0, k_even, dtype=np.float32)
+                              * (-np.log(10000.0) / d_model))
+            self.pe[:, 0::2] = np.sin(position * div_term[:k_even])
+            self.pe[:, 1::2] = np.cos(position * div_term[:k_odd])
             self.pe = self.pe[np.newaxis, ...]  # (1, max_len, d_model)
 
     def forward(self, x):
@@ -116,6 +127,10 @@ class TSWrapper:
     ):
         self.feature_size = feature_size
         self.seq_len = seq_len
+        # M3-06：原实现漏掉 `self.epochs` / `self.lr`，而 fit() 里直接用 self.epochs
+        # → 装了 torch 反而必抛 AttributeError（无 torch 时因提前 return 从未暴露）。
+        self.epochs = int(epochs)
+        self.lr = float(lr)
         if TORCH_AVAILABLE:
             self.device = device if device is not None else ('cuda' if torch.cuda.is_available() else 'cpu')
             self.model = TSTransformer(
@@ -139,15 +154,24 @@ class TSWrapper:
             )
             self.optimizer = None
             self.criterion = None
+            self.available = False
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         """训练模型。
         X shape: (n_samples, seq_len, feature_size)
         y shape: (n_samples,)
+
+        M3-06：无 torch 时**明确标不可用**（`available=False` + 日志），而不是
+        静默「什么都不做」—— 旧行为会让下游拿到一个恒返回 0 的模型，
+        在多模型对比里伪装成一个「MAE 看似正常」的成员。
         """
         if not TORCH_AVAILABLE:
-            # 如果没有 torch，我们什么也不做，只是保持模型为零
-            return
+            self.available = False
+            logger.warning(
+                "TS-Transformer 不可用：未安装 torch。该模型为占位实现，"
+                "predict() 恒返回 0，不应参与模型对比。")
+            return self
+        self.available = True
         self.model.train()
         for epoch in range(self.epochs):
             perm = np.random.permutation(len(X))

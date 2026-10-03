@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import time
 from bisect import bisect_right
 from typing import Optional
 
@@ -45,10 +46,15 @@ from .widgets import (
     PageHeader, ToolBar, PALETTE, THEME, prepare_table, color_pnl,
     ConfidenceBar, StatCard, Badge, pal,
 )
+from .states import DataGrid   # M4-08：统一表格能力（排序 / 右键菜单 / 列显隐 / 空态）
 
 # 校准区间「低置信」阈值：与 predict_ops_page.LOW_CONF_BAND_WIDTH 保持一致
 # （该档概率历史校准样本稀疏 → 研判可信度下降，AI 方向标注「置信偏低」）。
 LOW_CONF_BAND_WIDTH = 0.25
+
+# AI 方向预测缓存（进程内，TTL 10 秒）
+_AI_CACHE = {}
+_AI_CACHE_TTL = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +120,7 @@ def _screen(mdm, store=None):
                      fund=fund, vr=vr, oi=oi)
             # AI 方向概率因子（快速岭回归，进程内廉价；异常时回退中性 0.5）
             try:
-                pu, ai_exp, ai_conf = _ai_full_predict(df)
+                pu, ai_exp, ai_conf = _ai_full_predict(df, symbol=sym, period="D")
                 r["pu"] = pu
                 r["ai_exp"] = ai_exp
                 r["ai_conf"] = ai_conf
@@ -326,32 +332,63 @@ def _ai_p_up(df) -> float:
     """
     try:
         pr = FuturesPredictor()
-        pr.fit(df, seq_len=20, epochs=15, force_ridge=True)
+        pr.fit(df, seq_len=20, epochs=5, force_ridge=True)
         res = pr.predict(df, horizon=5)
         return float(np.clip(res.get("p_up", 0.5), 0.01, 0.99))
     except Exception:
         return 0.5
 
 
-def _ai_full_predict(df) -> tuple:
+def _ai_full_predict(df, symbol: str = "UNKNOWN", period: str = "1m") -> tuple:
     """完整 KP预测，返回 (p_up, expected_return, confidence)。
     
     用于选品页面展示 AI 预期收益和置信度，与预测页联动。
     """
+    # 构造缓存键：使用数据形状和最后一个索引时间戳（如果可用）
+    try:
+        if len(df) > 0:
+            last_idx = df.index[-1]
+            # 尝试获取时间戳值（纳秒以来的整数）或浮点数
+            if hasattr(last_idx, 'value'):
+                last_ts = last_idx.value
+            else:
+                last_ts = float(last_idx)
+        else:
+            last_ts = 0
+        key = (df.shape[0], df.shape[1], last_ts, symbol, period)
+    except Exception:
+        # 如果出现任何异常，回退到不使用缓存
+        key = None
+
+    if key is not None:
+        now = time.time()
+        cached = _AI_CACHE.get(key)
+        if cached is not None:
+            value, ts = cached
+            if now - ts < _AI_CACHE_TTL:
+                return value
+            else:
+                # 过期删除
+                del _AI_CACHE[key]
+
     try:
         pr = FuturesPredictor()
-        pr.fit(df, seq_len=20, epochs=15, force_ridge=True)
-        res = pr.predict(df, horizon=5)
+        pr.fit(df, seq_len=20, epochs=5, force_ridge=True, symbol=symbol, period=period)
+        res = pr.predict(df, horizon=5, symbol=symbol, period=period)
         p_up = float(np.clip(res.get("p_up", 0.5), 0.01, 0.99))
         exp = float(res.get("expected_return_pct", 0.0))
-        # 置信度：基于模型信号强度计算
+        # 置信心度：基于模型信号强度计算
         risk = res.get("risk", {})
         resonance = res.get("resonance", {})
         conf = 0.5 + 0.3 * abs(p_up - 0.5) + 0.2 * min(abs(exp) / 10, 0.5)
         conf = min(0.95, max(0.1, conf))
-        return p_up, exp, conf
+        result = (p_up, exp, conf)
     except Exception:
-        return 0.5, 0.0, 0.5
+        result = (0.5, 0.0, 0.5)
+
+    if key is not None:
+        _AI_CACHE[key] = (result, time.time())
+    return result
 
 
 def _history_kpi(raw: list) -> Optional[float]:
@@ -584,7 +621,7 @@ class ScreeningPage(BasePage):
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.addWidget(QLabel("全合约入手机会排行（单击查看入手逻辑 / 风险 / 历史成功率 / KP预测信号）"))
-        self.tbl = QTableWidget(0, 13)
+        self.tbl = DataGrid(0, 13)
         self.tbl.setHorizontalHeaderLabels(
             ["合约", "板块", "评分", "历史成功率", "20日%", "资金流(亿)",
              "量比", "持仓变%", "波动%", "信号", "AI方向", "AI预期%", "AI置信度"])
@@ -614,7 +651,7 @@ class ScreeningPage(BasePage):
         self.heat.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         rv.addWidget(self.heat)
         rv.addWidget(QLabel("板块关注方向（平均评分 / 入手数 / 历史成功率）"))
-        self.ctbl = QTableWidget(0, 6)
+        self.ctbl = DataGrid(0, 6)
         self.ctbl.setHorizontalHeaderLabels(
             ["板块", "平均评分", "品种数", "入手数", "成功率", "关注方向"])
         self.ctbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)

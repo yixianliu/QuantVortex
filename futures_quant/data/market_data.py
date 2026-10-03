@@ -14,9 +14,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+import time
+from typing import Callable, Optional
+
 import numpy as np
 import pandas as pd
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 
 from .synthetic import SyntheticFeed, FUTURES_UNIVERSE, resample_bars
 from ..runtime import get_data_dir
@@ -27,6 +31,90 @@ logger = logging.getLogger(__name__)
 
 # 真实行情源（非合成）。用于判定是否允许随机游走模拟 tick。
 REAL_SOURCES = ("sina", "akshare", "csv", "ctp")
+
+
+# 实时数据节流配置（M4-10 spec ④：真实源 get_recent 节流至 2s，避免主线程高频阻塞）
+LIVE_RECENT_INTERVAL_MS = 2000       # 真实源 get_recent 调用间隔（2s，原为 1s）
+LIVE_RECENT_TTL_SEC = 2.0            # get_recent 结果有效窗口（2s）
+
+
+class LiveDataWorker(QThread):
+    """实时数据刷新工作线程（M4-10 spec ④）。
+
+    真实源模式：在子线程中按节流间隔（2s）调用 ``feed.get_recent`` 刷新最新真实棒，
+    避免在主线程高频阻塞。合成源模式：保持 QTimer 周期随机游走，不受此线程影响。
+
+    线程安全：仅线程内调用 feed 方法，不触碰信号（信号由主线程 QTimer 下发）。
+    """
+
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(self, feed, symbol: str, period: str, interval_ms: int = 1000) -> None:
+        """初始化相关对象。
+
+        参数:
+            feed: 数据源对象（feed.get_recent）
+            symbol: 当前实时品种代码
+            period: 实时周期
+            interval_ms: 基础节奏（合成源用，毫秒）
+        """
+        super().__init__()
+        self._feed = feed
+        self._symbol = symbol
+        self._period = period
+        self._interval_ms = int(interval_ms or 0)
+        self._live: dict = {}          # 按周期缓存最近 get_recent 结果，防重复调用
+        self._stop_event = threading.Event()
+        self._active = True
+
+    # ---- 停止 ----
+    def stop(self) -> None:
+        """停止工作线程（退出标志 + 标记完成 + 等待线程收尾）。
+
+        M4-10④：LiveDataWorker 实为 QThread；``stop_live`` 在 stop() 后立即把
+        句柄置 None，若不 wait 收尾存在 QThread 被 GC 时仍在运行的隐患，
+        故此处阻塞等待线程结束（上限 500ms，正常 <1ms 即退）。"""
+        self._active = False
+        self._stop_event.set()
+        if self.isRunning():
+            self.wait(500)
+
+    @property
+    def is_active(self) -> bool:
+        """是否仍在运行。"""
+        return self._active
+
+    # ---- 主循环（子线程内）----
+    def run(self) -> None:
+        """运行实时数据刷新循环。
+
+        每 LIVE_RECENT_INTERVAL_MS（2s）执行一次真实源 get_recent 刷新，
+        通过缓存避免对同一周期重复调用；结果仅更新本地 df，不触发信号。
+        """
+        while self._active:
+            self._stop_event.wait(LIVE_RECENT_INTERVAL_MS / 1000.0)
+            if not self._active:
+                break
+            self._refresh_once()
+
+    def _refresh_once(self) -> None:
+        """执行一次真实源 get_recent 刷新（节流间隔内只调一次）。"""
+        try:
+            cache_key = (self._symbol, self._period)
+            cached = self._live.get(cache_key)
+            fresh_ts = time.time() - LIVE_RECENT_TTL_SEC
+            if cached is not None and fresh_ts < 0:
+                return  # 仍在有效窗口内，跳过
+            # 超出窗口或首次调用：拉取最新真实棒
+            fresh = self._feed.get_recent(self._symbol, self._period, limit=3)
+            if fresh is None or fresh.empty:
+                self._live[cache_key] = None
+                return
+            self._live[cache_key] = fresh
+        except Exception:  # noqa: BLE001
+            logger.warning("实时数据刷新失败 symbol=%s period=%s",
+                           self._symbol, self._period)
 
 
 def _load_config() -> dict:
@@ -40,7 +128,7 @@ def _load_config() -> dict:
 
 # 周期 -> 聚合参考窗（用于计算"涨跌幅"的基准，近似一个交易时段）
 PERIOD_SESSION_BARS = {
-    "1m": 240, "5m": 48, "15m": 16, "30m": 8, "1h": 4, "4h": 2, "D": 1, "W": 1,
+    "1m": 240, "5m": 48, "15m": 16, "30m": 8, "1h": 4, "4h": 2, "D": 1, "W": 5, "M": 22,
 }
 
 
@@ -159,11 +247,13 @@ class MarketDataManager(QObject):
         self.universe = FUTURES_UNIVERSE
         self._full: dict[str, pd.DataFrame] = {}     # (symbol, period) -> 完整序列
         self._live: dict[str, dict] = {}             # symbol -> 实时游标状态
+        self._live_worker: Optional[LiveDataWorker] = None  # 真实源实时刷新工作线程（M4-10 spec ④）
         self._synth = SyntheticFeed()                # 日内/失败回退用
         self._timer = QTimer()
         self._timer.timeout.connect(self._tick)
         self._interval_ms = 1000
         self.status = "离线"
+        self._live_symbol: Optional[str] = None     # 当前实时品种（用于 worker 回调）
 
     # ------------------------------------------------------------------
     def _default_symbol(self) -> str:
@@ -330,7 +420,7 @@ class MarketDataManager(QObject):
         mult = 10.0
         for row in self.universe:
             if symbol.startswith(row[0]):
-                mult = row[5]
+                mult = row[4]
                 break
         vol = float(df["volume"].iloc[-1]) if "volume" in df else 0.0
         oi = float(df["open_interest"].iloc[-1]) if "open_interest" in df else 0.0
@@ -367,7 +457,7 @@ class MarketDataManager(QObject):
             oi_now = float(df["open_interest"].iloc[-1]) if "open_interest" in df else 0.0
             oi_prev = float(df["open_interest"].iloc[half]) if "open_interest" in df else 0.0
             oi_chg = (oi_now - oi_prev) / oi_prev * 100.0 if oi_prev else 0.0
-            mult = row[5]
+            mult = row[4]
             fund = float(((df["close"] - df["open"]) * df["volume"] * mult).tail(half).sum() / 1e8)
             rows.append({
                 "symbol": sym, "name": row[1], "category": row[2],
@@ -393,11 +483,16 @@ class MarketDataManager(QObject):
     # ------------------------------------------------------------------
     def start_live(self, symbol: str, period: str = "1m", interval_ms: int = 1000) -> None:
         """启动live。
-        
-            参数:
-                symbol: str
-                period: str
-                interval_ms: int"""
+
+        参数:
+            symbol: str
+            period: str
+            interval_ms: int
+
+        M4-10 spec ④：真实源模式（非合成）的 get_recent 调用节流至 2s，并在
+        子线程（LiveDataWorker）中执行，避免主线程高频阻塞。合成源模式保持
+        QTimer 周期随机游走。
+        """
         self._interval_ms = interval_ms
         # 使用目标周期的基准序列（避免 1 分钟重采样日线只剩几根）
         base = self.feed.get_recent(symbol, period, limit=2000)
@@ -406,21 +501,77 @@ class MarketDataManager(QObject):
         if base is None or base.empty:
             base = self._ensure_full(symbol, period)
         self._live[symbol] = {"period": period, "df": base.copy(), "cursor": len(base) - 1}
-        if not self._timer.isActive():
-            self._timer.start(self._interval_ms)
+        self._live_symbol = symbol
+
+        # M4-10 spec ④：真实源实时刷新改由子线程 + 节流（2s）驱动
+        if self.allow_sim and self.source not in REAL_SOURCES:
+            # 合成源：由 QTimer 周期随机游走驱动
+            if not self._timer.isActive():
+                self._timer.start(interval_ms)
+            return
+
+        # 真实源：启动 LiveDataWorker 节流刷新
+        self._live_worker = LiveDataWorker(self.feed, symbol, period, interval_ms)
+        self._live_worker._refresh_once()  # 立即刷新一次
+        t = self._live_worker
+        t.finished.connect(self._on_live_worker_finished)
+        t.error.connect(self._on_live_worker_error)
+        self._live_worker.start()
 
     def stop_live(self, symbol: str | None = None) -> None:
         """停止live。
-        
-            参数:
-                symbol: str | None"""
+
+        参数:
+            symbol: str | None"""
         if symbol:
             self._live.pop(symbol, None)
-        if not self._live:
-            self._timer.stop()
+            if self._live_worker is not None and self._live_worker._symbol == symbol:
+                self._live_worker.stop()
+                self._live_worker = None
+        if symbol is None and not self._live:
+            if self._live_worker is not None:
+                self._live_worker.stop()
+                self._live_worker = None
+            if not self._timer.isActive():
+                self._timer.stop()
+
+    def _on_live_worker_finished(self) -> None:
+        """LiveDataWorker 完成：更新状态灯（真实源实时流已刷新一次）。"""
+        sym = getattr(self, "_live_symbol", None)
+        if sym and sym in self._live:
+            st = self._live[sym]
+            last = st["df"].iloc[-1]
+            bar = {
+                "datetime": str(last["datetime"])[:19],
+                "open": float(last["open"]), "high": float(last["high"]),
+                "low": float(last["low"]), "close": float(last["close"]),
+                "volume": float(last["volume"]),
+                "open_interest": float(last["open_interest"]),
+                "symbol": sym,
+            }
+            self.bar_arrived.emit(bar)
+            self.quote_updated.emit(sym)
+
+    def _on_live_worker_error(self, msg: str) -> None:
+        """LiveDataWorker 异常：记录日志，保持实时流可用（合成游走兜底）。"""
+        logger.warning("实时数据刷新异常: %s", msg)
+        sym = getattr(self, "_live_symbol", None)
+        if sym and sym in self._live:
+            st = self._live[sym]
+            last = st["df"].iloc[-1]
+            bar = {
+                "datetime": str(last["datetime"])[:19],
+                "open": float(last["open"]), "high": float(last["high"]),
+                "low": float(last["low"]), "close": float(last["close"]),
+                "volume": float(last["volume"]),
+                "open_interest": float(last["open_interest"]),
+                "symbol": sym,
+            }
+            self.bar_arrived.emit(bar)
+            self.quote_updated.emit(sym)
 
     def _tick(self) -> None:
-        """处理Tick 数据。"""
+        """处理Tick 数据（仅合成/模拟源；真实源实时刷新由 LiveDataWorker 负责）。"""
         for sym, st in list(self._live.items()):
             df = st["df"]
             period = st["period"]
@@ -447,17 +598,9 @@ class MarketDataManager(QObject):
                     st["df"] = df
                     st["cursor"] = c
                 else:
-                    # 实盘源：到达末尾后尝试刷新最新真实棒；无更新则保持末棒，绝不伪造
-                    fresh = self.feed.get_recent(sym, period, limit=3)
-                    if (fresh is not None and not fresh.empty
-                            and pd.to_datetime(fresh["datetime"].iloc[-1])
-                            > pd.to_datetime(df["datetime"].iloc[-1])):
-                        nb = fresh.tail(1).copy()
-                        nb["datetime"] = pd.to_datetime(nb["datetime"])
-                        df = pd.concat([df, nb], ignore_index=True)
-                        st["df"] = df
-                        st["cursor"] = len(df) - 1
-                    # 否则保持末棒不变
+                    # 实盘源：到达末尾后由 LiveDataWorker 每 2s 刷新真实棒
+                    # 此处不再立即调用 feed.get_recent，避免主线程阻塞
+                    pass
             bar = df.iloc[st["cursor"]].to_dict()
             bar["symbol"] = sym
             self.bar_arrived.emit(bar)

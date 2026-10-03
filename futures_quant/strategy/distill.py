@@ -24,6 +24,7 @@ __all__ = [
     "select_top",
     "distill",
     "export_rules",
+    "format_rules_text",
     "fidelity",
     "FIDELITY_TOLERANCE",
 ]
@@ -71,27 +72,46 @@ def distill(gene: Dict[str, Any]) -> Dict[str, Any]:
     """
     g = dict(gene or {})
     is_tree = g.get("type") == "op" or ("left" in g and "right" in g)
-    factor = g.get("factor")
+    # M2-10：兼容扁平基因（M4.6 契约用 `entry` 存因子名、因子参数嵌套在 `params` 内），
+    # 控制字段（stop_mult/tp_mult/lots/allow_*）可在顶层或 params 内，顶层优先。
+    nested = g.get("params") if isinstance(g.get("params"), dict) else {}
+
+    def _ctrl(key, default=None):
+        """读取控制字段：顶层优先，回退到嵌套 params。"""
+        if g.get(key) is not None:
+            return g.get(key)
+        return nested.get(key, default)
+
+    factor = g.get("factor") or g.get("entry") or nested.get("factor") or nested.get("entry")
     if factor is None and is_tree:
         leaves = _collect_leaves(g)
         factor = "+".join(sorted({l for l in leaves if l})) or "composite"
     factor_label = _label(factor) if isinstance(factor, str) else "组合因子"
     entry_desc = f"入场：{factor_label}" + (f"（{g.get('op')} 组合）" if is_tree else "")
+    stop_mult = _ctrl("stop_mult")
+    tp_mult = _ctrl("tp_mult")
     exit_desc = "离场：" + "、".join(filter(None, [
-        _desc_exit("stop_mult", g.get("stop_mult"), "ATR 跟踪止损"),
-        _desc_exit("tp_mult", g.get("tp_mult"), "ATR 止盈"),
+        _desc_exit("stop_mult", stop_mult, "ATR 跟踪止损"),
+        _desc_exit("tp_mult", tp_mult, "ATR 止盈"),
     ]))
     risk = {
-        "stop_mult": g.get("stop_mult"),
-        "tp_mult": g.get("tp_mult"),
-        "lots": g.get("lots"),
-        "allow_long": g.get("allow_long", True),
-        "allow_short": g.get("allow_short", True),
+        "stop_mult": stop_mult,
+        "tp_mult": tp_mult,
+        "lots": _ctrl("lots"),
+        "allow_long": _ctrl("allow_long", True),
+        "allow_short": _ctrl("allow_short", True),
     }
-    # 参数细节（均线周期等）放入 params，便于规则化
-    params = {k: v for k, v in g.items()
-              if k not in ("factor", "stop_mult", "tp_mult", "lots", "allow_long", "allow_short",
-                           "op", "left", "right")}
+    # 参数细节（均线周期等）：扁平基因直接取嵌套 params；树/遗留基因取顶层剩余键
+    if nested:
+        params = {k: v for k, v in nested.items()
+                  if k not in ("stop_mult", "tp_mult", "lots",
+                               "allow_long", "allow_short")}
+    else:
+        params = {k: v for k, v in g.items()
+                  if k not in ("factor", "entry", "params", "stop_mult", "tp_mult", "lots",
+                               "allow_long", "allow_short", "op", "left", "right",
+                               "type", "name", "signature", "fitness", "desc",
+                               "symbol", "symbol_name", "period", "metrics")}
     return {
         "rule_id": str(g.get("signature") or _sig_of(g)),
         "factor": factor,
@@ -159,6 +179,37 @@ def export_rules(entries: Sequence[Dict[str, Any]], k: int = 3,
         ok = False
     return {"path": out_path, "n_rules": len(rules), "top": rules,
             "best_fitness": top[0].get("fitness") if top else None, "written": ok}
+
+
+def format_rules_text(payload: Dict[str, Any]) -> str:
+    """把 ``export_rules`` 的产出渲染为人类可读文本（UI Tab 直接展示）。
+
+    M2-10：回测中心「蒸馏规则」按钮点击后在 Tab 内展示此文本。
+    """
+    # export_rules 返回体用 "top" 承载规则列表，rules.json 文件体用 "rules"，两者兼容
+    rules = (payload or {}).get("rules") or (payload or {}).get("top") or []
+    if not rules:
+        return "暂无可蒸馏的规则（盈利策略库为空或尚无合格策略）。"
+    lines = [f"蒸馏规则集：共 {len(rules)} 条（取自盈利策略库 top-{len(rules)}）", ""]
+    for i, r in enumerate(rules, 1):
+        risk = r.get("risk") or {}
+        params = r.get("params") or {}
+        allow = []
+        if risk.get("allow_long"):
+            allow.append("做多")
+        if risk.get("allow_short"):
+            allow.append("做空")
+        lines.append(f"【规则 {i}】{r.get('factor_label') or r.get('factor')}")
+        lines.append(f"  {r.get('entry_desc', '')}")
+        lines.append(f"  {r.get('exit_desc', '')}")
+        lines.append(
+            f"  风控：手数 {risk.get('lots') or 1}｜方向 {'/'.join(allow) or '无'}"
+            f"｜止损×{risk.get('stop_mult')}｜止盈×{risk.get('tp_mult')}")
+        if params:
+            ps = "、".join(f"{k}={v}" for k, v in list(params.items())[:8])
+            lines.append(f"  参数：{ps}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def fidelity(original_metrics: Dict[str, Any], distilled_metrics: Dict[str, Any]) -> float:

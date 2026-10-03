@@ -29,6 +29,60 @@ from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 HERE = SPECPATH
 ROOT = os.path.dirname(SPECPATH)
 
+# ---- 版本资源：与 futures_quant.__version__ 单一来源同步 ----
+# 让分发产物的 EXE 在 Windows 资源管理器「属性 → 详细信息」里显示正确版本，
+# 不再空白/0.0.0.0。打包时由这里动态从包常量生成，改版本只需动 __init__.py 一处。
+import sys as _sys
+_sys.path.insert(0, ROOT)
+try:
+    from futures_quant import __version__ as _APP_VERSION, __release_date__ as _APP_RELEASE_DATE
+except Exception:  # 极端情况下兜底，避免构建直接崩
+    _APP_VERSION, _APP_RELEASE_DATE = "2.0.0", ""
+
+
+def _parse_ver(v):
+    """把 'x.y.z' 形式解析为 (x, y, z, 0) 四元组，供 filevers/prodvers 使用。"""
+    parts = [int(x) for x in str(v).split(".") if x.strip() != ""]
+    while len(parts) < 4:
+        parts.append(0)
+    return tuple(parts[:4])
+
+
+_VER_TUPLE = _parse_ver(_APP_VERSION)
+# 生成 PyInstaller 可识别的版本资源文本文件（格式同 pyi-grab_version 产物）。
+_VER_FILE = os.path.join(HERE, "_app_version_info.txt")
+with open(_VER_FILE, "w", encoding="utf-8") as _vfh:
+    _vfh.write(
+        "# UTF-8\n"
+        "# 本文件由 futures_qt.spec 在打包时根据 futures_quant.__version__ 自动生成，勿手改。\n"
+        "VSVersionInfo(\n"
+        "  ffi=FixedFileInfo(\n"
+        "    filevers=%s,\n"
+        "    prodvers=%s,\n"
+        "    mask=0x3f,\n"
+        "    flags=0x0,\n"
+        "    OS=0x40004,\n"
+        "    fileType=0x1,\n"
+        "    subtype=0x0,\n"
+        "    date=(0, 0)\n"
+        "  ),\n"
+        "  kids=[\n"
+        "    StringFileInfo(\n"
+        "      [StringTable(\n"
+        "        u'040904B0',\n"
+        "        [StringStruct(u'CompanyName', u'KP工作室'),\n"
+        "         StringStruct(u'FileDescription', u'期货智能分析预测系统'),\n"
+        "         StringStruct(u'FileVersion', u'%s'),\n"
+        "         StringStruct(u'InternalName', u'FuturesQuant'),\n"
+        "         StringStruct(u'LegalCopyright', u'© 2026 QuantVortex'),\n"
+        "         StringStruct(u'OriginalFilename', u'FuturesQuant.exe'),\n"
+        "         StringStruct(u'ProductName', u'QuantVortex'),\n"
+        "         StringStruct(u'ProductVersion', u'%s')])]),\n"
+        "    VarFileInfo([VarStruct(u'Translation', [2052, 1200])])\n"
+        "  ]\n"
+        ")\n" % (_VER_TUPLE, _VER_TUPLE, _APP_VERSION, _APP_VERSION)
+    )
+
 # ---- 需要随包分发的数据/资源 ----
 #
 # 安全约束（不要图省事改回 datas.append((cfg_dir, "config"))）：
@@ -62,6 +116,13 @@ if os.path.isdir(cfg_dir):
 fonts_dir = os.path.join(ROOT, "assets", "fonts")
 if os.path.isdir(fonts_dir):
     datas.append((fonts_dir, "assets/fonts"))
+
+# M6-01④：二维码等图片资源必须打入 EXE（关于页扫码/打赏卡片依赖
+# get_images_dir() 在冻结态返回 sys._MEIPASS/images）。单文件夹模式下
+# datas 落在 dist/FuturesQuant/images/，故此处整目录收集。
+images_dir = os.path.join(ROOT, "images")
+if os.path.isdir(images_dir):
+    datas.append((images_dir, "images"))
 
 # ★ 关键：将 futures_quant 包目录作为数据文件打入
 # collect_submodules() 在 anaconda 环境可能只返回少量模块，
@@ -162,6 +223,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version=_VER_FILE,        # 版本资源：与 futures_quant.__version__ 同源同步
 )
 
 coll = COLLECT(

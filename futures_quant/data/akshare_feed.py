@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import pandas as pd
 
@@ -44,14 +45,20 @@ class AkshareFeed(DataFeed):
 
     source_label = "AkShare 实盘日线"
 
+    #: M5-02①：缓存「新鲜」窗口（秒）。TTL 内命中本地缓存则直接用（不联网）；
+    #: 超过 TTL 才尝试联网刷新，刷新失败时回退陈旧缓存并以 ``is_stale=True`` 标注。
+    CACHE_TTL_SEC = 3600
+
     def __init__(self, cache_dir: str | None = None) -> None:
         """初始化相关对象。
-        
-            参数:
-                cache_dir: str | None"""
+
+        参数:
+            cache_dir: str | None"""
         self.cache_dir = cache_dir or os.path.join(get_data_dir(), "akshare_cache")
         os.makedirs(self.cache_dir, exist_ok=True)
         self._mem: dict = {}
+        # M5-02①：最近一次 _load 是否回退到陈旧缓存（UI 据此标注「行情陈旧」）
+        self.is_stale: bool = False
 
     # ------------------------------------------------------------------
     def _fetch_daily(self, symbol: str) -> pd.DataFrame:
@@ -91,23 +98,85 @@ class AkshareFeed(DataFeed):
                 str"""
         return os.path.join(self.cache_dir, f"{symbol.replace('.', '_')}_D.csv")
 
+    def _read_cache(self, symbol: str) -> "pd.DataFrame | None":
+        """读取本地磁盘缓存（M5-02①）。文件不存在/损坏返回 None。
+
+        参数:
+            symbol: str
+
+        返回:
+            pd.DataFrame | None — 规范化的缓存 DataFrame（含 datetime 列），无则 None。
+        """
+        path = self._cache_path(symbol)
+        if not os.path.exists(path):
+            return None
+        try:
+            df = pd.read_csv(path)
+            if df is None or df.empty:
+                return None
+            if "datetime" in df.columns:
+                df["datetime"] = pd.to_datetime(df["datetime"])
+                df = df.sort_values("datetime").reset_index(drop=True)
+            return df
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("akshare 缓存读取失败 %s: %s", symbol, exc)
+            return None
+
+    @staticmethod
+    def _cache_fresh(path: str, ttl_sec: float) -> bool:
+        """缓存文件是否在新鲜窗口内（按 mtime 判定）。"""
+        try:
+            return time.time() - os.path.getmtime(path) <= ttl_sec
+        except OSError:
+            return False
+
     def _load(self, symbol: str) -> pd.DataFrame:
-        """加载相关对象。
-        
-            参数:
-                symbol: str
-        
-            返回:
-                pd.DataFrame"""
+        """加载日线（M5-02①：缓存优先 → 过期联网 → 失败陈旧兜底）。
+
+        降级链：
+        ① 内存缓存命中 → 直接用（``is_stale=False``）；
+        ② 内存缺失：读磁盘缓存，**未过期（≤ CACHE_TTL_SEC）→ 直接用**（不联网）；
+        ③ 磁盘过期/缺失 → 联网 ``_fetch_daily`` 刷新并写回缓存；
+        ④ 联网失败但存在**陈旧**磁盘缓存 → 回退该缓存并以 ``is_stale=True`` 标注；
+        ⑤ 联网失败且无缓存 → 抛异常，由上层 MarketDataManager 回退 synthetic。
+
+        参数:
+            symbol: str
+
+        返回:
+            pd.DataFrame — 规范化日线；陈旧兜底时 ``self.is_stale`` 为 True。
+        """
         key = (symbol, "D")
-        if key not in self._mem:
+        self.is_stale = False
+        if key in self._mem:
+            return self._mem[key]
+
+        path = self._cache_path(symbol)
+        disk = self._read_cache(symbol)
+        # ② 未过期磁盘缓存：直接复用，避免无谓联网
+        if disk is not None and self._cache_fresh(path, self.CACHE_TTL_SEC):
+            self._mem[key] = disk
+            return disk
+
+        # ③ 过期/缺失：尝试联网刷新并写回缓存
+        try:
             df = self._fetch_daily(symbol)
             try:
-                df.to_csv(self._cache_path(symbol), index=False)
-            except Exception:  # noqa: BLE001
+                df.to_csv(path, index=False)
+            except Exception:  # noqa: BLE001 - 写缓存失败不影响主流程
                 pass
             self._mem[key] = df
-        return self._mem[key]
+            return df
+        except Exception as exc:  # noqa: BLE001
+            # ④ 联网失败 → 陈旧缓存兜底（标注 is_stale）
+            if disk is not None:
+                logger.warning(
+                    "akshare 联网失败（%s），回退陈旧缓存 %s（is_stale）", exc, symbol)
+                self.is_stale = True
+                self._mem[key] = disk
+                return disk
+            # ⑤ 无缓存可退 → 上抛，由上层回退 synthetic
+            raise
 
     # ------------------------------------------------------------------
     def get_history(

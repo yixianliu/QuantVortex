@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from .pages import BasePage
 from .widgets import PageHeader, Badge, SectionHeader, prepare_table, color_pnl, pal
+from .states import DataGrid   # M4-08：统一表格能力（排序 / 右键菜单 / 列显隐 / 空态）
 from .pages import symbol_code
 from ..data.market_data import MarketDataManager
 from ..data.ctp_gateway import ctp_diagnose
@@ -118,7 +119,7 @@ class CTPMonitorPage(BasePage):
         self.watch_hdr = SectionHeader("订阅合约实时盘口", accent="#3b82f6",
                                        badge="实时盘口")
         ql.addWidget(self.watch_hdr)
-        self.qtable = QTableWidget(0, 7)
+        self.qtable = DataGrid(0, 7)
         self.qtable.setHorizontalHeaderLabels(
             ["合约", "最新价", "涨跌幅%", "成交量", "持仓量", "资金流(亿)", "数据源"])
         self.qtable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -194,13 +195,24 @@ class CTPMonitorPage(BasePage):
         self.src_badge.set_text(f"数据源：{self.mdm.source_label}")
         self.mode_badge.set_text(f"模式：{diag.get('mode_label', '—')}")
         connected = getattr(self.mdm, "is_real", False)
-        if connected:
+        self._dot_connected = connected
+        self._style_dot()
+        self.status_lbl.setText(self.mdm.status)
+
+    def _style_dot(self) -> None:
+        """M4-05③：连接状态点着色随主题（已连接→up 红，离线→down 绿，中国习惯）。"""
+        p = pal()
+        if getattr(self, "_dot_connected", False):
             self.status_dot.setText("● 已连接")
-            self.status_dot.setStyleSheet(f"color:{pal()['up']};")
+            self.status_dot.setStyleSheet(f"color:{p['up']};")
         else:
             self.status_dot.setText("● 离线")
-            self.status_dot.setStyleSheet(f"color:{pal()['down']};")
-        self.status_lbl.setText(self.mdm.status)
+            self.status_dot.setStyleSheet(f"color:{p['down']};")
+
+    def set_theme(self, t: str) -> None:
+        """M4-05③：连接状态点等 inline 样式随主题重着色。"""
+        super().set_theme(t)
+        self._style_dot()
 
     def _refresh_diag(self) -> None:
         """刷新diag。"""

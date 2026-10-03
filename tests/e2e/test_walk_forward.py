@@ -62,6 +62,11 @@ def test_run_with_binary():
 
 
 def test_regression_hit_none():
+    """M3-05 之后：回归目标也基于训练段中位数阈值计算 hit_rate。
+
+    旧语义（"回归 hit_rate 应为 None"）在 M3-05 引入 `hit_threshold=median(y_tr)`
+    之后失效，这里更新为断言"回归也能返回合法 hit_rate"，与分类路径对称。
+    """
     np.random.seed(1)
     n = 252 + 63 * 3
     X = np.random.randn(n, 4)
@@ -69,8 +74,11 @@ def test_regression_hit_none():
     wf = WalkForward(train_len=252, test_len=63, step=63, min_folds=2)
     wf.add_model("mean", _mean_model, _mean_predict)
     res = wf.run(X, y)
-    assert res.oos["mean"]["hit_rate"] is None
-    print("regression hit_rate None OK")
+    hr = res.oos["mean"]["hit_rate"]
+    assert hr is not None and 0.0 <= float(hr) <= 1.0
+    # 每折 fold 应带 hit_threshold（M3-05 新增字段）
+    assert res.models["mean"][0].hit_threshold is not None
+    print("regression hit_rate computed (M3-05) OK")
 
 
 def test_min_folds_error():

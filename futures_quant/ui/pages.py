@@ -11,17 +11,23 @@
 
 所有页面共享 MarketDataManager（行情中枢）与 AnalysisStore（存储），
 仅依赖 PyQt6 / numpy / pandas，离线可跑。
+
+注：MarketPage / PredictPage / PanoramaPage 已被各独立模块的新版页面
+（market_overview_page / predict_ops_page 等）取代，标记为 @deprecated，
+仅保留以兼容离屏冒烟测试，后续版本移除；IndicatorPage / ValidatePage
+的处置在 M4-11 决定。
 """
 from __future__ import annotations
 
 import csv
 import datetime as dt
+import inspect
 import threading
 from typing import Any, Callable, Optional
 
 import numpy as np
 import pandas as pd
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QDateTime
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QDateTime, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel,
@@ -34,26 +40,47 @@ from PyQt6.QtWidgets import (
 from .widgets import (
     PageHeader, Badge, StatCard, ConfidenceBar, prepare_table,
     color_pnl, pal, THEME, ToolBar,
+    _responsive_size, _responsive_spacing, _fmt_hands,
 )
 from .icons import icon
 from .chart_widget import KLineChart, PriceChart
+from .states import DataGrid   # M4-08：统一表格能力（排序 / 右键菜单 / 列显隐 / 空态）
 from ..data.market_data import MarketDataManager
 from ..indicators.tech import add_indicators
-from ..ai.predictor import FuturesPredictor
-from ..ai.feedback import (
-    quick_regime, adaptive_config, calibrated_confidence,
-    reliability_calibration,
-    evaluate_all_open, recommend_text,
-)
-from ..ai import news_feed
-from ..analysis.signals import resonance, trend_score, divergence
+# 延迟导入重型模块：FuturesPredictor / news_feed / feedback / analysis / alerts
+# 这些仅在用户切换到对应页面时才需加载，避免启动时阻塞
 from ..storage.analysis_store import AnalysisStore
 from ..alerts import scan as alert_scan, RULE_KINDS, rule_label
+# M4-06：协作式中断异常（core 层定义，UI 与引擎共用，避免引擎反向依赖 ui）
+from ..core.exceptions import InterruptionError as _CoreInterruptionError
 
 
-PERIODS = ["1m", "5m", "15m", "30m", "1h", "4h", "D", "W"]
+def _deprecated(reason: str = "") -> Callable[[type], type]:
+    """类装饰器：标注页面为已弃用（仅置标记 + 更新文档，不阻断运行）。
+
+    这些页面已被各独立模块的新版页面取代（见 main_window.NAV），
+    保留在 pages.py 仅为兼容与离屏冒烟测试所需，后续版本移除。
+
+        参数:
+            reason: 弃用原因说明。
+
+        返回:
+            原类（带 __deprecated__ 标记与补充文档）。
+    """
+    def deco(cls: type) -> type:
+        cls.__deprecated__ = True
+        note = (
+            f"\n\n    .. deprecated::\n        {reason}\n"
+            if reason else "\n\n    .. deprecated:: 后续版本移除"
+        )
+        cls.__doc__ = (cls.__doc__ or "") + note
+        return cls
+    return deco
+
+
+PERIODS = ["1m", "5m", "15m", "30m", "1h", "4h", "D", "W", "M"]
 PERIOD_LABEL = {"1m": "1分钟", "5m": "5分钟", "15m": "15分钟", "30m": "30分钟",
-                "1h": "1小时", "4h": "4小时", "D": "日线", "W": "周线"}
+                "1h": "1小时", "4h": "4小时", "D": "日线", "W": "周线", "M": "月线"}
 
 
 def df_to_bars(df: pd.DataFrame) -> list[dict]:
@@ -89,39 +116,142 @@ def symbol_code(row) -> str:
 
 def symbol_label(row) -> str:
     """处理合约代码标签。
-    
+
         参数:
             row
-    
+
         返回:
             str"""
     return f"{row[1]} ({row[0]}.{row[3]})"
+
+
+def _norm_symbol(s: str) -> str:
+    """品种代码大小写归一化，统一为大写，确保 findData 大小写不敏感匹配。
+
+    数据规范 FUTURES_UNIVERSE 用大写（如 RB.SHFE），测试契约可能用小写（如 rb.SHFE），
+    统一归一化后兼容两者，避免 QComboBox.findData 严格匹配失败。
+    """
+    return str(s).strip().upper()
 
 
 # ============================================================================
 # 后台计算线程
 # ============================================================================
 class Worker(QThread):
-    """处理工作线程。
-    
-        继承: QThread"""
+    """后台计算线程（M4-06：支持取消 / 进度 / 超时）。
+
+    契约保持：``finished(object)`` 成功、``error(str)`` 失败。
+    新增（M4-06）：
+    - ``requestInterruption()`` / ``isInterruptionRequested()``：线程安全的取消标志，
+      长任务循环内定期调用 ``check_interruption()`` 抛出 ``InterruptionError`` 以协作式中止；
+    - ``progress(int, str)`` 信号：进度百分比 0~100 + 文本；
+    - 可选 ``timeout_ms``：超时后自动 ``terminate()`` 并发 ``timeout(str)``（调用方经
+      ``on_timeout`` 回调处理），避免线程悬挂。
+    """
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
+    progress = pyqtSignal(int, str)   # 进度百分比 0~100 + 描述文本（M4-06②）
+    timeout = pyqtSignal(str)          # 超时触发（M4-06⑤）
+    interrupted = pyqtSignal()         # 协作式中断完成（不发 finished，UI 据此恢复按钮态）
+    connect_ready = pyqtSignal(str)    # 数据源连接完成（M4-10：mdm.connect() 在主线程执行，
+                                    # 通过此信号通知主线程连接结果，避免阻塞主线程）
+                                    # 参数: str —— mdm 的状态文案（如「已连接 · 新浪实盘日线」）
 
-    def __init__(self, fn: Callable[[], Any]) -> None:
+    def __init__(self, fn: Callable[[], Any], timeout_ms: int = 0) -> None:
         """初始化相关对象。
-        
+
             参数:
-                fn: Callable[[], Any]"""
+                fn: Callable[[], Any]
+                timeout_ms: int（0=不启用超时）"""
         super().__init__()
         self._fn = fn
+        self._timeout_ms = int(timeout_ms or 0)
+        self._interruption_requested = False
+        self._lock = threading.Lock()   # 线程安全保护取消标志
+
+    # ---- 取消（M4-06①：线程安全协作式中断）----
+    def requestInterruption(self) -> None:  # noqa: N802
+        """请求中断（协作式：标志位由长任务循环检查，不强制杀线程）。"""
+        with self._lock:
+            self._interruption_requested = True
+
+    def isInterruptionRequested(self) -> bool:  # noqa: N802
+        """是否已请求中断。"""
+        with self._lock:
+            return self._interruption_requested
+
+    def check_interruption(self) -> None:
+        """长任务循环内调用：已请求中断则抛 ``InterruptionError``（协作式中止）。"""
+        if self.isInterruptionRequested():
+            raise InterruptionError("任务已被用户中断")
+
+    def emit_progress(self, pct: int, text: str = "") -> None:
+        """发进度信号（0~100 + 文本）。"""
+        self.progress.emit(int(max(0, min(100, pct))), text)
+
+    # 兼容命名：供「停止」按钮等外部直接调用
+    def request_interruption(self) -> None:
+        self.requestInterruption()
+
+    def is_interruption_requested(self) -> bool:
+        return self.isInterruptionRequested()
 
     def run(self) -> None:  # noqa: N802
-        """运行相关对象。"""
+        """运行相关对象（成功后发 finished，中断发 interrupted，异常发 error）。
+
+        注意：超时守护定时器由 ``_run_worker`` 在**主线程**创建——本方法运行在
+        worker 线程，而该线程没有事件循环，就地创建的 QTimer 永远不会触发。
+
+        M4-09：若任务函数声明接收 1 个参数（``fn(worker)``），则传入本 worker 自身，
+        便于任务内实时上报进度（``worker.emit_progress``）或协作式中断（``should_abort``）。
+        既有 0 参任务函数不受任何影响。
+        """
         try:
-            self.finished.emit(self._fn())
+            fn = self._fn
+            _pass_worker = False
+            try:
+                _params = inspect.signature(fn).parameters
+                _pass_worker = (
+                    len(_params) == 1
+                    and not any(p.kind in (inspect.Parameter.VAR_POSITIONAL,
+                                           inspect.Parameter.VAR_KEYWORD)
+                                for p in _params.values())
+                )
+            except (ValueError, TypeError):
+                _pass_worker = False
+            if _pass_worker:
+                res = fn(self)
+            else:
+                res = fn()
+        except InterruptionError:
+            # 协作式中断：属控制流而非错误，不上报 error，只通知 UI 恢复可交互态
+            self.interrupted.emit()
+            return
         except Exception as e:  # noqa: BLE001
-            self.error.emit(str(e))
+            if self.isInterruptionRequested():
+                # 已请求中断后的异常（如引擎被中断点打断）视为中断而非失败
+                self.interrupted.emit()
+            else:
+                self.error.emit(str(e))
+            return
+        if self.isInterruptionRequested():
+            # 用户中断：不发 finished（避免半截结果被当成功处理）
+            self.interrupted.emit()
+            return
+        self.finished.emit(res)
+
+    def _on_timeout(self) -> None:
+        """M4-06⑤：超时触发（由主线程守护定时器调用）——terminate 并发 timeout 信号。"""
+        limit = (f"{self._timeout_ms / 1000:.1f}s" if self._timeout_ms >= 1000
+                 else f"{self._timeout_ms}ms")
+        self.timeout.emit(f"任务超时（{limit}）")
+        # terminate 会强制结束线程；调用方不应再依赖其 finished/error 结果
+        self.terminate()
+
+
+# M4-06：协作式中断异常定义于 core 层，供引擎（Backtester）与 UI（Worker）共用；
+# 此处再导出以保持既有 ``from futures_quant.ui.pages import InterruptionError`` 可用。
+InterruptionError = _CoreInterruptionError
 
 
 # ============================================================================
@@ -164,6 +294,19 @@ class BasePage(QWidget):
                     _t.stop()
                 except Exception:
                     pass
+        # M4-06④：请求所有存活 worker 中断并有限等待，避免 C++ 对象悬挂
+        try:
+            self._interrupt_workers(timeout_ms=3000)
+        except Exception:  # noqa: BLE001
+            pass
+        # M4-10 spec ④：清理真实源实时刷新工作线程（LiveDataWorker），避免资源悬挂
+        mdm = getattr(self, "mdm", None)
+        if mdm is not None and getattr(mdm, "_live_worker", None) is not None:
+            try:
+                mdm._live_worker.stop()
+                mdm._live_worker = None
+            except Exception:  # noqa: BLE001
+                pass
         # 断开信号连接，避免回调在窗口销毁后执行
         try:
             self.mdm.bar_arrived.disconnect(self._on_live)
@@ -186,16 +329,43 @@ class BasePage(QWidget):
                 except Exception:  # noqa: BLE001
                     pass
 
+    def _page_margin(self) -> tuple:
+        """页面内卡片统一外边距 (left, top, right, bottom)，供子组件复用。"""
+        return (10, 8, 10, 8)
+
     def _run_worker(self, fn: Callable[[], Any], on_done: Callable[[Any], None],
-                    on_err: Optional[Callable[[str], None]] = None) -> None:
-        """运行工作线程。
-        
-            参数:
-                fn: Callable[[], Any]
-                on_done: Callable[[Any], None]
-                on_err: Optional[Callable[[str], None]]"""
-        w = Worker(fn)
+                    on_err: Optional[Callable[[str], None]] = None,
+                    on_progress: Optional[Callable[[int, str], None]] = None,
+                    on_timeout: Optional[Callable[[str], None]] = None,
+                    on_interrupted: Optional[Callable[[], None]] = None,
+                    timeout_ms: int = 0,
+                    connect_status: Optional[str] = None) -> "Worker":
+        """运行工作线程（M4-06③：返回 worker 句柄并登记到 ``self._workers``）。
+
+        参数:
+            fn: Callable[[], Any]
+            on_done: Callable[[Any], None]
+            on_err: Optional[Callable[[str], None]]
+            on_progress: Optional[Callable[[int, str], None]]（进度 0~100 + 文本）
+            on_timeout: Optional[Callable[[str], None]]（超时回调，M4-06⑤）
+            on_interrupted: Optional[Callable[[], None]]（协作式中断回调，用于恢复按钮态）
+            timeout_ms: int（0=不启用超时）
+            connect_status: Optional[str]（M4-10：数据源连接结果文案，经
+              ``Worker.connect_ready`` 信号送达主线程）
+
+        返回:
+            Worker：调用方可 ``requestInterruption()`` 协作式取消、``progress`` 监听进度。
+        """
+        w = Worker(fn, timeout_ms=timeout_ms)
         self._workers.append(w)
+
+        # M4-06⑤：超时守护定时器必须建在主线程（worker 线程无事件循环）。
+        # 以页面为父对象，closeEvent 的定时器清理会一并停掉它。
+        guard = None
+        if timeout_ms > 0:
+            guard = QTimer(self)
+            guard.setSingleShot(True)
+            guard.timeout.connect(w._on_timeout)
 
         def _safe_remove():
             """处理saferemove。"""
@@ -203,10 +373,12 @@ class BasePage(QWidget):
                 self._workers.remove(w)
             except ValueError:
                 pass
+            if guard is not None and guard.isActive():
+                guard.stop()
 
         def _done(r):
             """处理done。
-            
+
                 参数:
                     r"""
             try:
@@ -216,7 +388,7 @@ class BasePage(QWidget):
 
         def _err(e):
             """处理err。
-            
+
                 参数:
                     e"""
             try:
@@ -227,7 +399,75 @@ class BasePage(QWidget):
 
         w.finished.connect(_done)
         w.error.connect(_err)
+        # 中断：无论调用方是否提供回调，都必须把 worker 从存活列表移除并恢复 UI
+        w.interrupted.connect(_safe_remove)
+        if on_interrupted is not None:
+            w.interrupted.connect(on_interrupted)
+        if on_progress is not None:
+            w.progress.connect(on_progress)
+        if on_timeout is not None:
+            def _timeout(msg):
+                try:
+                    on_timeout(msg)
+                finally:
+                    _safe_remove()
+            w.timeout.connect(_timeout)
+        # M4-10：连接结果经 connect_ready 信号送达主线程（由调用方指定状态文案）
+        if connect_status:
+            w.connect_ready.connect(lambda: self._emit_connect_ready(w, connect_status))
         w.start()
+        if guard is not None:
+            guard.start(int(timeout_ms))
+        return w
+
+    def _emit_connect_ready(self, w: "Worker", status: str) -> None:
+        """M4-10：经 Worker.connect_ready 把数据源连接结果送达主线程，避免阻塞。
+
+        参数:
+            w: 完成连接的 worker 句柄
+            status: 连接状态文案（如「已连接 · 新浪实盘日线」）
+        """
+        try:
+            self.mdm.status_changed.emit(status)
+            self._update_status()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _abort_predicate(self) -> Callable[[], bool]:
+        """M4-06：构造「是否应中断」谓词，供长任务注入引擎循环。
+
+        用途：
+            回测/参数优化/敏感度扫描等长任务在 worker 线程内运行，无法直接访问
+            worker 句柄（``_run_worker`` 先 start 再返回，闭包可能在返回前就执行）。
+            因此约定「本页最近登记的一个 worker」即当前长任务，取其中断标志。
+
+        返回:
+            Callable[[], bool]：最近 worker 被请求中断时返回 True。
+
+        用法::
+
+            def work():
+                bt = Backtester(cfg, feed)
+                return bt.run(sym, start, end, per, should_abort=self._abort_predicate())
+        """
+        def _pred() -> bool:
+            try:
+                return bool(self._workers) and self._workers[-1].isInterruptionRequested()
+            except Exception:  # noqa: BLE001 - 页面/线程销毁期不因检查而崩
+                return False
+        return _pred
+
+    # M4-06④：关闭页面时对全部存活 worker 协作式取消并有限等待（避免 C++ 对象悬挂）
+    def _interrupt_workers(self, timeout_ms: int = 3000) -> None:
+        """请求所有存活 worker 中断并等待其退出（M4-06④）。
+
+        超时后对仍未退出的线程不再强依赖（closeEvent 场景下页面已销毁，
+        调用方不应再触碰这些 C++ 对象）。"""
+        alive = [w for w in self._workers if w.isRunning()]
+        for w in alive:
+            w.requestInterruption()
+        for w in alive:
+            w.wait(timeout_ms)
 
     # ---- 辅助：toast 非阻塞提示 / lazy worker ----
 
@@ -277,6 +517,7 @@ class BasePage(QWidget):
 # ============================================================================
 # 模块一：实时行情全景
 # ============================================================================
+@_deprecated("已由 ui/market_overview_page.MarketOverviewPage 取代")
 class MarketPage(BasePage):
     # 预警触发信号（供主窗口做托盘通知）
     """行情全景页面：展示期货市场多品种涨跌、板块与新闻情绪总览。
@@ -360,33 +601,40 @@ class MarketPage(BasePage):
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.addWidget(QLabel("自选 / 全市场速览（按涨跌幅）"))
-        self.watch = QTableWidget(0, 5)
+        self.watch = DataGrid(0, 5, sortable=False,
+                              empty_title="暂无行情数据",
+                              empty_subtitle="连接数据源后自动刷新")
         self.watch.setHorizontalHeaderLabels(["合约", "最新价", "涨跌幅%", "量比", "资金流(亿)"])
         self.watch.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.watch.itemDoubleClicked.connect(self._on_pick)
+        self.watch.set_row_action(lambda r: self._on_pick(self.watch.item(r, 0)))
         rv.addWidget(self.watch)
         split.addWidget(right)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
         root.addWidget(split, 1)
 
-        # 预警中心（规则管理 + 周期扫描 + 触发记录）
-        self._build_alert_center(root)
+        # 预警中心
+        margin = self._page_margin()
+        self._build_alert_center(root, margin)
 
         self._refresh()
         self._refresh_watch()
         self._scan_alerts()
 
     # ---- 预警中心 ----
-    def _build_alert_center(self, root: QVBoxLayout) -> None:
+    def _build_alert_center(self, root: QVBoxLayout, margin: Optional[tuple] = None) -> None:
         """构建预警center。
-        
+
             参数:
-                root: QVBoxLayout"""
+                root: QVBoxLayout
+                margin: 可选外边距四元组 (l, t, r, b)；缺省使用默认卡片边距。"""
         box = QFrame()
         box.setObjectName("card")
         bl = QVBoxLayout(box)
-        bl.setContentsMargins(10, 8, 10, 8)
+        if margin is not None:
+            bl.setContentsMargins(*margin)
+        else:
+            bl.setContentsMargins(10, 8, 10, 8)
         bl.setSpacing(6)
 
         ctl = QHBoxLayout()
@@ -410,7 +658,8 @@ class MarketPage(BasePage):
         bl.addWidget(self.alert_status)
 
         self.alert_list = QListWidget()
-        self.alert_list.setMaximumHeight(110)
+        # 响应式最大高度
+        self.alert_list.setMaximumHeight(_responsive_size(110, min_size=80))
         self.alert_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         bl.addWidget(self.alert_list)
         root.addWidget(box)
@@ -446,7 +695,7 @@ class MarketPage(BasePage):
         self.scan_btn.setEnabled(False)
         self.alert_status.setText("扫描中…（后台读取行情并评估规则）")
         self._run_worker(
-            lambda: alert_scan(self.mdm, self.store, rules),
+            lambda: (lambda _a=alert_scan, _m=self.mdm, _s=self.store, _r=rules: _a(_m, _s, _r))(),
             self._on_alert_done,
             self._on_alert_err,
         )
@@ -762,7 +1011,10 @@ class _AlertRulesDialog(QDialog):
         self.setMinimumWidth(520)
         self.setMinimumHeight(360)
 
-        self.tbl = QTableWidget(0, 5)
+        # M4-08：改用 DataGrid；本表含 QCheckBox/QPushButton 单元格控件，排序须关闭
+        self.tbl = DataGrid(0, 5, sortable=False,
+                            empty_title="暂无预警规则",
+                            empty_subtitle="点击“新增规则”开始配置")
         self.tbl.setHorizontalHeaderLabels(["启用", "品种", "类型", "阈值", "操作"])
         self.tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
@@ -815,7 +1067,7 @@ class _AlertRulesDialog(QDialog):
             ol.addWidget(edit)
             ol.addWidget(dele)
             self.tbl.setCellWidget(i, 4, op)
-        prepare_table(self.tbl)
+        # M4-08：DataGrid 自带行号隐藏 / 行高 / 隔行底色与空态，无需再 prepare_table
 
     def _on_add(self) -> None:
         """处理onadd。"""
@@ -885,13 +1137,16 @@ class IndicatorPage(BasePage):
 
     def _build(self):
         """构建相关对象。"""
+        # 响应式布局参数
+        margin = _responsive_size(10)
+        spacing = _responsive_spacing(8)
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
-        root.setSpacing(8)
+        root.setContentsMargins(margin, _responsive_size(8), margin, _responsive_size(8))
+        root.setSpacing(spacing)
         root.addWidget(PageHeader("量化指标分析", "多指标共振 · 背离检测 · 趋势强弱打分"))
 
         ctl = QHBoxLayout()
-        self.sym_cb = QComboBox(); self.sym_cb.setMinimumWidth(180)
+        self.sym_cb = QComboBox(); self.sym_cb.setMinimumWidth(_responsive_size(180, min_size=140))
         for r in self.mdm.universe:
             self.sym_cb.addItem(symbol_label(r), symbol_code(r))
         self.sym_cb.setCurrentIndex(max(0, self.sym_cb.findData(self.cur_symbol)))
@@ -924,13 +1179,13 @@ class IndicatorPage(BasePage):
         top.addStretch(1)
         root.addLayout(top)
 
-        # K线 + 副图
+        # K线 + 副图（响应式高度）
         self.chart = KLineChart()
-        self.chart.setMinimumHeight(220)
+        self.chart.setMinimumHeight(_responsive_size(220, min_size=160))
         root.addWidget(self.chart, 3)
-        self.macd = PriceChart(); self.macd.setMinimumHeight(90)
-        self.kdj = PriceChart(); self.kdj.setMinimumHeight(90)
-        self.rsi = PriceChart(); self.rsi.setMinimumHeight(90)
+        self.macd = PriceChart(); self.macd.setMinimumHeight(_responsive_size(90, min_size=70))
+        self.kdj = PriceChart(); self.kdj.setMinimumHeight(_responsive_size(90, min_size=70))
+        self.rsi = PriceChart(); self.rsi.setMinimumHeight(_responsive_size(90, min_size=70))
         root.addWidget(self.macd, 1); root.addWidget(self.kdj, 1); root.addWidget(self.rsi, 1)
         self._refresh()
 
@@ -951,6 +1206,7 @@ class IndicatorPage(BasePage):
         self.chart.set_watermark(f"{self.cur_symbol} · {self.cur_period}")
         self.chart.set_levels([])  # 指标页不叠加 S/R
 
+        from ..analysis.signals import resonance, trend_score
         res = resonance(ind)
         self.verdict.setText(res["verdict"])
         col = (pal()["up"] if res["score"] > 20 else pal()["down"] if res["score"] < -20 else pal()["sub"])
@@ -990,6 +1246,7 @@ class IndicatorPage(BasePage):
 # ============================================================================
 # 模块三：KP 预测核心
 # ============================================================================
+@_deprecated("已由 ui/predict_ops_page.PredictOpsPage 取代")
 class PredictPage(BasePage):
     """预测页面。
     
@@ -1009,8 +1266,17 @@ class PredictPage(BasePage):
             self.cur_symbol, self.cur_period = session.get_page_selection("predict", dft, "D")
         else:
             self.cur_symbol, self.cur_period = dft, "D"
-        self.predictor = FuturesPredictor()
+        # 延迟初始化 predictor：仅在实际运行预测时才加载 AI 子模块
+        self._predictor = None
         self._build()
+
+    @property
+    def predictor(self):
+        """懒加载预测器，避免启动时触发 AI 模块导入。"""
+        if self._predictor is None:
+            from ..ai.predictor import FuturesPredictor
+            self._predictor = FuturesPredictor()
+        return self._predictor
 
     def _on_sel(self, *_):
         """处理onsel。
@@ -1042,10 +1308,15 @@ class PredictPage(BasePage):
         self.hor_spin = QSpinBox(); self.hor_spin.setRange(3, 30); self.hor_spin.setValue(12)
         self.run_btn = QPushButton("运行预测"); self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self._run)
+        # M5-07①③：手动刷新资讯（尊重 60s 缓存；抓取中再次点击 = 取消）
+        self.news_refresh_btn = QPushButton("刷新资讯")
+        self.news_refresh_btn.setObjectName("secondary")
+        self.news_refresh_btn.clicked.connect(self._refresh_news)
         ctl.addWidget(QLabel("合约")); ctl.addWidget(self.sym_cb)
         ctl.addWidget(QLabel("周期")); ctl.addWidget(self.per_cb)
         ctl.addWidget(QLabel("预测步数")); ctl.addWidget(self.hor_spin)
         ctl.addWidget(self.run_btn)
+        ctl.addWidget(self.news_refresh_btn)
         # 一键运行：直接执行【完整预测流程】，自动串联以下全部步骤，
         # 无需任何额外操作：
         #   ① 结算历史预测（与真实行情比对，更新命中率）
@@ -1116,12 +1387,12 @@ class PredictPage(BasePage):
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
-        lv.setSpacing(6)
+        lv.setSpacing(_responsive_spacing(6))
         self.chart = KLineChart()
         lv.addWidget(self.chart, 3)
-        self.macd = PriceChart(); self.macd.setMinimumHeight(80)
-        self.kdj = PriceChart(); self.kdj.setMinimumHeight(80)
-        self.rsi = PriceChart(); self.rsi.setMinimumHeight(80)
+        self.macd = PriceChart(); self.macd.setMinimumHeight(_responsive_size(80, min_size=60))
+        self.kdj = PriceChart(); self.kdj.setMinimumHeight(_responsive_size(80, min_size=60))
+        self.rsi = PriceChart(); self.rsi.setMinimumHeight(_responsive_size(80, min_size=60))
         lv.addWidget(self.macd, 1); lv.addWidget(self.kdj, 1); lv.addWidget(self.rsi, 1)
         split.addWidget(left)
         # 右侧：综合预测解读 + 选品机会联动（资讯情报 + 学习看板已并入此单页，无需切换）
@@ -1304,12 +1575,13 @@ class PredictPage(BasePage):
             except Exception:
                 cfg = {"extended_features": True, "use_ensemble": True,
                        "source": "default", "rate": None}
-            # ③ 多源资讯：强制聚合 财联社 + 东方财富 + 和讯 三源（已限频+
-            #    缓存+优雅降级，任一源失败不影响其余），归一化、分类、情感标注；
-            #    对本品种/板块命中的快讯做情感分析，作为温和的概率偏置。
-            #    这一步已随「运行预测」自动完成，无需单独点「获取最新资讯」。
+            # ③ 多源资讯：M5-07① 去掉 force=True —— 尊重 news_feed 60s 缓存，
+            #    避免每次预测都全量重抓 13 源；需要强制刷新时点「刷新资讯」。
+            #    修复：work() 内此前未导入 news_feed，NameError 被 except 静默
+            #    吞掉 —— 资讯偏置恒为 0（本行从未成功执行过）。
             try:
-                all_news = news_feed.fetch_all_news(limit=60, force=True)
+                from ..ai import news_feed
+                all_news = news_feed.fetch_all_news(limit=60, force=False)
                 bias_info = news_feed.news_bias_for_symbol(sym, name, category, all_news)
             except Exception:
                 bias_info = {"bias": 0.0, "matched": 0, "samples": []}
@@ -1318,10 +1590,12 @@ class PredictPage(BasePage):
             # ④ 完整预测流程：一键执行（允许耗时适度增加）。
             fit = self.predictor.fit(df, seq_len=20, epochs=25,
                                      extended_features=cfg["extended_features"],
-                                     use_ensemble=cfg["use_ensemble"])
+                                     use_ensemble=cfg["use_ensemble"],
+                                     symbol=self.cur_symbol, period=self.cur_period)
             res = self.predictor.predict(df, horizon=horizon,
                                           news_bias=bias_info["bias"],
-                                          news_samples=bias_info["samples"])
+                                          news_samples=bias_info["samples"],
+                                          symbol=self.cur_symbol, period=self.cur_period)
             # ⑤ 置信度校准：优先样本外「可靠性校准」（按模型概率分箱的实际命中率），
             #    样本不足时回退到扁平 regime 命中率（旧行为）。
             cfg_key = "enhanced" if cfg["extended_features"] else "baseline"
@@ -1339,7 +1613,8 @@ class PredictPage(BasePage):
                 res = self.predictor.predict(df, horizon=horizon,
                                               news_bias=bias_info["bias"],
                                               news_samples=bias_info["samples"],
-                                              calibrate_p_up=conf)
+                                              calibrate_p_up=conf,
+                                              symbol=self.cur_symbol, period=self.cur_period)
             res["symbol"] = sym; res["period"] = per
             # ⑥ AI 多维研判（趋势/风险/建议）：已配置 LLM 则调用，否则规则兜底
             try:
@@ -1353,6 +1628,78 @@ class PredictPage(BasePage):
                          on_err=lambda e: (self.run_btn.setEnabled(True),
                                            self.run_btn.setText("运行预测"),
                                            print("预测错误:", e)))
+
+    # ------------------------------------------------------------------
+    # M5-07①③：手动刷新资讯 —— 尊重 news_feed 60s 缓存；Worker 内执行、
+    # 带协作式取消（抓取中再次点击按钮）与「x/13 源」进度（M4-06/09）。
+    # ------------------------------------------------------------------
+    def _refresh_news(self):
+        """手动刷新多源资讯；抓取中再次点击 = 请求取消。"""
+        if getattr(self, "_news_fetching", False):
+            if self._workers:
+                self._workers[-1].requestInterruption()
+            self.auto_lbl.setText("已请求取消资讯抓取，正在收尾已完成的源…")
+            return
+        self._news_fetching = True
+        self.news_refresh_btn.setText("取消抓取")
+        sym = self.sym_cb.currentData() or self.cur_symbol
+        name = category = ""
+        for r in self.mdm.universe:
+            if symbol_code(r) == sym:
+                name, category = r[1], r[2]
+                break
+
+        def work(worker):
+            """处理work（Worker 线程：13 源并发抓取 + 进度/取消）。"""
+            from ..ai import news_feed
+            news = news_feed.fetch_all_news(
+                limit=60, force=False,
+                on_progress=lambda d, t, txt: worker.emit_progress(
+                    int(d / t * 100), txt),
+                should_abort=worker.isInterruptionRequested)
+            bias = news_feed.news_bias_for_symbol(sym, name, category, news)
+            return news, bias
+
+        def _restore():
+            """恢复按钮态。"""
+            self._news_fetching = False
+            self.news_refresh_btn.setText("刷新资讯")
+            self.news_refresh_btn.setEnabled(True)
+
+        def done(payload):
+            """处理done：更新资讯偏置卡与提示行。"""
+            news, bias = payload
+            self._manual_news = news
+            nb = float(bias.get("bias", 0.0))
+            nb_txt = ("中性" if abs(nb) < 0.05 else
+                      f"偏多 {nb:+.2f}" if nb > 0 else f"偏空 {nb:+.2f}")
+            col = (pal()["up"] if nb > 0.05 else
+                   pal()["down"] if nb < -0.05 else pal()["sub"])
+            self.chips["news"].set_value(nb_txt, col)
+            self.auto_lbl.setText(
+                f"资讯已刷新（{len(news.get('items', []))} 条 · "
+                f"{bias.get('matched', 0)} 条命中本品种）· 点「运行预测」开始预测")
+            _restore()
+
+        def err(msg):
+            """处理err。"""
+            self.auto_lbl.setText(f"资讯刷新失败：{msg}（60s 缓存内可重试）")
+            _restore()
+
+        def interrupted():
+            """处理interrupted。"""
+            self.auto_lbl.setText("资讯抓取已取消（已完成的源结果保留）。")
+            _restore()
+
+        self._run_worker(work, done, on_err=err,
+                         on_progress=self._on_news_prog,
+                         on_interrupted=interrupted)
+
+    def _on_news_prog(self, pct: int, text: str) -> None:
+        """抓取进度（M4-09 同款「已完成 x/总源数」文本）。"""
+        if getattr(self, "_closed", False):
+            return
+        self.auto_lbl.setText(f"正在抓取资讯…（{text}）")
 
     def _on_done(self, payload):
         """处理ondone。
@@ -1411,7 +1758,8 @@ class PredictPage(BasePage):
                 break
         # 资讯深度解读：基于真实抓取正文 + 情感 + 重要度
         try:
-            news_an = news_feed.analyze_symbol_news(sym, name, category, all_news)
+            from ..ai import news_feed as _nf
+            news_an = _nf.analyze_symbol_news(sym, name, category, all_news)
         except Exception:
             news_an = {"bias": bias_info.get("bias", 0.0),
                        "matched": bias_info.get("matched", 0),
@@ -1924,6 +2272,7 @@ class PredictPage(BasePage):
 # ============================================================================
 # 模块四：市场全景
 # ============================================================================
+@_deprecated("已由 ui/market_overview_page 取代")
 class PanoramaPage(BasePage):
     """全景研判页面：汇总多维度信号给出品种多空研判。
     
@@ -2048,13 +2397,15 @@ class PanoramaPage(BasePage):
         gain = QHBoxLayout(); gain.setSpacing(10)
         g1 = QWidget(); g1l = QVBoxLayout(g1); g1l.setContentsMargins(0, 0, 0, 0); g1l.setSpacing(4)
         g1l.addWidget(QLabel("领涨榜（涨跌幅 Top 8）"))
-        self.gain_tbl = QTableWidget(0, 3)
+        self.gain_tbl = DataGrid(0, 3, sortable=False,
+                                empty_title="暂无数据", empty_subtitle="")
         self.gain_tbl.setHorizontalHeaderLabels(["合约", "板块", "涨跌幅%"])
         self.gain_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         g1l.addWidget(self.gain_tbl)
         g2 = QWidget(); g2l = QVBoxLayout(g2); g2l.setContentsMargins(0, 0, 0, 0); g2l.setSpacing(4)
         g2l.addWidget(QLabel("领跌榜（涨跌幅 Bottom 8）"))
-        self.lag_tbl = QTableWidget(0, 3)
+        self.lag_tbl = DataGrid(0, 3, sortable=False,
+                               empty_title="暂无数据", empty_subtitle="")
         self.lag_tbl.setHorizontalHeaderLabels(["合约", "板块", "涨跌幅%"])
         self.lag_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         g2l.addWidget(self.lag_tbl)
@@ -2065,13 +2416,15 @@ class PanoramaPage(BasePage):
         bot = QHBoxLayout(); bot.setSpacing(10)
         b1 = QWidget(); b1l = QVBoxLayout(b1); b1l.setContentsMargins(0, 0, 0, 0); b1l.setSpacing(4)
         b1l.addWidget(QLabel("资金流向榜（净流入 Top 8，亿）"))
-        self.flow_tbl = QTableWidget(0, 3)
+        self.flow_tbl = DataGrid(0, 3, sortable=False,
+                                 empty_title="暂无数据", empty_subtitle="")
         self.flow_tbl.setHorizontalHeaderLabels(["合约", "板块", "资金流(亿)"])
         self.flow_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         b1l.addWidget(self.flow_tbl)
         b2 = QWidget(); b2l = QVBoxLayout(b2); b2l.setContentsMargins(0, 0, 0, 0); b2l.setSpacing(4)
         b2l.addWidget(QLabel("板块明细（强弱 / 资金 / 品种数）"))
-        self.sec_tbl = QTableWidget(0, 4)
+        self.sec_tbl = DataGrid(0, 4, sortable=False,
+                                empty_title="暂无数据", empty_subtitle="")
         self.sec_tbl.setHorizontalHeaderLabels(["板块", "平均涨跌%", "资金流(亿)", "品种数"])
         self.sec_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         b2l.addWidget(self.sec_tbl)
@@ -2244,14 +2597,17 @@ class ValidatePage(BasePage):
 
     def _build(self):
         """构建相关对象。"""
+        # 响应式布局参数
+        margin = _responsive_size(10)
+        spacing = _responsive_spacing(8)
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
-        root.setSpacing(8)
+        root.setContentsMargins(margin, _responsive_size(8), margin, _responsive_size(8))
+        root.setSpacing(spacing)
         if self._show_header:
             root.addWidget(PageHeader("预测回测验证", "滚动起点评估 · 预测胜率 · 偏差统计"))
 
         ctl = QHBoxLayout()
-        self.sym_cb = QComboBox(); self.sym_cb.setMinimumWidth(180)
+        self.sym_cb = QComboBox(); self.sym_cb.setMinimumWidth(_responsive_size(180, min_size=140))
         for r in self.mdm.universe:
             self.sym_cb.addItem(symbol_label(r), symbol_code(r))
         self.sym_cb.setCurrentIndex(max(0, self.sym_cb.findData(self.cur_symbol)))
@@ -2281,7 +2637,8 @@ class ValidatePage(BasePage):
         split = QSplitter(Qt.Orientation.Horizontal)
         self.chart = PriceChart(); self.chart.setMinimumHeight(240)
         split.addWidget(self.chart)
-        self.tbl = QTableWidget(0, 4)
+        self.tbl = DataGrid(0, 4, sortable=False,
+                            empty_title="暂无验证结果", empty_subtitle="点击「运行验证」获取")
         self.tbl.setHorizontalHeaderLabels(["起点", "方向胜率%", "平均误差", "最大偏差"])
         self.tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         split.addWidget(self.tbl)
@@ -2298,6 +2655,7 @@ class ValidatePage(BasePage):
 
         def work():
             """处理work。"""
+            from ..ai.predictor import FuturesPredictor as _FP
             rows = []; ex_actual = []; ex_pred = []
             total = len(df_full)
             step = max(1, (total - horizon - 60) // max(1, n_orig))
@@ -2307,7 +2665,7 @@ class ValidatePage(BasePage):
                 test = df_full.iloc[origin:origin + horizon + 1]
                 if len(train) < 40 or len(test) <= horizon:
                     continue
-                p = FuturesPredictor()
+                p = _FP()
                 p.fit(train, seq_len=20, epochs=(20 if use_lstm else 1),
                       force_ridge=not use_lstm)
                 res = p.predict(train, horizon=horizon)
@@ -2384,9 +2742,12 @@ class LogPage(BasePage):
 
     def _build(self):
         """构建相关对象。"""
+        # 响应式布局参数
+        margin = _responsive_size(10)
+        spacing = _responsive_spacing(8)
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
-        root.setSpacing(8)
+        root.setContentsMargins(margin, _responsive_size(8), margin, _responsive_size(8))
+        root.setSpacing(spacing)
         root.addWidget(PageHeader("日志 / 预警 / 报告", "运行日志 · 预警触发 · 预测与研判存档 · 导出"))
 
         ctl = QHBoxLayout()
@@ -2402,14 +2763,14 @@ class LogPage(BasePage):
         root.addWidget(ToolBar(ctl))
 
         self.tabs = QTabWidget()
-        self.tab_log = QTableWidget(0, 3)
+        self.tab_log = DataGrid(0, 3)
         self.tab_log.setHorizontalHeaderLabels(["时间", "级别", "内容"])
-        self.tab_alert = QTableWidget(0, 5)
+        self.tab_alert = DataGrid(0, 5)
         self.tab_alert.setHorizontalHeaderLabels(["时间", "合约", "规则", "级别", "内容"])
-        self.tab_pred = QTableWidget(0, 7)
+        self.tab_pred = DataGrid(0, 7)
         self.tab_pred.setHorizontalHeaderLabels(
             ["时间", "合约", "周期", "预期收益%", "涨概", "风险", "模型"])
-        self.tab_an = QTableWidget(0, 4)
+        self.tab_an = DataGrid(0, 4)
         self.tab_an.setHorizontalHeaderLabels(["时间", "合约", "类型", "结论"])
         for t in (self.tab_log, self.tab_alert, self.tab_pred, self.tab_an):
             t.horizontalHeader().setStretchLastSection(True)

@@ -27,7 +27,8 @@ def _load_sample(n=700):
 
 def test_features_extended_dim():
     df = _load_sample()
-    ind, F, names = build_features(df, extended=True)
+    # M3-04：symbol / period 为 keyword-only 必填
+    ind, F, names = build_features(df, extended=True, symbol="E2E_RB", period="D")
     assert F.shape[1] == len(EXTENDED_FEATURES)
     assert names == EXTENDED_FEATURES
     assert not F.isna().any().any(), "扩展特征不得含残余 NaN"

@@ -16,6 +16,7 @@ from ..broker.paper import PaperBroker
 from ..config.settings import Config
 from ..core.portfolio import Portfolio
 from ..core.types import Bar, Direction, Offset, Order, OrderStatus, Trade
+from ..data.price_limit import PriceLimitManager
 from ..risk.risk_manager import RiskManager
 from ..storage import StorageBackend
 
@@ -53,6 +54,8 @@ class TradingEngine:
         self.db = db
 
         acc = config.account
+        # M2.4：先创建 contracts dict，共享给 portfolio（合约级保证金率/手续费/乘数覆盖）
+        self.contracts: dict = {}
         self.portfolio = Portfolio(
             initial_capital=acc.initial_capital,
             margin_rate=acc.margin_rate,
@@ -60,10 +63,10 @@ class TradingEngine:
             logger=logger,
             multiplier=multiplier if multiplier else acc.multiplier,
             close_today_ratio=acc.close_today_ratio,
+            contracts=self.contracts,
         )
         self.risk = RiskManager(config.risk, logger)
 
-        self.contracts: dict = {}
         self.strategies: list = []
         self.equity_curve: List[tuple] = []   # (datetime, equity, available)
         self.trades_log: List[Trade] = []
@@ -72,8 +75,23 @@ class TradingEngine:
         self._equity_peak = 0.0  # 增量维护资金峰值，避免每根 bar 全量扫描 O(n^2)
 
         bt = config.backtest
+        # M3.4：涨跌停扩板管理器（多合约独立状态）
+        self.price_limit_mgr = PriceLimitManager(
+            default_limit=bt.limit_up_pct,
+            default_step=bt.limit_expand_step,
+            default_max_level=bt.limit_max_level,
+        )
         if mode == "backtest":
-            self.broker = BacktestBroker(slippage=bt.slippage, contracts=self.contracts)
+            self.broker = BacktestBroker(
+                slippage=bt.slippage,
+                contracts=self.contracts,
+                slip_mode=bt.slip_mode,
+                slip_ratio=bt.slip_ratio,
+                slip_atr_k=bt.slip_atr_k,
+                atr_window=bt.atr_window,
+                limit_up_pct=bt.limit_up_pct,
+                limit_down_pct=bt.limit_down_pct,
+            )
         else:
             self.broker = PaperBroker(slippage=bt.slippage, contracts=self.contracts)
 
@@ -189,7 +207,20 @@ class TradingEngine:
                     self.flatten_all()
 
         if self.mode == "backtest":
-            for t in self.broker.match(bar):
+            # M3.4：更新涨跌停扩板状态（仅用当前 bar 数据，防未来函数）
+            day_key = str(bar.datetime.date()) if hasattr(bar.datetime, "date") else ""
+            o = float(bar.open)
+            c = float(bar.close)
+            pct = (c - o) / o if o > 0 else 0.0
+            self.price_limit_mgr.update(bar.symbol, day_key, pct)
+            level = self.price_limit_mgr.limit_level(bar.symbol)
+            # 扩板日阈值放大：第 1 天 +0.02、第 2 天 +0.04（由 broker 动态计算）
+            step = self.price_limit_mgr.default_step
+            eff_up = self.price_limit_mgr.default_limit + step * min(level, 2) if level < 99 else 0.10
+            eff_down = eff_up  # 涨跌停幅度通常对称
+
+            for t in self.broker.match(bar, limit_level=level,
+                                       limit_up_pct=eff_up, limit_down_pct=eff_down):
                 self._accept_trade(t)
 
         for strat in self.strategies:

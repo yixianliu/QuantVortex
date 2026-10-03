@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "n_rules": 3,
+  "rules": [
+    {
+      "rule_id": "abc123",
+      "factor": "ma_cross",
+      "factor_label": "双均线交叉",
+      "entry_desc": "入场：双均线交叉",
+      "exit_desc": "离场：ATR 跟踪止损(2.0)、ATR 止盈(3.0)",
+      "risk": {
+        "stop_mult": 2.0,
+        "tp_mult": 3.0,
+        "lots": 2,
+        "allow_long": true,
+        "allow_short": false
+      },
+      "params": {
+        "fast": 5,
+        "slow": 20
+      },
+      "fitness": 12.5
+    },
+    {
+      "rule_id": "abc123",
+      "factor": "momentum",
+      "factor_label": "动量追踪",
+      "entry_desc": "入场：动量追踪",
+      "exit_desc": "离场：ATR 跟踪止损(2.0)、ATR 止盈(3.0)",
+      "risk": {
+        "stop_mult": 2.0,
+        "tp_mult": 3.0,
+        "lots": 2,
+        "allow_long": true,
+        "allow_short": false
+      },
+      "params": {
+        "period": 10
+      },
+      "fitness": 9.0
+    },
+    {
+      "rule_id": "b177c9d4f9",
+      "factor": "ma_cross+rsi_reversal",
+      "factor_label": "ma_cross+rsi_reversal",
+      "entry_desc": "入场：ma_cross+rsi_reversal（AND 组合）",
+      "exit_desc": "离场：ATR 跟踪止损(2.0)",
+      "risk": {
+        "stop_mult": 2.0,
+        "tp_mult": null,
+        "lots": null,
+        "allow_long": true,
+        "allow_short": true
+      },
+      "params": {},
+      "fitness": null
+    }
+  ],
+  "best_fitness": 12.5
+}

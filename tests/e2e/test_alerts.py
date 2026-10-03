@@ -11,10 +11,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
+import sys
 import unittest
 
 import numpy as np
 import pandas as pd
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from futures_quant.alerts.engine import (
     RULE_KINDS,

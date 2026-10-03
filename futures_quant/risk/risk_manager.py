@@ -5,6 +5,11 @@
     2) 仓位风控：单品种最大持仓手数、总仓位占用比例；
     3) 交易风控：单笔下单数量上限、非交易时段禁止下单、可用资金不足拦截；
     4) 异常风控：由引擎在网络/接口异常时调用 halt()，强制终止交易。
+M2.4 期货专属风控：
+    5) 保证金风险度：逐日盯市计算 used_margin/equity；
+       >margin_halt_ratio → 强平信号（halted）；
+       >margin_warn_ratio → 预警（不 halt，仅记录）；
+       equity ≤ 0 → 已爆仓，直接 halt。
 所有检查返回 (是否通过, 原因)，被拒订单不会进入撮合。
 """
 from __future__ import annotations
@@ -46,6 +51,7 @@ class RiskManager:
         self.daily_start_equity = 0.0
         self.daily_pnl = 0.0          # 当日盈亏（UI 展示用）
         self.current_drawdown = 0.0   # 当前回撤（UI 展示用）
+        self._trigger_count = 0       # 风控触发次数计数器
 
     # ---------- 生命周期 ----------
     def start(self, portfolio) -> None:
@@ -55,6 +61,7 @@ class RiskManager:
                 portfolio"""
         self.max_equity = portfolio.equity()
         self.daily_start_equity = portfolio.equity()
+        self._current_positions = dict(portfolio.positions)
 
     def reset(self) -> None:
         """手动解除风控暂停（如人工确认后）。"""
@@ -152,6 +159,40 @@ class RiskManager:
         daily_pnl = eq - self.daily_start_equity
         self.daily_pnl = daily_pnl
         self.current_drawdown = dd
+
+        # 保证金占用率检查（逐 bar 更新，避免单点突袭）
+        # M2.4：优先用 Portfolio.risk_degree()（合约级保证金率），回落 used/equity
+        try:
+            if hasattr(portfolio, "risk_degree"):
+                margin_ratio = portfolio.risk_degree()
+            else:
+                used = portfolio.used_margin()
+                margin_ratio = used / eq if eq > 0 else 0.0
+        except Exception:
+            margin_ratio = 0.0
+        if margin_ratio >= self.cfg.margin_halt_ratio:
+            self.halted = True
+            self.halt_reason = "保证金风险度过高压平"
+            triggered.append("margin_halt")
+            if self.logger:
+                self.logger.error(
+                    f"[风控] 保证金风险度 {margin_ratio:.1%} 触及强平线"
+                    f"（≥{self.cfg.margin_halt_ratio:.0%}），停止交易并强平")
+        elif margin_ratio >= self.cfg.margin_warn_ratio:
+            if self.logger:
+                self.logger.warning(
+                    f"[风控] 保证金风险度 {margin_ratio:.1%} 触及预警线"
+                    f"（≥{self.cfg.margin_warn_ratio:.0%}）")
+            triggered.append("margin_warn")
+
+        # M2.4 权益 ≤ 0：已爆仓，直接 halt
+        if eq <= 0 and not self.halted:
+            self.halted = True
+            self.halt_reason = "权益归零（爆仓）"
+            triggered.append("equity_zero")
+            if self.logger:
+                self.logger.error(f"[风控] 权益 {eq:.2f} ≤ 0，账户爆仓，强制停止交易")
+
         if daily_pnl <= -self.cfg.max_daily_loss:
             self.halted = True
             self.halt_reason = "单日亏损超限"
