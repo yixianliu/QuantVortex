@@ -56,3 +56,6 @@ docs/examples/temp_*.py
 /build_tools/
 /tests/
 /images/
+tests
+futures_quant
+build_tools
