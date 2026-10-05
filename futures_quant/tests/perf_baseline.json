@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-10-03T17:31:52",
+  "indicator": {
+    "cold_ms": 76.84,
+    "warm_ms": 77.21,
+    "speedup": 1.0,
+    "cache_size": 1
+  },
+  "lstm": {
+    "samples": 512,
+    "loop_sec": 0.6114,
+    "batch_sec": 0.0295,
+    "speedup": 20.72
+  },
+  "backtest": {
+    "bars": 720,
+    "trades": 0,
+    "elapsed_sec": 0.11,
+    "bars_per_sec": 6573.8
+  }
+}

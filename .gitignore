@@ -10,6 +10,9 @@ logs/
 *.db
 *.bak
 *.sqlite
+# SQLite WAL 模式的伴随文件（运行时增量，随主库一起被 *.db 忽略不了）
+*.db-shm
+*.db-wal
 session_state.json
 session_state.json.bak
 user_settings.json
@@ -17,11 +20,13 @@ user_settings.json.bak
 
 # ================= 构建产物 =================
 dist/
-tests/
 build/
 build/futures_qt/
 __pycache__/
 *.pyc
+# tests/ 与 build_tools/ 是**受控资产**（全部单测 + 打包脚本所在），
+# 只忽略测试运行期吐出来的日志，不要忽略目录本身。
+tests/**/*.log
 
 # ================= 本地项目记忆（不入库） =================
 .workbuddy/
@@ -45,17 +50,47 @@ build_tools/_app_version_info.txt
 # build_tools/ 内的 _rebrand_*.py 是临时重命名脚本，不在代码中引用
 build_tools/_rebrand_*.py
 
-# ================= 临时评估/实验脚本（不入库）=================
+# ================= 打包期手工排除（历史残留，勿动）=================
+# 这一段是 v5.0 打包实验时手工敲的排除清单，原样保留以免改动打包行为。
+# 注意：其中 **裸规则**（无 / 前缀）会匹配任意层级的同名目录，
+# 曾导致 tests/ 与 futures_quant/ 整体退出版本控制（410 个 .py 只有 3 个受控）。
+# 现行有效且更精确的同义规则：tests/ → 本文件第 20 行；build_tools/ → 本文件第 50 行。
 docs/examples/temp_*.py
 /build_tools/
 /pytest-cache-files-i6i7zd87/
 /packaging/
-/packaging/
 /docs/
-/docs/
-/build_tools/
-/tests/
 /images/
-tests
-futures_quant
-build_tools
+
+# ================= 临时评估/实验脚本（不入库）=================
+# 早期在仓库根部随手敲的验证物，不属于任何模块，勿入库
+test_design.py
+test_output.txt
+cd
+# 早期清理数据时误建的临时目录（里面只剩 SQLite 的 shm/wal 残留）
+remove data/
+
+# ================= 测试 / 运行期产物（不入库）=================
+# 跑测与运行时吐出来的副产物，跟着核心资产一起入库会把仓库淹没。
+# 注意：gitignore 的 **行尾 # 不是注释**，是模式的一部分（只有行首 # 才是），
+# 所以每条规则必须独占一行、注释另起一行写，否则规则会静默失配。
+tests/_*.xml
+tests/_*.txt
+tests/_*.out
+tests/e2e/archived_logs/
+tests/e2e/*.png
+outputs/
+
+# 安全删除守卫的探针文件（utils/redact 与 storage 会反复 touch）
+.write_test
+
+# 自动进化与新闻缓存：每次进化都会重写，属于运行时数据（沿用 data/sina_cache/ 口径）
+data/evolution/
+data/auto_strategies/
+data/cls_news_cache.json
+data/_pred_export.csv
+
+# 覆盖率报告、临时验证脚本、行情下载缓存（与 data/real_samples/ 的真实样本区分开）
+.cov_report.txt
+data/temp/
+data/akshare_cache/
