@@ -4,6 +4,40 @@
 
 ---
 
+## [5.2.9] - 2026-10-06
+
+> 「让质量门禁不可绕过」：把此前只能**手动记得跑**的检测能力（密钥扫描 /
+> 静默失效 AST 门禁）固化成 git 钩子，堵上「提交时忘了跑 check.py」这道口子。
+
+### 钩子（新增）
+
+- `tools/hooks/pre-commit`：只扫**暂存改动**（非全量，秒级），两关——
+  `secret_scan.py`（密钥）+ `scan_silent_bail.py --min-severity high`（静默失效）。
+  任一非 0 即阻断。设计要点：
+  - **只扫 `git diff --cached` 的文件**而非整棵源码树 → 绝大多数提交 ~2s（干净）到
+    ~9s（改了 .py）就过，不会像 `check.py` 那样每次拖 5 分钟。
+  - **解释器缺失 → fail-open**（放行并提示手动跑 `check.py`）：钩子不能变成
+    「谁都提交不了」的卡子。
+  - 逃生口 `QV_SKIP_HOOKS=1 git commit`。
+- `tools/hooks/pre-push`：透传 git-lfs 的 `pre-push`（保 LFS 行为不变）+ 可选
+  全量门禁 `QV_PREPUSH_FULL_TESTS=1`（默认关，不拖慢 push）。
+- `tools/install_hooks.py`：设 `core.hooksPath=tools/hooks`（钩子**受控、可克隆复现**，
+  写在 `.git/hooks` 里的钩子克隆后会丢），并把 `.git/hooks` 里 LFS 的 4 个钩子
+  原样同步进 `tools/hooks/`（**零行为变化**），且**已存在的自定义钩子绝不覆盖**。
+
+### 验证（端到端）
+
+| 场景 | 结果 |
+| --- | --- |
+| 暂存一个含 `sk-proj-…` 的文件并提交 | pre-commit **阻断**（rc=1，报 2 处疑似密钥） |
+| 暂存干净改动并提交 | pre-commit **放行**（rc=0） |
+| 安装器幂等 | 重跑不改已设 `core.hooksPath`、不覆盖自定义 `pre-push` |
+| 本次提交自身 | 走了新 pre-commit，扫 `install_hooks.py` 通过 |
+
+> 门禁分层：**pre-commit = 秒级快检（防带病提交）**，**pre-push/`check.py` =
+> 分钟级全量（发布前）**。静默失效扫描器对全树的 ~11s 耗时留在 push 侧，
+> 提交侧只扫改动，两者不重复。
+
 ## [5.2.8] - 2026-10-06
 
 > 「我以为修好了，其实只是运气好」：`test_ux_phase5_6.py` 的 `0xC0000409`
