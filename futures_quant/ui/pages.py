@@ -43,6 +43,7 @@ from .widgets import (
     _responsive_size, _responsive_spacing, _fmt_hands,
 )
 from .icons import icon
+from .design_system import design_tokens
 from .chart_widget import KLineChart, PriceChart
 from .states import DataGrid   # M4-08：统一表格能力（排序 / 右键菜单 / 列显隐 / 空态）
 from ..data.market_data import MarketDataManager

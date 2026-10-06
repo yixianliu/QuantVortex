@@ -31,7 +31,11 @@ from pathlib import Path
 PY = sys.executable
 ROOT = Path(__file__).resolve().parent.parent
 UNIT_DIR = ROOT / "tests" / "unit"
-PER_FILE_TIMEOUT = 120          # 单文件超时（秒）
+PER_FILE_TIMEOUT = 300         # 单文件超时（秒）
+# 实测最慢 legit 文件约 153s（test_m3_03.py 特征/漂移回归，全绿但慢）。
+# 早前设 120s → 该文件被 kill，且旧逻辑 **不计任何失败**（只 append 到 slow）→
+# 汇总打出「FAILED=0 CRASHED=0」但这个文件的 5 个用例其实一行没跑
+# （收集 754 / 汇总 749，缺口恰好 5）。慢 ≠ 绿，超时必须显性计价。
 VERBOSE = "--verbose" in sys.argv
 
 
@@ -155,6 +159,7 @@ def _loop(files: list[Path], tmpdir: Path) -> int:
     total_passed = 0
     total_failed = 0
     crashed_files: list[Path] = []
+    timed_out: list[Path] = []
     slow: list[str] = []
     problems: list[str] = []
     warnings: list[str] = []
@@ -183,8 +188,15 @@ def _loop(files: list[Path], tmpdir: Path) -> int:
             out = proc.stdout + proc.stderr
             rc = proc.returncode
         except subprocess.TimeoutExpired:
+            # 超时 = 该文件的用例**一行没跑完**，结果不可信。
+            # 绝不能只是记进 slow 就 continue：那样汇总会显示「FAILED=0」，
+            # 但总用例数比收集数少一截（静默失真，见 TIMEOUT 注释）。
+            timed_out.append(f)
             slow.append(f"{f.name} (>={PER_FILE_TIMEOUT}s TIMEOUT)")
-            print(f"[TIMEOUT {PER_FILE_TIMEOUT}s] {f.name}")
+            problems.append(
+                f"{f.name} (超时 >={PER_FILE_TIMEOUT}s 未完成：该文件用例数未计入，"
+                f"汇总不可信)")
+            print(f"[TIMEOUT {PER_FILE_TIMEOUT}s] {f.name}  ← 用例未跑完，计为失败")
             sys.stdout.flush()
             continue
 
@@ -247,7 +259,11 @@ def _loop(files: list[Path], tmpdir: Path) -> int:
     print("=" * 60)
     print(f"tests/unit 逐文件汇总（{len(files)} 个文件）："
           f"PASSED={total_passed}  FAILED={total_failed}  "
-          f"CRASHED={len(crashed_files)}")
+          f"CRASHED={len(crashed_files)}  TIMEOUT={len(timed_out)}")
+    if timed_out:
+        print("\n超时文件（用例未跑完 —— 汇总 PASSED 数**少于**收集数，不可信）：")
+        for t in timed_out:
+            print(f"  - {t.name}")
     if crashed_files:
         print("\n崩溃文件（已用流式结果找回用例数，仍需处理）：")
         for c in crashed_files:
@@ -264,7 +280,8 @@ def _loop(files: list[Path], tmpdir: Path) -> int:
         print("\n慢文件：")
         for p in slow:
             print(f"  - {p}")
-    return 1 if total_failed else 0
+    # 超时必须让门禁变红：否则「慢」被读成「绿」。
+    return 1 if (total_failed or timed_out) else 0
 
 
 if __name__ == "__main__":

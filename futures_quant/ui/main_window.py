@@ -469,8 +469,13 @@ class MainWindow(QMainWindow):
             # 设置为当前页面
             self.stack.setCurrentWidget(first_page)
             # 同步导航高亮
+            # 注意：_nav_nav_to_idx 是「nav item 行号 → NAV 下标」，要找 NAV 下标 0
+            # 对应的行号必须**反查**（与 _show_page 一致）。此前误写为
+            # `_nav_nav_to_idx.get(0, -1)`：key 0 不存在 → 返回 -1 →
+            # setCurrentRow(-1) 反而**清空了侧栏选中**（首页已显示却无高亮）。
             if self.nav is not None:
-                self.nav.setCurrentRow(self._nav_nav_to_idx.get(0, -1))
+                self.nav.setCurrentRow(next(
+                    (ni for ni, v in self._nav_nav_to_idx.items() if v == 0), -1))
             # UX-61: 更新面包屑
             self._update_breadcrumb(0)
 
