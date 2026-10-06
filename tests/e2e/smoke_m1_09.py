@@ -72,7 +72,7 @@ def test_02_report_structure():
 # 3. Dialog 可无头构造
 def test_03_dialog_constructs_offscreen():
     _setup_qt()
-    dlg = DiagnosticsDialog(context=_ctx)
+    dlg = DiagnosticsDialog(context=_ctx, auto_check=False)
     try:
         assert dlg.windowTitle() == "系统诊断"
         assert len(dlg._row_widgets) == 8
@@ -83,7 +83,7 @@ def test_03_dialog_constructs_offscreen():
 # 4. run_all_checks_sync 渲染并保存
 def test_04_sync_run_and_render():
     _app.processEvents()
-    dlg = DiagnosticsDialog(context=_ctx)
+    dlg = DiagnosticsDialog(context=_ctx, auto_check=False)
     try:
         checks = dlg.run_all_checks_sync()
         assert len(checks) == 8
@@ -137,7 +137,7 @@ def test_07_no_full_key_leak():
 # 8. 安全关闭（不挂起）
 def test_08_safe_close():
     _app.processEvents()
-    dlg = DiagnosticsDialog(context=_ctx)
+    dlg = DiagnosticsDialog(context=_ctx, auto_check=False)
     dlg.run_all_checks_sync()
     dlg.close()
     # 再关一次也不报错
