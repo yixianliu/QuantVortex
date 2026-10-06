@@ -37,6 +37,23 @@ ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 RESULTS = ROOT / ".pytest_tmp" / "check_results.jsonl"
 
+# Qt 依赖的门禁子步（需要 PyQt6）；scan 是纯 AST，不依赖 Qt。
+# 在「无 PyQt6 的解释器」下跑这些子步会退化成「一堆 ModuleNotFoundError 被
+# 记成 N 个 FAILED」的**误导性假红**（曾把 3.13.12 无 PyQt6 的运行误读成
+# 85 条用例失败）。因此对「这些子步将真正执行且当前解释器缺 PyQt6」做
+# 提前快速失败，给出可解释的原因，而不是让错误数字冒出来。
+_QT_STEPS = {"unit", "version", "perf"}
+
+
+def _pyqt6_available() -> bool:
+    """当前解释器（== PY）能否 import PyQt6。check.py 就运行在 PY 里，
+    故直接在本进程探测即可（无需再 fork 一个子进程）。"""
+    try:
+        import PyQt6  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
 
 def _base_env() -> dict:
     r"""统一子进程环境：**必须为 offscreen**，且 TMP/TEMP 钉在项目内。
@@ -120,6 +137,28 @@ def main() -> int:
 
     RESULTS.parent.mkdir(parents=True, exist_ok=True)
     env = _base_env()
+
+    # ---- 快速失败护栏：Qt 子步需要 PyQt6，当前解释器缺了就别硬跑 ----
+    # 否则 unit 会报「PASSED=… FAILED=85」这类误导数字（其实是收集期
+    # ModuleNotFoundError），version/perf 直接 ModuleNotFoundError，全红。
+    running = []
+    for key in ("scan", "unit", "version", "perf"):
+        if a.step and key != a.step:
+            continue
+        if key in a.skip:
+            continue
+        running.append(key)
+    qt_steps_running = [k for k in running if k in _QT_STEPS]
+    if qt_steps_running and not _pyqt6_available():
+        print("=" * 68)
+        print("QuantVortex 统一质量门禁 —— PyQt6 预检未通过 ❌")
+        print("=" * 68)
+        print(f"  当前解释器：{PY}")
+        print("  缺 PyQt6。以下需要 Qt 的门禁会假红：" + ", ".join(qt_steps_running))
+        print("  请改用项目运行解释器（含 PyQt6）跑本门禁，例如：")
+        print("      /d/anaconda3/python.exe tools/check.py")
+        print("  （纯静态的 scan 步不依赖 Qt，可用 --step scan 单独跑。）")
+        return 2
 
     # (key, 显示名, 命令, 摘要函数)；key 用于 --skip/--step（别用中文做键）
     steps = [

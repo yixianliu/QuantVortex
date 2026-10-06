@@ -4,6 +4,39 @@
 
 ---
 
+## [5.2.12] - 2026-10-06
+
+> 「门禁别在错误的解释器上给出误导性假红」：给 `tools/check.py` 加 PyQt6
+> 预检快速失败。起因是全量门禁在无 PyQt6 的 managed 3.13.12 解释器下跑出
+> 「PASSED=157 FAILED=85」——**那 85 条根本不是真失败，是收集期
+> `ModuleNotFoundError`**（unit 子步用 `PY = sys.executable` 继承到无 PyQt6 的
+> 解释器，version/perf 同样 ModuleNotFoundError 全红）。门禁报了一个误导数字，
+> 还把人带去查 85 个"失败用例"。
+
+### 根因与修复
+
+- `tools/check.py` 用 `PY = sys.executable` 跑全部子步。项目运行解释器是
+  anaconda（含 PyQt6），但本机 `python` 未必是它。**在「缺 PyQt6 的解释器」上跑
+  含 Qt 的门禁（unit/version/perf）会退化成一堆 ModuleNotFoundError，被记成 N 个
+  FAILED 的假红。**
+- 加 `_pyqt6_available()` 预检：若「将真正执行的 Qt 子步」在当前解释器上缺 PyQt6，
+  **rc=2 快速失败**并明确提示「请改用含 PyQt6 的项目解释器（如 `/d/anaconda3/python.exe`）」；
+  纯静态的 `--step scan` 不依赖 Qt，仍正常跑（`_QT_STEPS={unit,version,perf}`）。
+
+### 验证
+
+| 场景 | 结果 |
+| --- | --- |
+| managed 3.13.12（无 PyQt6）跑全量 `check.py` | **rc=2 预检快速失败**，明确指「缺 PyQt6、用 anaconda」，**不再**出 85-fail 假数字 |
+| managed 3.13.12 跑 `--step scan`（纯 AST） | ✅ 正常 PASS（CHAIN 3 / 未留痕 0） |
+| anaconda（含 PyQt6）跑全量 `check.py` | ✅ 预检通过、**4 项全绿**：scan / unit `PASSED=593 FAILED=0 CRASHED=0` / 版本 / 性能 |
+
+> 可信数字自证：unit `593` = 此前 589 基线 + 5.2.10 新增的 4 项 `iter_py_files`
+> 回归（`test_scan_silent_bail.py`），与"代码干净"结论一致。
+> 铁律（延伸）：**门禁要能在"跑错环境"时给出可解释的原因，而不是误导性假红**——
+> 与 5.2.10「测采集链路」、5.2.11「工具须受控」同源：门禁的可信度 = 在任何环境下
+> 都报得出"为什么红/为什么绿"。
+
 ## [5.2.11] - 2026-10-06
 
 > 堵住 5.2.10 排查出的**同类更严重**故障：`build_tools/` 整目录被 `.gitignore`
