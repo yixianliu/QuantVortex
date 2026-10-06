@@ -57,6 +57,29 @@ def _collect_count(f: Path) -> int | None:
         return None
 
 
+def _collect_total() -> int | None:
+    """一次 `pytest tests/unit --collect-only -q` 取**全量**收集总数（用于收官对账）。
+
+    只在「全量跑 且 无失败/崩溃/超时」时调用一次（本机约 20s），不在热路径上。
+    返回 ``None`` 表示取不到 —— 此时跳过对账，绝不因取不到数而误报红。
+
+    为什么需要它：逐文件汇总的 PASSED 与 pytest 自己的收集数是**两个口径**。
+    口径不一致时缺口会静默消失（漏收集 / 超时丢弃 / 结果解析遗漏），
+    而汇总照样打全绿。对账是抓这类「静默失真」的唯一兜底网。
+    """
+    try:
+        proc = subprocess.run(
+            [PY, "-m", "pytest", "tests/unit", "--collect-only",
+             "--no-header", "-q", "-p", "no:cacheprovider"],
+            cwd=str(ROOT), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=180,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    nums = [int(m) for m in re.findall(r":\s*(\d+)\s*$", proc.stdout or "", re.M)]
+    return sum(nums) if nums else None
+
+
 def _stream_counts(path: Path) -> dict | None:
     """从 `unit_result_logger` 流式落盘的 JSONL 里取权威计数。
 
@@ -133,7 +156,9 @@ def main() -> int:
     # 在本机那是有名的慢盘，还会拖慢/干扰子进程启动。
     tmpdir = ROOT / ".pytest_tmp" / "qv_unit_results"
     tmpdir.mkdir(parents=True, exist_ok=True)
-    return _loop(files, tmpdir)
+    # 全量跑才对账；QV_UNIT_RECONCILE=1 可强制打开（用于自证失败分支）
+    reconcile = (only is None) or os.environ.get("QV_UNIT_RECONCILE") == "1"
+    return _loop(files, tmpdir, reconcile=reconcile)
 
 
 def _reset_result_log(path: Path) -> None:
@@ -154,8 +179,15 @@ def _reset_result_log(path: Path) -> None:
         sys.stdout.flush()
 
 
-def _loop(files: list[Path], tmpdir: Path) -> int:
-    """逐个跑文件并汇总，返回进程退出码（0 全绿 / 1 有失败）。"""
+def _loop(files: list[Path], tmpdir: Path, reconcile: bool = False) -> int:
+    """逐个跑文件并汇总，返回进程退出码（0 全绿 / 1 有失败）。
+
+    参数:
+        reconcile: 是否在收官时做「PASSED 汇总 vs 收集总数」对账。
+            仅全量跑时打开（``--only`` 定向调试时缺口是预期的）；
+            也可用环境变量 ``QV_UNIT_RECONCILE=1`` 强制打开，用于自证
+            失败分支（拿一个子集跑，必然对不上 → 必须是红）。
+    """
     total_passed = 0
     total_failed = 0
     crashed_files: list[Path] = []
@@ -280,6 +312,23 @@ def _loop(files: list[Path], tmpdir: Path) -> int:
         print("\n慢文件：")
         for p in slow:
             print(f"  - {p}")
+    # ── 收官对账：静默失真的兜底网 ──
+    # 只有当「没有失败 / 崩溃 / 超时」时，PASSED 才必须等于收集总数。
+    # 少一个都说明有文件被漏收集 / 被超时丢弃 / 结果解析遗漏，而汇总却全绿 ——
+    # 这种「静默失真」比直接报红更危险（本季已出过两次：glob 漏 contracts
+    # 子目录 31 个；超时丢 test_m3_03.py 5 个）。
+    if reconcile and not (total_failed or crashed_files or timed_out):
+        collected = _collect_total()
+        if collected:
+            if total_passed != collected:
+                print("\n[对账失败] 逐文件 PASSED 汇总 != pytest 收集总数：")
+                print(f"  PASSED={total_passed}  COLLECTED={collected}  "
+                      f"缺口={collected - total_passed}")
+                print("  可能原因：文件未被计数（漏收集 / 超时丢弃 / 结果解析遗漏）。")
+                print("  → 视为门禁失败（宁可红，不可静默失真）。")
+                return 1
+            print(f"[对账通过] PASSED={total_passed} == COLLECTED={collected}")
+
     # 超时必须让门禁变红：否则「慢」被读成「绿」。
     return 1 if (total_failed or timed_out) else 0
 
