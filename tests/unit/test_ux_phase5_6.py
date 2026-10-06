@@ -168,14 +168,15 @@ class TestUX64Diagnostics:
     def test_open_log_dir_method_exists(self, app):
         """_open_log_dir 方法存在。"""
         from futures_quant.ui.diagnostics_dialog import DiagnosticsDialog
-        d = DiagnosticsDialog()
+        # auto_check=False：只验属性，不起后台诊断线程（见该文件 __init__ 注释）
+        d = DiagnosticsDialog(auto_check=False)
         assert hasattr(d, "_open_log_dir")
         d.close()
 
     def test_btn_logs_exists(self, app):
         """_btn_logs 按钮存在。"""
         from futures_quant.ui.diagnostics_dialog import DiagnosticsDialog
-        d = DiagnosticsDialog()
+        d = DiagnosticsDialog(auto_check=False)
         assert hasattr(d, "_btn_logs")
         assert d._btn_logs is not None
         d.close()

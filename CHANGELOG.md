@@ -4,6 +4,56 @@
 
 ---
 
+## [5.2.8] - 2026-10-06
+
+> 「我以为修好了，其实只是运气好」：`test_ux_phase5_6.py` 的 `0xC0000409`
+> 在 v5.2.7 被判定为已根治，实际**仍在以约 10% 的概率崩**。这一版靠门禁新加的
+> 「失败回显」拿到了证据，定位到真因并根治。
+
+### 真因：`DiagnosticsDialog` 构造即开后台线程，测试从不回收
+
+`DiagnosticsDialog.__init__` 末尾**无条件**调用 `self._start_async()`，起一个
+`_DiagWorker`（**QThread**）跑 8 项真实系统检查（其中 `check_data_source`
+还会再开一个 `threading.Thread` 做网络探测）。
+
+而 `test_open_log_dir_method_exists` / `test_btn_logs_exists` 只为了断言
+「属性存在」而构造对话框，随后 `d.close()` 就走 —— **线程既不等也不回收**。
+进程在后续某个时刻因「QThread 仍在运行就被销毁」触发 `qFatal`
+→ `__fastfail` **0xC0000409**。
+
+**取证过程**（这条比结果更值得记）：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 门禁失败回显（v5.2.7 新增） | 直接给出崩溃文件 `test_ux_phase5_6.py`、`passed=8/37`、rc=3221226505 |
+| 按 runner 的确切调用连跑 10 次 | 1 次 CRASH、9 次 PASS（≈10%） |
+| 只跑 `::TestUX64Diagnostics` 两个用例 8 次 | **8/8 CRASH** —— 不是 flake，是确定性缺陷 |
+| 反向证伪「MainWindow 定时器」假设 | 造 2 个 MainWindow + 强制转事件循环 → 不崩，假设排除 |
+
+**v5.2.7 的误判根因**：拿「连跑 3 次全绿」当结论。崩溃概率约 10%，
+3 次全过的概率是 73% —— **3 次根本测不出低概率崩溃**。
+本次改用「定向组 8 次 > 全文件 20 次」的分层复跑，才拿到可信结论。
+
+### 修复
+
+- `futures_quant/ui/diagnostics_dialog.py`：新增 `auto_check: bool = True` 参数，
+  `False` 时跳过 `_start_async()`。**默认值不变，应用侧行为零变化**
+  （`main_window.py:808` 的构造点不受影响），只给离屏/单测留逃生口。
+- `tests/unit/test_ux_phase5_6.py`：两处 `DiagnosticsDialog()` →
+  `DiagnosticsDialog(auto_check=False)`。
+- 未改动 `MainWindow`：定向实验证实定时器/线程不是崩溃源
+  （`_start_drift_monitor` 用的是 `threading.Timer` 调度器，非 QThread）。
+
+### 验证
+
+| 检查 | 结果 |
+| --- | --- |
+| `::TestUX64Diagnostics` 连跑 8 次 | 修复前 **8/8 CRASH** → 修复后 **8/8 PASS** |
+| `test_ux_phase5_6.py` 连跑 20 次 | **20/20 PASS**（修复前 1/10 CRASH） |
+| `python tools/check.py` | 见下 |
+
+---
+
 ## [5.2.7] - 2026-10-06
 
 > 「测量口径统一 + 门禁落地 + 核心资产入库」：审计出逐文件 runner 用**非递归
@@ -38,6 +88,10 @@
   改为**延迟删除 + 对象身份集合**（不用 `id()`：地址可复用会漏删），
   37 个用例期间完全不触发 Qt 析构，模块收尾一次性结算。
   连跑 3 次均 37/37 通过（此前单独跑 3 次有 2 次卡在第 8 个）。
+
+  ⚠️ **该结论后被推翻（见 5.2.8）**：这次只是把崩溃概率降下来了，**没碰到真因**
+  —— 真因是 `DiagnosticsDialog` 构造即开 QThread 且从不回收。
+  教训：**「连跑 3 次全绿」测不出 10% 概率的崩溃**（3 次全过概率 73%）。
 - `tests/unit/test_ui_store_linkage_crash_regression.py`：9 处
   `return app` → `assert app is not None`。pytest 8 起「测试函数返回非 None」
   会升级为 error；保活语义等价（局部变量返回时同样释放，Qt 的 qApp 单例仍在）。
@@ -95,28 +149,28 @@
 > （只有行首 `#` 才起注释作用）。写成 `tests/_*.xml   # junit 转储` 规则会静默失配，
 > 直到 `git check-ignore -v` 才暴露。现规则已改为**每条独占一行、注释另起一行**。
 
-### 遗留：`ignore` 管不到已追踪文件
+### 遗留：`ignore` 管不到已追踪文件 —— 已清理
 
 `git check-ignore` 对**已被 git 追踪**的文件无效（ignore 只作用于 untracked）。
-本仓库历史提交里已混入 4 个运行期文件，`git add -A` 无论如何都会把它们带上去：
+历史提交里实际混入了 **17 个**运行期文件（比初查的 4 个多：`data/` 下还有 5 组
+SQLite 的 `-shm`/`-wal` 对）。已用 `git rm -r --cached` 一次性清出，**只退 index、
+未删磁盘文件**。清理前逐个确认它们都是**可再生的运行期产物**：
+`profitable_strategies.json` 由 `auto_evolve.load_profitable()` 读取且有兜底，
+`cls_news_cache.json` 是新闻缓存，`*.db-shm/-wal` 是 SQLite 内部文件。
 
-| 文件 | 建议 |
-| --- | --- |
-| `data/quant_backtest.db-shm` / `.db-wal` | `git rm --cached`（只退 index，不删盘上文件） |
-| `data/auto_strategies/profitable_strategies.json(.backup)`、`rules.json` | 同上 |
-| `data/cls_news_cache.json` | 同上 |
-
-**本次未执行 `git rm --cached`**（版本控制动作）。要真正清干净，需要一个
-`git rm --cached` 批次 + 一次提交；确认后即可执行。
+> 附带事实：清理期间 `data/quant_backtest.db-shm` 从磁盘消失，是 **SQLite 干净
+> 关闭 checkpoint 后自行删除临时文件** —— 主库（214MB / 4 张表 /
+> `evolve_history` 1000 行）打开校验完好，与 `git rm --cached` 无关。
 
 验证（`git check-ignore -v`）：`futures_quant/ui/main_window.py`、
 `futures_quant/ai/linkage_bus.py`、`tests/unit/test_ux_phase5_6.py`、
 `tests/fixtures/news_html/cs.html`、`tools/check.py` **全部可入库**；
 `dist/`、`build/`、`*.pyc`、`test_design.py`、`tests/e2e/*.log`、`outputs/`、
 `tests/_junit_*.xml`、`.write_test`、`data/evolution/` **全部仍被忽略**。
-`git add -A -n` dry-run：**437 行**（add 435 / remove 2），构成
-`tests 238 · futures_quant 178 · tools 7 · scripts 5 · data 3` + 5 个受控根文件。
-⚠️ 仍**只做 dry-run**，尚未 `git add` / `git commit`。
+入库前 `git add -A -n` dry-run：**437 行**（add 435 / remove 2）；实际提交为
+**429 新增 / 17 删除 / 4 修改 → 受控 461 个文件**（`tests 238 · futures_quant 178 ·
+tools 8 · scripts 5` + 根文件）。提交前跑过 `build_tools/secret_scan.py`：
+源码树**未发现硬编码密钥**。
 
 ### 验证（v5.2.7 发布门禁，`python tools/check.py` 全绿）
 
@@ -136,11 +190,12 @@ CRASHED=1`，约 27 个用例没跑完）+ **2 次全绿**；`tools/run_unit_tim
 
 - 整套件 `pytest tests/unit` 在**并发跑别的 pytest 进程**时仍会间歇挂住
   （跑得顺 2m17s / 卡死 16min+）。统一门禁因此走逐文件串行路线。
-- `.gitignore` 的裸规则（裸 `tests` / 裸 `futures_quant`）已修复，核心资产恢复受控；
-  但**尚未 `git add` / `git commit`**，当前 index 仍是修复前的 49 个受控文件 ——
-  要真正入库仍需执行一次提交动作。
-- `tests/` 根目录剩余 19 个散落测试文件**为历史遗留且未被 git 追踪，未删除**，
-  待人工归档决策（详见 `pytest.ini` 顶部口径说明）。
+- `tests/` 根目录剩余 19 个散落测试文件（约 5.4k 行）为 M2/M3/M4 时期历史遗留、
+  不在 `testpaths` 收集内，**本次随资产一起入库但未纳入门禁**，待人工归档决策
+  （详见 `pytest.ini` 顶部口径说明）。
+- 整套件 `pytest tests/unit` 会间歇性 flake（本轮实测 `PASSED=560 FAILED=1
+  CRASHED=1`）；门禁已具备失败回显，下次再撞可直接从
+  `.pytest_tmp/check_fail_unit.log` 取证。
 
 ---
 

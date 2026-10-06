@@ -348,7 +348,8 @@ class DiagnosticsDialog(QDialog):
     """系统诊断面板（M1-09）。"""
 
     def __init__(self, context: Optional[Dict[str, Any]] = None,
-                 parent: Optional[Any] = None) -> None:
+                 parent: Optional[Any] = None,
+                 auto_check: bool = True) -> None:
         super().__init__(parent)
         self.context = dict(context or {})
         self._worker: Optional[_DiagWorker] = None
@@ -356,8 +357,17 @@ class DiagnosticsDialog(QDialog):
         self.setWindowTitle("系统诊断")
         self.setMinimumSize(720, 520)
         self._build()
-        # 自动检查：对话框一打开就异步跑一轮
-        self._start_async()
+        # 自动检查：对话框一打开就异步跑一轮。
+        #
+        # ``auto_check=False`` 是给**离屏/单测**用的逃生口：``_start_async()``
+        # 会起一个 QThread 跑 8 项真实系统检查（其中 check_data_source 还会再
+        # 开一个 threading.Thread 做网络探测）。只为了断言「方法存在」而构造
+        # 对话框时，这条线程既不会被等待也不会被回收 —— 进程会在后续
+        # 某个时刻因「QThread 仍在运行就被销毁」触发 qFatal →
+        # __fastfail 0xC0000409（实测定向跑该组用例 8/8 崩溃）。
+        # 默认值 True，应用侧行为零变化。
+        if auto_check:
+            self._start_async()
 
     # ---------- UI 构建 ----------
     def _build(self) -> None:
