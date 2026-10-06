@@ -4,6 +4,39 @@
 
 ---
 
+## [5.2.11] - 2026-10-06
+
+> 堵住 5.2.10 排查出的**同类更严重**故障：`build_tools/` 整目录被 `.gitignore`
+> 裸规则 `/build_tools/` 排除 → `git ls-files build_tools/` 为 0，**打包脚本 + 密钥
+> 门禁工具全都不受版本控制**。后果：fresh clone 上 pre-commit 的密钥关（gate-1）
+> 因找不到 `build_tools/secret_scan.py` 而静默失效，且工具自身的加固无法入库。
+> 这与「`.gitignore` 零受控」是同款故障，也与文件顶部声明「build_tools/ 是受控
+> 资产、不要忽略目录本身」自相矛盾。
+
+### 修复
+
+- `.gitignore` 删除裸规则 `/build_tools/`（原第 59 行，"历史残留"段），只保留精确的
+  内部排除：`build_tools/_app_version_info.txt`（版本资源，自动生成）、
+  `build_tools/_rebrand_*.py`（一次性脚本，grep 0 引用，维持忽略）、`__pycache__/`。
+- **纳入受控**：`build_tools/secret_scan.py`、`build_tools/build_exe.py`、
+  `build_tools/futures_qt.spec`（`git ls-files build_tools/` 0 → 3）。
+- **顺手加固 `secret_scan.py`**：把运行期脚手架目录 `.pytest_tmp/` 加入默认
+  `_DEFAULT_SKIP_DIRS`，防止测试探针遗留的「疑似密钥」fixture 让**全树**扫描误报
+  （历史上 `.pytest_tmp/_bad_secret.py` 就踩过）。双向验证：`.pytest_tmp` 内假密钥
+  → 全树扫描跳过（rc=0）；受控目录内假密钥 → 仍被拦（rc=1），未过度抑制。
+
+### 验证（`git check-ignore` 逐一确认 + 本次提交走钩子）
+
+| 对象 | 期望 | 结果 |
+| --- | --- | --- |
+| `secret_scan.py` / `build_exe.py` / `futures_qt.spec` | trackable | ✅ trackable |
+| `_rebrand_py.py` / `_app_version_info.txt` | 仍 IGNORED（口径不变） | ✅ IGNORED |
+| 本次提交走 pre-commit（gate-1 密钥 + gate-2 静默失效） | 4 暂存文件全过、gate-2 真扫到暂存 .py | ✅ `命中 0 条` 放行 |
+
+> 方法论：这是「测采集链路」教训的延伸——门禁工具**本身**必须在受控目录里，
+> 否则它只在作者机器上"能跑"，clone 到任何别处就静默失效。工具的可移植性
+> 也是门禁可信度的一部分。
+
 ## [5.2.10] - 2026-10-06
 
 > 「让 5.2.9 的静默失效关真正生效」：修复 pre-commit 钩子第 2 关
