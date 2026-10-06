@@ -230,3 +230,56 @@ def test_scanner_finds_no_silent_chain_in_product_code():
     assert silent_chains == [], \
         "存在未留痕的静默失效链式写法：" + ", ".join(
             f"{r['file']}:{r['line']}" for r in silent_chains)
+
+
+# ---------------------------------------------------------------- iter_py_files：文件实参
+# 回归 pre-commit 钩子：钩子把「暂存的 .py 文件列表」直接喂给 --dir。
+# 若 iter_py_files 只认目录、把文件实参整个跳过（base.is_dir() 为 False 即 continue），
+# 则钩子的静默失效关会静默退化成「扫 0 个文件、恒 rc=0」的 no-op —— 曾踩过。
+_SILENT_CHAIN = '''
+class P:
+    def __init__(self):
+        try:
+            self._store = make()
+        except Exception:
+            self._store = None
+
+    def _save(self):
+        if self._store is None:
+            return
+        self._store.write()
+'''
+
+
+def test_iter_py_files_accepts_single_file(tmp_path):
+    """单个 .py 文件作为 --dir 实参必须被纳入（钩子正是这么调的）。"""
+    f = tmp_path / "probe_mod.py"
+    f.write_text(_SILENT_CHAIN, encoding="utf-8")
+    files = scanner.iter_py_files([str(f)])
+    assert files == [f], "单个 .py 文件实参必须被命中，否则钩子 no-op"
+    # 串起「文件实参 + 检出链路」两条：既被收集，又能检出未留痕 CHAIN
+    rows = scanner.scan_source(f.read_text(encoding="utf-8"), str(f))
+    silent = [r for r in rows if r["rule"] == "CHAIN" and r["silent"]]
+    assert silent, "文件实参链路必须能检出未留痕 CHAIN（rc=1 的门禁判据）"
+
+
+def test_iter_py_files_accepts_dir_and_file_together(tmp_path):
+    """目录（rglob）与文件实参可混用；文件实参不会被目录逻辑吞掉。"""
+    f = tmp_path / "solo.py"
+    f.write_text(_SILENT_CHAIN, encoding="utf-8")
+    files = scanner.iter_py_files(["futures_quant", str(f)])
+    assert f in files, "文件实参必须在结果里，与目录 rglob 并列"
+
+
+def test_iter_py_files_skips_underscore_file_arg(tmp_path):
+    """下划线开头的文件即便显式传入也过滤（与目录 rglob 口径一致）。"""
+    f = tmp_path / "_private.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    assert scanner.iter_py_files([str(f)]) == []
+
+
+def test_iter_py_files_ignores_non_py_file_arg(tmp_path):
+    """非 .py 实参直接忽略（钩子已用 grep 只挑 .py，双保险）。"""
+    f = tmp_path / "notes.txt"
+    f.write_text("x = 1\n", encoding="utf-8")
+    assert scanner.iter_py_files([str(f)]) == []

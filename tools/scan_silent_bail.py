@@ -326,9 +326,22 @@ def scan_file(path: Path) -> list[dict]:
 
 
 def iter_py_files(dirs: list[str]) -> list[Path]:
+    """收集要扫描的 .py 文件。
+
+    每个实参既可以是**目录**（rglob 全量）也可以是**单个 .py 文件**（只扫它）——
+    pre-commit 钩子传的是「暂存的 .py 文件列表」，若这里只认目录会把文件整个跳过，
+    导致钩子的静默失效关静默退化成 no-op（曾踩过：命中 0 条、恒 rc=0）。
+    """
     out: list[Path] = []
     for d in dirs:
         base = (ROOT / d) if not Path(d).is_absolute() else Path(d)
+        if base.is_file() and base.suffix == ".py":
+            if SKIP_PARTS & set(base.parts):
+                continue
+            if base.name.startswith("_"):
+                continue
+            out.append(base)
+            continue
         if not base.is_dir():
             continue
         for p in base.rglob("*.py"):
