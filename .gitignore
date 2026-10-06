@@ -50,13 +50,16 @@ build_tools/_app_version_info.txt
 # build_tools/ 内的 _rebrand_*.py 是临时重命名脚本，不在代码中引用
 build_tools/_rebrand_*.py
 
-# ================= 打包期手工排除（历史残留，勿动）=================
-# 这一段是 v5.0 打包实验时手工敲的排除清单，原样保留以免改动打包行为。
+# ================= 打包期手工排除（历史残留）=================
+# 这一段是 v5.0 打包实验时手工敲的排除清单。
 # 注意：其中 **裸规则**（无 / 前缀）会匹配任意层级的同名目录，
 # 曾导致 tests/ 与 futures_quant/ 整体退出版本控制（410 个 .py 只有 3 个受控）。
-# 现行有效且更精确的同义规则：tests/ → 本文件第 20 行；build_tools/ → 本文件第 50 行。
+# build_tools/ 是**受控资产**（打包脚本 + 密钥门禁 secret_scan.py 所在），
+# 不能整体忽略 —— 否则 fresh clone 上 pre-commit 的密钥关（gate-1）会因
+# 找不到 build_tools/secret_scan.py 而静默失效（与 tests/ 当年同款故障）。
+# 其内部临时/生成物仍按**精确规则**忽略：build_tools/_app_version_info.txt、
+# build_tools/_rebrand_*.py、__pycache__/。故删除整目录规则 /build_tools/。
 docs/examples/temp_*.py
-/build_tools/
 /pytest-cache-files-i6i7zd87/
 /packaging/
 /docs/
