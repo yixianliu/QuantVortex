@@ -30,6 +30,54 @@ ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 
 
+def _test_preflight() -> int:
+    """锁定 PyQt6 预检判定（``_should_fast_fail``）的 fixture 边界。
+
+    这是 v5.2.12 那道"跑错解释器时给出可解释原因、而非误导性 85-fail"的
+    门禁分支。它若退化（误删 ``_QT_STEPS``、把 scan 误算进 Qt 步、逻辑写反）
+    只会"一直放行"或"一直拦"，其它任何测试都不会红 —— 正是本项目反复强调的
+    「测判定/采集链路，不只测它生效时」。故直接喂 fixture 复算纯函数锁定边界。
+    """
+    sys.path.insert(0, str(ROOT / "tools"))
+    import check  # noqa: PLC0415
+
+    # (steps_running, pyqt6_ok, 期望, 说明)
+    cases = [
+        (["scan", "unit", "version", "perf"], False, True,
+         "含 Qt 子步且缺 PyQt6 → 必须快速失败"),
+        (["unit"], False, True,
+         "单个 Qt 子步、缺 PyQt6 → 快速失败"),
+        (["version", "perf"], False, True,
+         "只含 Qt 子步、缺 PyQt6 → 快速失败"),
+        (["scan"], False, False,
+         "纯静态 scan、缺 PyQt6 → 仍放行（不该被拦）"),
+        (["scan", "unit"], True, False,
+         "有 Qt 子步但 PyQt6 可用 → 放行"),
+        (["unit", "version", "perf"], True, False,
+         "全 Qt 子步、PyQt6 可用 → 放行"),
+        ([], False, False,
+         "没有任何步要跑 → 不快速失败"),
+    ]
+    ok = True
+    for steps, pyqt6, expect, why in cases:
+        got = check._should_fast_fail(list(steps), pyqt6)
+        if got == expect:
+            print(f"  [PASS] 预检判 {got}（{why}）")
+        else:
+            print(f"  [FAIL] _should_fast_fail({steps}, pyqt6={pyqt6})"
+                  f" = {got}，期望 {expect}（{why}）")
+            ok = False
+
+    # 额外锁一道：scan 绝不计入 Qt 子步，否则"只跑 scan"会被 PyQt6 预检误拦。
+    if "scan" in check._QT_STEPS:
+        print("  [FAIL] 'scan' 不应计入 Qt 子步（_QT_STEPS 被误改）")
+        ok = False
+    else:
+        print("  [PASS] _QT_STEPS 不含 scan（纯静态步不被 PyQt6 预检拦）")
+
+    return 0 if ok else 1
+
+
 def _test_dump_path(quick: bool) -> int:
     """验证失败转储：造一个必失败的-child，看 check.run 有没有留下证据。"""
     sys.path.insert(0, str(ROOT / "tools"))
@@ -79,9 +127,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"check.py 失败分支自证（{'quick' if quick else 'full'}）")
     print("=" * 68)
 
-    # 注意 `== 0` 而不是直接当布尔：_test_dump_path 成功时返回 **0**，
-    # 直接赋给 ok 会被当 falsy，自证自己报失败（这次就是这么栽的）。
+    # 注意 `== 0` 而不是直接当布尔：_test_* 成功时返回 **0**，
+    # 直接赋给 ok 会被当 falsy，自证自己报失败（dump 这条就是这么栽的）。
     ok = _test_dump_path(quick) == 0
+    # PyQt6 预检判定是纯函数、无副作用、快 —— 不论 quick/full 都要锁，
+    # 它是 v5.2.12 那道"跑错解释器别甩误导性假红"的门禁分支。
+    ok = ok and _test_preflight() == 0
 
     if not quick:
         t0 = time.time()

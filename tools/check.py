@@ -55,6 +55,18 @@ def _pyqt6_available() -> bool:
         return False
 
 
+def _should_fast_fail(steps_running: list[str], pyqt6_ok: bool) -> bool:
+    """纯判定：「将执行的门禁里含 Qt 子步」且「当前解释器缺 PyQt6」→ True。
+
+    抽出为纯函数（与 scan_silent_bail 的 scan_source 同款），便于
+    check_selftest 直接喂 fixture 锁定这道分支 —— 否则该预检一旦退化
+    （例如误删 _QT_STEPS、把 scan 也算进 Qt 步）只会「一直放行」或
+    「一直拦」，没有任何测试会红。判定不含副作用、可被直接复算。
+    """
+    qt_will_run = [k for k in steps_running if k in _QT_STEPS]
+    return bool(qt_will_run) and not pyqt6_ok
+
+
 def _base_env() -> dict:
     r"""统一子进程环境：**必须为 offscreen**，且 TMP/TEMP 钉在项目内。
 
@@ -148,8 +160,8 @@ def main() -> int:
         if key in a.skip:
             continue
         running.append(key)
-    qt_steps_running = [k for k in running if k in _QT_STEPS]
-    if qt_steps_running and not _pyqt6_available():
+    if _should_fast_fail(running, _pyqt6_available()):
+        qt_steps_running = [k for k in running if k in _QT_STEPS]
         print("=" * 68)
         print("QuantVortex 统一质量门禁 —— PyQt6 预检未通过 ❌")
         print("=" * 68)

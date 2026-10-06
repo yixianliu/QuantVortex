@@ -4,6 +4,36 @@
 
 ---
 
+## [5.2.13] - 2026-10-06
+
+> 「自证脚本也自证自己」：给 5.2.12 新加的 PyQt6 预检**补上 fixture 级回归**。
+> 5.2.12 引入了 `_pyqt6_available()` 预检，但当时只靠"手动在错解释器上跑一次"
+> 验证，没有把它锁进 `check_selftest.py`。而这道分支一旦退化（误删 `_QT_STEPS`、
+> 把 `scan` 误算进 Qt 步、逻辑写反）只会"一直放行"或"一直拦"，**没有任何测试会红**——
+> 正撞上本项目反复强调的铁律「能报绿 ≠ 报错时也报得出 Why；自证脚本自身也栽过」。
+
+### 改动
+
+- **`tools/check.py`**：把预检判定抽成纯函数 `_should_fast_fail(steps_running, pyqt6_ok)`
+  （与 `scan_silent_bail.scan_source` 同款风格——把判定与副作用分离、可喂 fixture）。
+  `main()` 改为调用它，逻辑只存在一处、可被直接复算。
+- **`tools/check_selftest.py`**：新增 `_test_preflight()`，用 7 组 fixture 锁定
+  `_should_fast_fail` 的真值表（含 Qt 子步×缺 PyQt6 → 拦；纯 scan / PyQt6 可用 /
+  空集 → 放行），外加一道「`scan` 绝不计入 `_QT_STEPS`」守卫。quick 模式即跑，
+  不依赖 PyQt6（纯函数复算，managed 解释器也能测）。
+
+### 验证
+
+| 场景 | 结果 |
+| --- | --- |
+| `check_selftest.py --quick`（dump + 7 预检 fixture + scan 守卫） | 12/12 PASS，`rc=0` |
+| `_should_fast_fail` 行为不变（重构后）：managed 全量→rc=2、`--step scan`→rc=0 | ✅ 重构前后一致 |
+| `tools/check.py` / `check_selftest.py` | `py_compile` 通过 |
+
+> 方法论（与 5.2.10/5.2.11/5.2.12 同源）：**新增一道门禁分支，必须同时新增它的
+> fixture 回归**——否则它就是下一个"从没被验证过真能拦住"的 `iter_py_files`。
+> 自证脚本自身也要被测，这是本项目写进铁律的"测量可信度"。
+
 ## [5.2.12] - 2026-10-06
 
 > 「门禁别在错误的解释器上给出误导性假红」：给 `tools/check.py` 加 PyQt6
