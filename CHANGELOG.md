@@ -50,7 +50,9 @@
 | --- | --- |
 | `::TestUX64Diagnostics` 连跑 8 次 | 修复前 **8/8 CRASH** → 修复后 **8/8 PASS** |
 | `test_ux_phase5_6.py` 连跑 20 次 | **20/20 PASS**（修复前 1/10 CRASH） |
-| `python tools/check.py` | 见下 |
+| `python tools/check.py` | scan `CHAIN 3 / 未留痕 0` · unit **589/0/0** · 版本防漂移 PASS · 性能预算 PASS，rc=0 |
+
+另注：本版补齐了 v5.2.7 章节里那句已被推翻的「已根治」结论，避免后人照抄。
 
 ---
 
