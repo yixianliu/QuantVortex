@@ -100,3 +100,7 @@ data/akshare_cache/
 tools
 build_tools
 futures_quant
+tests
+tools
+packaging
+data
