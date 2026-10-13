@@ -63,7 +63,6 @@ docs/examples/temp_*.py
 /pytest-cache-files-i6i7zd87/
 /packaging/
 /docs/
-/images/
 
 # ================= 临时评估/实验脚本（不入库）=================
 # 早期在仓库根部随手敲的验证物，不属于任何模块，勿入库
