@@ -97,3 +97,5 @@ data/_pred_export.csv
 .cov_report.txt
 data/temp/
 data/akshare_cache/
+tools
+build_tools
