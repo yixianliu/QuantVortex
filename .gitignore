@@ -62,7 +62,6 @@ build_tools/_rebrand_*.py
 docs/examples/temp_*.py
 /pytest-cache-files-i6i7zd87/
 /packaging/
-/docs/
 
 # ================= 临时评估/实验脚本（不入库）=================
 # 早期在仓库根部随手敲的验证物，不属于任何模块，勿入库
@@ -96,10 +95,13 @@ data/_pred_export.csv
 .cov_report.txt
 data/temp/
 data/akshare_cache/
+# ================= 历史遗留整目录排除（本轮部分解禁）=================
+# 2026-11 源码纳管：移除 `futures_quant` / `tests` / `data` 三条裸目录规则。
+# 裸规则会匹配任意层级的同名目录，曾导致 410 个 .py 只有 3 个受控（fresh clone 无法跑测试）。
+# - `futures_quant/`、`tests/` 是源码与测试资产，改为可跟踪；
+# - `data/` 改用锚定规则 `/data/`，继续忽略运行时数据（缓存 / 数据库 / 进化产物）；
+# - `tools` / `build_tools` / `packaging` 不在本轮范围，保持原样忽略。
 tools
 build_tools
-futures_quant
-tests
-tools
 packaging
-data
+/data/

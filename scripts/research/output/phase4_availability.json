@@ -1,0 +1,647 @@
+{
+  "meta": {
+    "probe_time": "2026-11-04 13:04:30",
+    "request_timeout_sec": 20.0,
+    "total_budget_sec": 180.0,
+    "back_years": 3,
+    "symbols": [
+      "rb",
+      "i",
+      "cu"
+    ],
+    "contracts_per_symbol": 2,
+    "expired_test_per_symbol": 1
+  },
+  "local": {
+    "main_continuous": {
+      "A0": {
+        "rows": 5309,
+        "first": "2005-01-04",
+        "last": "2026-11-03"
+      },
+      "AO0": {
+        "rows": 817,
+        "first": "2023-06-19",
+        "last": "2026-11-03"
+      },
+      "AP0": {
+        "rows": 2143,
+        "first": "2017-12-22",
+        "last": "2026-11-03"
+      },
+      "B0": {
+        "rows": 4514,
+        "first": "2007-08-27",
+        "last": "2026-11-03"
+      },
+      "BB0": {
+        "rows": 1421,
+        "first": "2013-12-06",
+        "last": "2026-11-03"
+      },
+      "BC0": {
+        "rows": 1443,
+        "first": "2020-11-19",
+        "last": "2026-11-03"
+      },
+      "BR0": {
+        "rows": 790,
+        "first": "2023-07-28",
+        "last": "2026-11-03"
+      },
+      "CJ0": {
+        "rows": 1819,
+        "first": "2019-05-06",
+        "last": "2026-11-03"
+      },
+      "CS0": {
+        "rows": 2880,
+        "first": "2014-12-22",
+        "last": "2026-11-03"
+      },
+      "CY0": {
+        "rows": 2197,
+        "first": "2017-08-23",
+        "last": "2026-11-03"
+      },
+      "EC0": {
+        "rows": 775,
+        "first": "2023-08-18",
+        "last": "2026-11-03"
+      },
+      "FB0": {
+        "rows": 2810,
+        "first": "2013-12-06",
+        "last": "2026-11-03"
+      },
+      "FG0": {
+        "rows": 3369,
+        "first": "2012-12-03",
+        "last": "2026-11-03"
+      },
+      "IC0": {
+        "rows": 2375,
+        "first": "2017-01-17",
+        "last": "2026-11-03"
+      },
+      "IF0": {
+        "rows": 2375,
+        "first": "2017-01-17",
+        "last": "2026-11-03"
+      },
+      "IH0": {
+        "rows": 2375,
+        "first": "2017-01-17",
+        "last": "2026-11-03"
+      },
+      "IM0": {
+        "rows": 1037,
+        "first": "2022-07-22",
+        "last": "2026-11-03"
+      },
+      "LG0": {
+        "rows": 475,
+        "first": "2024-11-18",
+        "last": "2026-11-03"
+      },
+      "LH0": {
+        "rows": 1408,
+        "first": "2021-01-08",
+        "last": "2026-11-03"
+      },
+      "LU0": {
+        "rows": 1543,
+        "first": "2020-06-22",
+        "last": "2026-11-03"
+      },
+      "MA0": {
+        "rows": 2873,
+        "first": "2014-12-24",
+        "last": "2026-11-03"
+      },
+      "NR0": {
+        "rows": 1751,
+        "first": "2019-08-12",
+        "last": "2026-11-03"
+      },
+      "OI0": {
+        "rows": 4713,
+        "first": "2007-06-08",
+        "last": "2026-11-03"
+      },
+      "PD0": {
+        "rows": 225,
+        "first": "2025-11-27",
+        "last": "2026-11-03"
+      },
+      "PF0": {
+        "rows": 1471,
+        "first": "2020-10-12",
+        "last": "2026-11-03"
+      },
+      "PK0": {
+        "rows": 1392,
+        "first": "2021-02-01",
+        "last": "2026-11-03"
+      },
+      "PR0": {
+        "rows": 524,
+        "first": "2024-08-30",
+        "last": "2026-11-03"
+      },
+      "PX0": {
+        "rows": 755,
+        "first": "2023-09-15",
+        "last": "2026-11-03"
+      },
+      "RR0": {
+        "rows": 1747,
+        "first": "2019-08-16",
+        "last": "2026-11-03"
+      },
+      "SA0": {
+        "rows": 1673,
+        "first": "2019-12-06",
+        "last": "2026-11-03"
+      },
+      "SF0": {
+        "rows": 2940,
+        "first": "2014-08-12",
+        "last": "2026-11-03"
+      },
+      "SH0": {
+        "rows": 755,
+        "first": "2023-09-15",
+        "last": "2026-11-03"
+      },
+      "SM0": {
+        "rows": 2923,
+        "first": "2014-08-12",
+        "last": "2026-11-03"
+      },
+      "SP0": {
+        "rows": 1922,
+        "first": "2018-11-27",
+        "last": "2026-11-03"
+      },
+      "T0": {
+        "rows": 2375,
+        "first": "2017-01-17",
+        "last": "2026-11-03"
+      },
+      "TF0": {
+        "rows": 2375,
+        "first": "2017-01-17",
+        "last": "2026-11-03"
+      },
+      "TL0": {
+        "rows": 855,
+        "first": "2023-04-21",
+        "last": "2026-11-03"
+      },
+      "TS0": {
+        "rows": 1989,
+        "first": "2018-08-17",
+        "last": "2026-11-03"
+      },
+      "UR0": {
+        "rows": 1752,
+        "first": "2019-08-09",
+        "last": "2026-11-03"
+      },
+      "WR0": {
+        "rows": 3712,
+        "first": "2009-03-27",
+        "last": "2026-11-02"
+      },
+      "ZC0": {
+        "rows": 1760,
+        "first": "2015-05-26",
+        "last": "2022-12-30"
+      },
+      "ag0": {
+        "rows": 3523,
+        "first": "2012-05-10",
+        "last": "2026-11-03"
+      },
+      "al0": {
+        "rows": 5309,
+        "first": "2005-01-04",
+        "last": "2026-11-03"
+      },
+      "au0": {
+        "rows": 4582,
+        "first": "2008-01-09",
+        "last": "2026-11-03"
+      },
+      "bu0": {
+        "rows": 3175,
+        "first": "2013-10-09",
+        "last": "2026-11-03"
+      },
+      "c0": {
+        "rows": 5306,
+        "first": "2005-01-04",
+        "last": "2026-11-03"
+      },
+      "cf0": {
+        "rows": 5310,
+        "first": "2005-01-04",
+        "last": "2026-11-03"
+      },
+      "cu0": {
+        "rows": 5309,
+        "first": "2005-01-04",
+        "last": "2026-11-03"
+      },
+      "eg0": {
+        "rows": 1913,
+        "first": "2018-12-10",
+        "last": "2026-11-03"
+      },
+      "fu0": {
+        "rows": 5284,
+        "first": "2005-01-04",
+        "last": "2026-11-03"
+      },
+      "hc0": {
+        "rows": 3071,
+        "first": "2014-03-21",
+        "last": "2026-11-03"
+      },
+      "i0": {
+        "rows": 3170,
+        "first": "2013-10-18",
+        "last": "2026-11-03"
+      },
+      "j0": {
+        "rows": 3774,
+        "first": "2011-04-15",
+        "last": "2026-11-03"
+      },
+      "jd0": {
+        "rows": 3156,
+        "first": "2013-11-08",
+        "last": "2026-11-03"
+      },
+      "jm0": {
+        "rows": 3302,
+        "first": "2013-03-22",
+        "last": "2026-11-03"
+      },
+      "l0": {
+        "rows": 4684,
+        "first": "2007-07-31",
+        "last": "2026-11-03"
+      },
+      "m0": {
+        "rows": 5312,
+        "first": "2005-01-04",
+        "last": "2026-11-03"
+      },
+      "ni0": {
+        "rows": 2821,
+        "first": "2015-03-27",
+        "last": "2026-11-03"
+      },
+      "p0": {
+        "rows": 4623,
+        "first": "2007-10-29",
+        "last": "2026-11-03"
+      },
+      "pb0": {
+        "rows": 3792,
+        "first": "2011-03-24",
+        "last": "2026-11-03"
+      },
+      "pp0": {
+        "rows": 3081,
+        "first": "2014-02-28",
+        "last": "2026-11-03"
+      },
+      "rb0": {
+        "rows": 4273,
+        "first": "2009-03-27",
+        "last": "2026-11-03"
+      },
+      "rm0": {
+        "rows": 3355,
+        "first": "2012-12-28",
+        "last": "2026-11-03"
+      },
+      "ru0": {
+        "rows": 5307,
+        "first": "2005-01-04",
+        "last": "2026-11-03"
+      },
+      "sc0": {
+        "rows": 2087,
+        "first": "2018-03-26",
+        "last": "2026-11-03"
+      },
+      "sn0": {
+        "rows": 2821,
+        "first": "2015-03-27",
+        "last": "2026-11-03"
+      },
+      "sr0": {
+        "rows": 5053,
+        "first": "2006-01-12",
+        "last": "2026-11-03"
+      },
+      "ss0": {
+        "rows": 1720,
+        "first": "2019-09-25",
+        "last": "2026-11-03"
+      },
+      "ta0": {
+        "rows": 4827,
+        "first": "2006-12-19",
+        "last": "2026-11-03"
+      },
+      "v0": {
+        "rows": 4230,
+        "first": "2009-05-25",
+        "last": "2026-11-03"
+      },
+      "y0": {
+        "rows": 5055,
+        "first": "2006-01-09",
+        "last": "2026-11-03"
+      },
+      "zn0": {
+        "rows": 4772,
+        "first": "2007-03-26",
+        "last": "2026-11-03"
+      }
+    },
+    "single_contract": {},
+    "other_dirs": {
+      "akshare_cache": {
+        "count": 4,
+        "files": [
+          "IF_CFFEX_D.csv",
+          "au_SHFE_D.csv",
+          "i_DCE_D.csv",
+          "rb_SHFE_D.csv"
+        ]
+      },
+      "real_samples": {
+        "count": 4,
+        "files": [
+          "IF_CFFEX_D.csv",
+          "au_SHFE_D.csv",
+          "i_DCE_D.csv",
+          "rb_SHFE_D.csv"
+        ]
+      }
+    }
+  },
+  "requests": [
+    {
+      "symbol": "rb",
+      "stage": "contract_list",
+      "api": "futures_zh_realtime",
+      "elapsed_sec": 11.6,
+      "status": "ok",
+      "contracts_found": 11,
+      "contracts": [
+        "RB2611",
+        "RB2612",
+        "RB2701",
+        "RB2702",
+        "RB2703",
+        "RB2704",
+        "RB2705",
+        "RB2707",
+        "RB2708",
+        "RB2709",
+        "RB2710"
+      ],
+      "totals_elapsed_sec": 18.1
+    },
+    {
+      "symbol": "rb",
+      "stage": "daily",
+      "api": "futures_zh_daily_sina",
+      "contract": "RB2611",
+      "role": "near",
+      "elapsed_sec": 3.46,
+      "status": "ok",
+      "rows": 232,
+      "first": "2025-11-18",
+      "last": "2026-11-03",
+      "has_settle": true,
+      "has_volume": true,
+      "has_oi": true,
+      "file": "scripts/research/output/phase4_probe_data/rb_RB2611.csv",
+      "totals_elapsed_sec": 21.58,
+      "oi_at_probe": null,
+      "volume_at_probe": 270.0
+    },
+    {
+      "symbol": "rb",
+      "stage": "daily",
+      "api": "futures_zh_daily_sina",
+      "contract": "RB2612",
+      "role": "next",
+      "elapsed_sec": 3.54,
+      "status": "ok",
+      "rows": 212,
+      "first": "2025-12-16",
+      "last": "2026-11-03",
+      "has_settle": true,
+      "has_volume": true,
+      "has_oi": true,
+      "file": "scripts/research/output/phase4_probe_data/rb_RB2612.csv",
+      "totals_elapsed_sec": 25.13,
+      "oi_at_probe": null,
+      "volume_at_probe": 714.0
+    },
+    {
+      "symbol": "rb",
+      "stage": "daily",
+      "api": "futures_zh_daily_sina",
+      "contract": "RB2510",
+      "role": "expired",
+      "elapsed_sec": 3.18,
+      "status": "ok",
+      "rows": 243,
+      "first": "2024-10-16",
+      "last": "2025-10-15",
+      "has_settle": true,
+      "has_volume": true,
+      "has_oi": true,
+      "file": "scripts/research/output/phase4_probe_data/rb_RB2510.csv",
+      "totals_elapsed_sec": 28.32
+    },
+    {
+      "symbol": "i",
+      "stage": "contract_list",
+      "api": "futures_zh_realtime",
+      "elapsed_sec": 3.74,
+      "status": "ok",
+      "contracts_found": 12,
+      "contracts": [
+        "I2611",
+        "I2612",
+        "I2701",
+        "I2702",
+        "I2703",
+        "I2704",
+        "I2705",
+        "I2706",
+        "I2707",
+        "I2708",
+        "I2709",
+        "I2710"
+      ],
+      "totals_elapsed_sec": 32.06
+    },
+    {
+      "symbol": "i",
+      "stage": "daily",
+      "api": "futures_zh_daily_sina",
+      "contract": "I2611",
+      "role": "near",
+      "elapsed_sec": 3.22,
+      "status": "ok",
+      "rows": 233,
+      "first": "2025-11-17",
+      "last": "2026-11-03",
+      "has_settle": true,
+      "has_volume": true,
+      "has_oi": true,
+      "file": "scripts/research/output/phase4_probe_data/i_I2611.csv",
+      "totals_elapsed_sec": 35.29,
+      "oi_at_probe": null,
+      "volume_at_probe": 60.0
+    },
+    {
+      "symbol": "i",
+      "stage": "daily",
+      "api": "futures_zh_daily_sina",
+      "contract": "I2612",
+      "role": "next",
+      "elapsed_sec": 3.79,
+      "status": "ok",
+      "rows": 213,
+      "first": "2025-12-15",
+      "last": "2026-11-03",
+      "has_settle": true,
+      "has_volume": true,
+      "has_oi": true,
+      "file": "scripts/research/output/phase4_probe_data/i_I2612.csv",
+      "totals_elapsed_sec": 39.09,
+      "oi_at_probe": null,
+      "volume_at_probe": 10024.0
+    },
+    {
+      "symbol": "i",
+      "stage": "daily",
+      "api": "futures_zh_daily_sina",
+      "contract": "I2509",
+      "role": "expired",
+      "elapsed_sec": 4.16,
+      "status": "ok",
+      "rows": 240,
+      "first": "2024-09-18",
+      "last": "2025-09-12",
+      "has_settle": true,
+      "has_volume": true,
+      "has_oi": true,
+      "file": "scripts/research/output/phase4_probe_data/i_I2509.csv",
+      "totals_elapsed_sec": 43.26
+    },
+    {
+      "symbol": "cu",
+      "stage": "contract_list",
+      "api": "futures_zh_realtime",
+      "elapsed_sec": 4.19,
+      "status": "ok",
+      "contracts_found": 12,
+      "contracts": [
+        "CU2611",
+        "CU2612",
+        "CU2701",
+        "CU2702",
+        "CU2703",
+        "CU2704",
+        "CU2705",
+        "CU2706",
+        "CU2707",
+        "CU2708",
+        "CU2709",
+        "CU2710"
+      ],
+      "totals_elapsed_sec": 47.45
+    },
+    {
+      "symbol": "cu",
+      "stage": "daily",
+      "api": "futures_zh_daily_sina",
+      "contract": "CU2611",
+      "role": "near",
+      "elapsed_sec": 2.8,
+      "status": "ok",
+      "rows": 232,
+      "first": "2025-11-18",
+      "last": "2026-11-03",
+      "has_settle": true,
+      "has_volume": true,
+      "has_oi": true,
+      "file": "scripts/research/output/phase4_probe_data/cu_CU2611.csv",
+      "totals_elapsed_sec": 50.27,
+      "oi_at_probe": null,
+      "volume_at_probe": 18990.0
+    },
+    {
+      "symbol": "cu",
+      "stage": "daily",
+      "api": "futures_zh_daily_sina",
+      "contract": "CU2612",
+      "role": "next",
+      "elapsed_sec": 2.85,
+      "status": "ok",
+      "rows": 212,
+      "first": "2025-12-16",
+      "last": "2026-11-03",
+      "has_settle": true,
+      "has_volume": true,
+      "has_oi": true,
+      "file": "scripts/research/output/phase4_probe_data/cu_CU2612.csv",
+      "totals_elapsed_sec": 53.13,
+      "oi_at_probe": null,
+      "volume_at_probe": 116650.0
+    },
+    {
+      "symbol": "cu",
+      "stage": "daily",
+      "api": "futures_zh_daily_sina",
+      "contract": "CU2510",
+      "role": "expired",
+      "elapsed_sec": 4.6,
+      "status": "ok",
+      "rows": 243,
+      "first": "2024-10-16",
+      "last": "2025-10-15",
+      "has_settle": true,
+      "has_volume": true,
+      "has_oi": true,
+      "file": "scripts/research/output/phase4_probe_data/cu_CU2510.csv",
+      "totals_elapsed_sec": 57.74
+    }
+  ],
+  "failures": [],
+  "aborted": false,
+  "conclusion": {
+    "single_contract_daily_obtainable": true,
+    "symbols_with_two_live_contracts": 3,
+    "expired_contract_history_obtainable": 3,
+    "term_structure_probe_feasible": true,
+    "max_rows_per_contract": 243,
+    "min_rows_per_contract": 212,
+    "reason": "在交易近月/次近月单合约日线可得，且含结算价与持仓量；3 年滚动近月序列需批量抓取多个月份合约"
+  },
+  "total_elapsed_sec": 57.74
+}

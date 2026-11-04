@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-11-04T09:37:48",
+  "module_import_ms": {
+    "numpy": 0.0,
+    "pandas": 0.0,
+    "PyQt6": 0.0,
+    "futures_quant.data": 0.8,
+    "futures_quant.indicators": 0.6,
+    "futures_quant.indicators.tech": 0.0,
+    "futures_quant.ai": 0.5,
+    "futures_quant.ai.predictor": 0.0,
+    "futures_quant.ai.features": 0.0,
+    "futures_quant.ai.lstm": 0.0,
+    "futures_quant.storage.analysis_store": 0.0,
+    "futures_quant.storage.config_manager": 0.0,
+    "futures_quant.ui.main_window": 231.1
+  },
+  "mainwindow_init_ms": 128.4,
+  "mainwindow_show_ms": 8.4,
+  "mainwindow_total_ms": 136.8,
+  "connect_ms": 8.0,
+  "indicator_per_call_ms": {
+    "add_indicators x1": 48.8,
+    "add_indicators x3": 35.6,
+    "add_indicators x5": 38.0
+  },
+  "build_features_first_ms": 75.5,
+  "build_features_second_ms": 37.0,
+  "predictor_create_ms": 0.0,
+  "ai_modules_loaded_at_create": true,
+  "fit_ms": 4338.9,
+  "predict_ms": 31.7
+}
