@@ -4,7 +4,12 @@
   "data": {
     "source": "sina",
     "sina_cache_dir": "data/sina_cache",
-    "sqlite_path": "data/quant_analysis.db"
+    "sqlite_path": "data/quant_analysis.db",
+    "tqsdk": {
+      "user_env": "TQ_USER",
+      "password_env": "TQ_PASSWORD",
+      "creds_path": "config/tqsdk_settings.json"
+    }
   },
   "analysis": {
     "default_symbol": "RB.SHFE",

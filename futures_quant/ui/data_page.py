@@ -26,6 +26,17 @@ from .states import toast
 from ..storage import data_transfer as dtf
 
 
+#: 数据管理页可选数据源（key 与 Config.data.source 一致）。
+_SOURCE_OPTIONS = [
+    ("sina", "新浪日线（真实 · 默认）"),
+    ("akshare", "AKShare 日线（真实）"),
+    ("tqsdk", "TqSdk / SimNow（真实 · 需账号）"),
+    ("ctp", "CTP / SimNow 柜台（真实 · 需账号）"),
+    ("csv", "本地 CSV 回放"),
+    ("synthetic", "合成行情（仅演示）"),
+]
+
+
 class DataPage(BasePage):
     """数据管理（导出 / 备份 / 恢复 / MySQL 迁移）。"""
 
@@ -68,6 +79,7 @@ class DataPage(BasePage):
         lay.setContentsMargins(0, 0, 6, 0)
         lay.setSpacing(12)
 
+        lay.addWidget(self._build_source_card())
         lay.addWidget(self._build_export_card())
         lay.addWidget(self._build_local_backup_card())
         lay.addWidget(self._build_mysql_card())
@@ -100,6 +112,82 @@ class DataPage(BasePage):
         v.setSpacing(10)
         v.addWidget(SectionHeader(title, accent=accent))
         return card, v
+
+    # ---- ⓪ 行情数据源（阶段 5：TqSdk / SimNow 接入） ----
+    def _build_source_card(self) -> QFrame:
+        """构建「行情数据源」选择卡（默认仍为现状源，切换后重启生效）。"""
+        card, v = self._card("行情数据源", accent="#a855f7")
+        tip = QLabel("切换后需重启程序生效；默认仍为新浪日线，不影响既有使用。"
+                     "TqSdk / CTP 为真实账号源，凭据只从环境变量或本地未跟踪文件读取。")
+        tip.setObjectName("sub")
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("数据源："))
+        self.src_combo = QComboBox()
+        self.src_combo.setFixedWidth(300)
+        cur = self.config.get("data.source", "sina") if self.config else "sina"
+        for i, (key, label) in enumerate(_SOURCE_OPTIONS):
+            self.src_combo.addItem(label, key)
+            if key == cur:
+                self.src_combo.setCurrentIndex(i)
+        self.src_combo.currentIndexChanged.connect(self._refresh_source_hint)
+        row.addWidget(self.src_combo)
+        self.btn_save_source = QPushButton("保存数据源")
+        self.btn_save_source.clicked.connect(self._do_save_source)
+        row.addWidget(self.btn_save_source)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        self.src_hint = QLabel()
+        self.src_hint.setObjectName("sub")
+        self.src_hint.setWordWrap(True)
+        v.addWidget(self.src_hint)
+        self._refresh_source_hint()
+        return card
+
+    def _refresh_source_hint(self, *_args) -> None:
+        """刷新数据源说明 + TqSdk 环境/凭据诊断（只读，不联网、不索取密码）。"""
+        selected = self.src_combo.currentData() if hasattr(self, "src_combo") else None
+        cur = self.config.get("data.source", "sina") if self.config else "sina"
+        cur_label = dict(_SOURCE_OPTIONS).get(cur, str(cur))
+        lines = [f"当前生效：{cur_label}（修改后需重启程序）。"]
+        if selected == "tqsdk" or cur == "tqsdk":
+            try:
+                from ..data.tqsdk_feed import tqsdk_diagnose
+                diag = tqsdk_diagnose()
+            except Exception:  # noqa: BLE001 - 诊断失败不应影响页面
+                diag = {}
+            if diag.get("installed"):
+                lines.append(f"TqSdk 已安装（{diag.get('version') or '版本未知'}）。")
+            else:
+                lines.append("TqSdk 未安装：请在命令行执行 pip install tqsdk 后重启程序。")
+            if diag.get("creds_complete"):
+                lines.append(f"账号凭据：已检测到（{diag.get('creds_origin')}）。")
+            else:
+                lines.append(
+                    "账号凭据：未检测到。设置环境变量 TQ_USER / TQ_PASSWORD；"
+                    "或新建 config/tqsdk_settings.json（内容 "
+                    '{"user": "账号", "password": "密码"}，该文件已被 .gitignore 忽略）。')
+        self.src_hint.setText("\n".join(lines))
+
+    def _do_save_source(self) -> None:
+        """保存 data.source（仅写用户配置，不触发联网）。"""
+        if self.config is None:
+            toast(self, "配置未加载，无法保存数据源。", level="warning")
+            return
+        key = self.src_combo.currentData()
+        old = self.config.get("data.source", "sina")
+        self.config.set("data.source", key)
+        self.config.save()
+        self._refresh_source_hint()
+        if key == old:
+            toast(self, "数据源未变化。", level="info", duration=2500)
+            return
+        label = dict(_SOURCE_OPTIONS).get(key, key)
+        self._append_log(f"数据源：{old} → {key}（重启程序后生效）")
+        toast(self, f"已切换到 {label}，重启程序后生效。", level="info", duration=4000)
 
     # ---- ① 数据导出 ----
     def _build_export_card(self) -> QFrame:

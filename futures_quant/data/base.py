@@ -73,6 +73,7 @@ def provenance_text(source: str, is_synthetic: bool = False, is_stale: bool = Fa
         "csv": "本地CSV",
         "ctp": "CTP",
         "ctp-fallback": "CTP历史回退",
+        "tqsdk": "TqSdk 实盘行情",
         "synthetic": "合成行情(模拟)",
         "unknown": "来源未知",
     }.get(str(source), str(source))

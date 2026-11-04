@@ -1,6 +1,8 @@
 # ================= 机密 / 凭据 =================
 # CTP / SimNow 真实柜台凭据（由 config/ctp_settings.example.json 复制生成，绝不入库）
 config/ctp_settings.json
+# TqSdk / SimNow 账号凭据（本地手写，绝不入库）
+config/tqsdk_settings.json
 
 # ================= 运行时数据 =================
 # 数据库、缓存、用户配置、会话状态均为运行时产物

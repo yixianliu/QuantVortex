@@ -32,7 +32,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 logger = logging.getLogger(__name__)
 
 # 真实行情源（非合成）。用于判定是否允许随机游走模拟 tick。
-REAL_SOURCES = ("sina", "akshare", "csv", "ctp")
+REAL_SOURCES = ("sina", "akshare", "csv", "ctp", "tqsdk")
 
 
 # 实时数据节流配置（M4-10 spec ④：真实源 get_recent 节流至 2s，避免主线程高频阻塞）
@@ -282,6 +282,22 @@ def _build_feed(source: str, data_path: str):
             logger.warning("csv 数据源初始化失败：%s", exc)
         return synth, "synthetic"
 
+    if source == "tqsdk":
+        # TqSdk 适配器自身不产出合成行情：这里只构建（懒连接），
+        # 真正的可用性在 connect() 中探测并以状态文本显式呈现，绝不静默降级。
+        try:
+            from .tqsdk_feed import TqSdkFeed
+            tq_cfg = (_load_config().get("data", {}) or {}).get("tqsdk", {}) or {}
+            return TqSdkFeed(
+                user_env=tq_cfg.get("user_env", "TQ_USER"),
+                password_env=tq_cfg.get("password_env", "TQ_PASSWORD"),
+                creds_path=tq_cfg.get("creds_path") or None,
+            ), "tqsdk"
+        except Exception as exc:                   # noqa: BLE001
+            LAST_FEED_ERROR = f"tqsdk 初始化失败: {type(exc).__name__}: {exc}"
+            logger.warning("TqSdk 数据源初始化失败：%s", exc)
+            return synth, "synthetic"
+
     # 阶段 0：可插拔数据源（为未来 TqSdk / 真实 CTP 前置预留，本阶段不内置实现）
     factory = get_feed_factory(source)
     if factory is not None:
@@ -411,6 +427,20 @@ class MarketDataManager(QObject):
                 self._start_reconnect_watch()
             else:
                 self.allow_sim = True           # CTP 未连上：允许合成回退并清晰标注
+        elif self.source == "tqsdk":
+            # 阶段 5：TqSdk 探测失败时保留具名错误，**不回退合成**（不伪造任何 tick）。
+            label = self.feed.source_label
+            try:
+                probe = self.feed.get_recent(self._default_symbol(), "D", 3)
+                ok = probe is not None and not probe.empty
+                err = "" if ok else "探测返回空数据"
+            except Exception as exc:               # noqa: BLE001 - 需按错误类型展示
+                ok = False
+                err = getattr(exc, "user_message", "") or f"{type(exc).__name__}: {exc}"
+            self.is_real = ok
+            self.allow_sim = False
+            self.feed_error = "" if ok else err
+            self.status = f"已连接 · {label}" if ok else f"TqSdk 不可用 · {err}"
         else:
             self.status = "已连接 · 合成行情(模拟)"
         self.status_changed.emit(self.status)
@@ -467,6 +497,12 @@ class MarketDataManager(QObject):
                 self.feed.disconnect()
             except Exception:
                 pass
+        if self.source == "tqsdk":
+            # 释放 TqApi 长连接，避免进程残留连接线程
+            try:
+                self.feed.close()
+            except Exception:
+                pass
         self.is_real = False
         self.status = "离线"
         self.status_changed.emit(self.status)
@@ -491,19 +527,36 @@ class MarketDataManager(QObject):
                 pd.DataFrame"""
         key = (symbol, period)
         if key not in self._full:
-            df = self.feed.get_history(
-                symbol, "2000-01-01", "2100-01-01", period=period, limit=6000)
-            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
-                # 阶段 0：回退合成不再静默 —— 写入 note，UI/回测可据此显示水印
-                requested = self.source
-                reason = f"{requested} 无 {period} 周期数据，回退合成"
-                if self.feed_error:
-                    reason += f"（{self.feed_error}）"
-                df = self._synth.get_history(
+            try:
+                df = self.feed.get_history(
                     symbol, "2000-01-01", "2100-01-01", period=period, limit=6000)
-                as_of = df["datetime"].iloc[-1] if len(df) else None
-                attach_provenance(df, "synthetic", is_synthetic=True, is_stale=False,
-                                  as_of=as_of, note=reason)
+            except Exception as exc:               # noqa: BLE001
+                if self.source != "tqsdk":
+                    raise
+                # 阶段 5：TqSdk 失败必须显式呈现，绝不生成合成行情
+                self.feed_error = (getattr(exc, "user_message", "")
+                                   or f"{type(exc).__name__}: {exc}")
+                df = None
+            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+                if self.source == "tqsdk":
+                    # 明确错误：返回空表 + 错误说明，由 UI 空态呈现，不伪装真实/合成
+                    df = pd.DataFrame(columns=[
+                        "datetime", "open", "high", "low", "close",
+                        "volume", "open_interest"])
+                    attach_provenance(
+                        df, "tqsdk", is_synthetic=False, is_stale=False,
+                        as_of=None, note=f"TqSdk 取数失败：{self.feed_error}")
+                else:
+                    # 阶段 0：回退合成不再静默 —— 写入 note，UI/回测可据此显示水印
+                    requested = self.source
+                    reason = f"{requested} 无 {period} 周期数据，回退合成"
+                    if self.feed_error:
+                        reason += f"（{self.feed_error}）"
+                    df = self._synth.get_history(
+                        symbol, "2000-01-01", "2100-01-01", period=period, limit=6000)
+                    as_of = df["datetime"].iloc[-1] if len(df) else None
+                    attach_provenance(df, "synthetic", is_synthetic=True, is_stale=False,
+                                      as_of=as_of, note=reason)
             else:
                 prov = get_provenance(df)
                 if prov["data_source"] == "unknown":
