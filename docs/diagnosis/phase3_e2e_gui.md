@@ -355,7 +355,7 @@ python -m pytest tests/e2e -q --tb=short -rf --junitxml=.pytest_tmp/e2e_junit.xm
 
 | 项 | 原因 | 建议后续 |
 | --- | --- | --- |
-| 预测页首屏 600 bar 同步取数 | 涉及行情层线程安全确认，本轮只给方案（见 5.9） | 先异步化指标计算，再逐步迁移取数 |
+| 预测页首屏 600 bar 同步取数 | **已实施**（见第九章；行情层补最小锁） | 完成 |
 | 真实区间覆盖率 | 需存储层保存 upper/lower 或结算比对（见 5.10） | 与 ai/ 会话协同新增接口后再接 UI |
 | 样本外统计按品种/配置过滤 | 现有 `query_closed_for_calibration` 无品种字段，当前展示为全库样本并已标注 | 存储层加 symbol/config 过滤参数 |
 | 回测中心其它子页来源水印 | 仅补齐「策略自进化」页，其余页避免扩大改动面 | 复用 `ProvenanceBadge` |
@@ -480,4 +480,128 @@ QuantVortex 统一验收 · --quick（跳过 e2e 与性能）
   （`_want_max = True` 存在、不再按会话值分支、且函数体内无 `or True` 历史缺陷），
   并修正原先脆弱的切片（旧写法命中的是调用点而非函数体）。
 - 验证：该文件单独跑通过；全量 unit 由 `820 passed / 1 failed` 变为 `821 passed / 0 failed`。
+
+---
+
+## 九、第四批：预测页首屏 600 bar 取数异步化（5.9 方案实施）
+
+> 范围：只动预测页取数路径与行情中枢的共享缓存加锁；**未改 `futures_quant/ai/`、指标与回测内核、
+> 数据源适配器（`*_feed.py`）**，未 commit、未改版本号、未删文件、未动 `data/` 与生产库。
+
+### 9.1 风险核对（先核对，再动代码）
+
+| 风险点 | 核对结论 | 处置 |
+| --- | --- | --- |
+| `mdm.get_bars` 并发读取 | 旧实现「查缓存 → `feed.get_history` → 写 `self._full`」**整段无锁**；新增异步首屏后，UI 线程与预测 Worker（[predict_ops_page.py:1574](file:///d:/PythonProject/QuantVortex/futures_quant/ui/predict_ops_page.py#L1574) 本就在 Worker 内取数）可能同时命中同一 `(symbol, period)` → 重复网络请求 + 并发写 dict | **确有并发缺陷，做最小修复**：行情中枢加一把 `RLock` |
+| `cached_add_indicators` 的 LRU 线程安全 | [indicators/cache.py](file:///d:/PythonProject/QuantVortex/futures_quant/indicators/cache.py) 内部已用 `threading.RLock` 包住命中/淘汰/写入，缓存对象本身线程安全 | **不动**（无需修改） |
+| Qt 对象跨线程 | Worker 内只调 `mdm.get_bars` / `cached_add_indicators`（纯 IO/计算），不 new/不碰任何 QWidget；`prov_badge`、`chart`、`status_lbl` 一律在 `done/err`（主线程回调）里更新 | **线程边界在代码注释中显式约束** |
+
+**为什么加锁只加在 `_ensure_full`，而不改更大范围**：
+1. 真正的共享可变状态只有 `_full` 这一个 dict；`last_provenance` 是「整块 dict 引用赋值」，在 GIL 下是原子的，读方拿到的是旧/新快照，不会看到半截数据；
+2. feed 适配器属另一会话范围（本轮明确禁改），且其内部缓存各自独立，外部串行化即可消除重复取数；
+3. 锁粒度定在「同一 `(symbol, period)` 的整段取数」：先到者取数并写缓存，后到者直接复用，既去重又不引入更细粒度锁的复杂度。
+
+### 9.2 改法（文件:行 → 痛点 → 改法）
+
+| 文件:行 | 痛点 | 改法 |
+| --- | --- | --- |
+| [market_data.py:352-357](file:///d:/PythonProject/QuantVortex/futures_quant/data/market_data.py#L352-L357) | 并发取数重复请求 + 并发写 `_full` | 新增 `self._load_lock = threading.RLock()` |
+| [market_data.py:524-575](file:///d:/PythonProject/QuantVortex/futures_quant/data/market_data.py#L524-L575) | 同上 | `_ensure_full` 整段持锁；锁内**不做任何 UI 操作** |
+| [predict_ops_page.py:966-1052](file:///d:/PythonProject/QuantVortex/futures_quant/ui/predict_ops_page.py#L966-L1052) | 首屏/切换品种时主线程串行取数+算指标+渲染，界面假死 | `_base_refresh` 拆成 `work`（Worker：取数+算指标）/ `done`（主线程：渲染）/ `err`（主线程：失败提示） |
+| 同上 | 连点/快速切换会并发多个请求 | `_base_loading` 防重入 + `_base_pending` 合并补刷：加载中只记一次待刷新，结束后补刷最新选择 |
+| 同上 | 过期结果覆盖新选择（用户切走后旧结果回来画上去） | `_base_seq` 递增序号，`done` 中 `seq != self._base_seq` 直接丢弃 |
+| 同上 | 加载过程无反馈；失败静默 | `_base_show_loading`：状态栏「K线加载中…」+ 图表水印「… · 加载中…」，**保留上一帧不闪白**；`_base_show_failure`：状态栏给出可行动指引（检查数据源 / 切换品种重试），不良性回填假数据 |
+
+### 9.3 线程边界
+
+| 阶段 | 所在线程 | 允许做的事 |
+| --- | --- | --- |
+| `work()` | Worker | `mdm.get_bars`（含 feed IO）、`cached_add_indicators`（纯计算）；**禁止任何 Qt 对象** |
+| `done()` / `err()` | 主线程（信号回调） | `prov_badge.set_provenance`、`chart.set_data/set_watermark/...`、`_render_indicators`、`status_lbl.setText` |
+| `_base_show_loading / _base_show_failure` | 主线程 | 仅状态栏与水印文案 |
+
+### 9.4 实测主线程阻塞（改前 vs 改后）
+
+探针：`outputs/.probe_p5_async.py`（一次性脚本，不入库）。用 `QTimer(10ms)` 心跳测「主线程最大卡顿间隔」，
+数据层人为延迟模拟真实源冷启动；指标计算与图表渲染走真实代码。
+
+| 人为数据层延迟 | 改前（同步：取数+指标+渲染） | 改后（异步：主线程只剩渲染） | 降幅 |
+| --- | --- | --- | --- |
+| 300 ms | **410.5 ms**（取数+指标 328.2 / 渲染 81.4） | **81.0 ms** | −80.3% |
+| 1000 ms | **1080.3 ms**（取数+指标 1019.2 / 渲染 60.0） | **59.0 ms** | −94.5% |
+
+结论：改后主线程阻塞时长≈**渲染成本本身**（60~85ms，与数据层延迟无关）；数据层越慢，收益越大。
+端到端「首屏出现图形」的总时长不变（300ms 档 413.0ms vs 改前 410.5ms），只是这段时间主线程可响应输入。
+
+### 9.5 场景验证（探针实测输出）
+
+| 场景 | 判定口径 | 实测 |
+| --- | --- | --- |
+| 加载中 | 有明确占位、页面不假死 | 状态栏「K线加载中… RB.SHFE · D」+ 水印「… · 加载中…」；心跳最大间隔 81ms（可交互） |
+| 加载失败 | 可行动提示 + 保留上一帧 + 不崩 | `status_lbl` =「K线加载失败：模拟数据源断开｜请检查数据源连接（数据管理 → 行情数据源），或切换品种/周期重试」；上一帧水印仍在；`_base_loading` 已复位 |
+| 快速连续切换 3 次 | 防重入、只采纳最后一次 | 渲染回调仅 **1 次**（中间结果全被丢弃）；最终水印 `I.DCE · D` 与最后选择一致；无并发风暴 |
+| 退出 | 不悬挂线程、不崩溃 | `page.close()` 后运行中 Worker = **0**，正常退出（退出码 0） |
+| GUI 冒烟 | 主窗口 + 7 页全部可构建 | `pages_ok 7 / 7`（offscreen，退出码 0） |
+| 相关用例回归 | 0 失败 | `test_m4_05_inline_style_refresh` + 5 个预测相关 e2e 文件 = **19 passed** |
+
+### 9.6 残留风险
+
+- **渲染仍在主线程**：单次约 60~85ms（600 根 K 线 + 三副图），体感可接受；若要更低，需要把图表数据准备
+  （`df_to_bars`）也移入 Worker，属下一阶段优化，本轮不扩大改动面。
+- **锁的代价**：不同 `(symbol, period)` 的取数被串行化（同一时刻只有一把锁）。当前 UI 只在前台请求一个
+  key，且取数在 Worker 内，不影响交互；若将来出现批量并发取数需求，可改为「按 key 分段锁」。
+- **关闭时长**：`BasePage` 关闭时等待 Worker 最多 3s；若某次 `get_history` 卡死超过该值，仍可能被强制
+  释放（既有机制，非本轮引入），极端网络故障下属已知限制。
+- **探针为一次性脚本**（`outputs/` 下，不入库），数字可复现：`PROBE_LAT=0.3|1.0 python outputs/.probe_p5_async.py`。
+
+---
+
+## 十、第六轮：预测页接入「真实区间覆盖率」（UI 侧）
+
+> 范围：只改预测页 ② 区间行的数据来源与展示；评估接口 `ai/evaluation.py`、落库字段、
+> 指标与回测内核均由另一会话完成，本会话未改动其中任何逻辑。
+
+### 10.1 问题
+
+旧 ② 行显示「历史实际覆盖率 R%」来自 [`_band_coverage`](file:///d:/PythonProject/QuantVortex/futures_quant/ui/predict_ops_page.py)：
+用**当前**模型残差 σ 回看最近 h 步窗口，衡量的是「历史涨跌幅有没有落进当前 σ 的带子」，
+**不是**「预测当时落库的区间命中了没有」。两套口径混用会让用户误以为模型区间经过了样本外验证。
+
+### 10.2 改法（文件:行 → 痛点 → 改法）
+
+| 文件:行 | 痛点 | 改法 |
+| --- | --- | --- |
+| [predict_ops_page.py:2386-2407](file:///d:/PythonProject/QuantVortex/futures_quant/ui/predict_ops_page.py#L2386-L2407) | 近似口径冒充实测覆盖率 | 删除 `_band_coverage`，改为纯文案函数 `_band_cov_text`：只吃真实接口结果 |
+| [predict_ops_page.py:2409-2448](file:///d:/PythonProject/QuantVortex/futures_quant/ui/predict_ops_page.py#L2409-L2448) | 读预测库+结算比对会卡 UI | `_kick_interval_coverage`：Worker 调 `evaluate_interval_coverage`，防重入 + 会话内缓存 |
+| [predict_ops_page.py:2450-2467](file:///d:/PythonProject/QuantVortex/futures_quant/ui/predict_ops_page.py#L2450-L2467) | 覆盖率异步回来需就地刷新，不能重算整块结论 | `_render_band_label` 只刷新 ② 行 |
+| [predict_ops_page.py:2544-2556](file:///d:/PythonProject/QuantVortex/futures_quant/ui/predict_ops_page.py#L2544-L2556) | 原来在 `_update_conclusion` 里同步现算 | 改为写 `_band_ctx` → 渲染占位 → 触发后台计算 |
+| [predict_ops_page.py:1555](file:///d:/PythonProject/QuantVortex/futures_quant/ui/predict_ops_page.py#L1555) | 新预测/结算后样本变了，缓存会过期 | 每次开始预测时 `_cov_cache = None`，下次渲染后台重算 |
+
+### 10.3 实际文案（探针实测，HTML 富文本）
+
+| 状态 | 显示内容 |
+| --- | --- |
+| 后台计算中 | `② 概率区间：[3,440.00, 3,560.00]（区间宽度 ±1.71%），名义覆盖 ≈68%（±1σ），实测覆盖率：**计算中…**（后台读取已结算预测）` |
+| 拿不到数据（老数据 lower/upper 全 NULL） | `…名义覆盖 ≈68%（±1σ），实测覆盖率：**样本不足**（无可用区间样本（lower/upper 为空；迁移前老数据需新预测落库后才有真实覆盖率））；不回退近似值——需新预测落库并结算后才有真实口径`，并附一行「口径说明：实测覆盖率基于**已结算预测**（样本 n=0），与名义 68% 属不同口径，二者不同属正常，不可混用。」 |
+| 有样本 | `…名义覆盖 ≈68%（±1σ），实测覆盖率 **70.0%**（已结算样本 n=40，95% CI [54.6%, 81.9%]）` + 同上口径说明（n=40） |
+
+要点：**任何分支都不会用残差 σ 生成近似百分比**；名义置信水平与实测覆盖率始终并列，且带口径免责说明。
+
+### 10.4 异步与线程边界
+
+- `work()`（Worker）：`store.query_closed_with_bands(limit=4000)` + `evaluate_interval_coverage`，不碰 Qt；
+- `done()/err()`（主线程）：写入缓存 → `_render_band_label()`；失败也如实显示「覆盖率计算失败：…」；
+- 实测：模拟读库 500ms，主线程心跳最大间隔 **12.3ms**，端到端 503.1ms（不阻塞交互）；
+- 退出：两个页面关闭后运行中 Worker = 0。
+
+### 10.5 验证
+
+- 单测契约变更：原 `test_band_coverage_helper_uses_residual_sigma` 改为
+  `test_band_cov_text_consumes_real_interface_without_fallback`（老数据 None+原因 / 计算中无数字 / 有样本显示 %+n+CI）。
+- 探针：`outputs/.probe_cov_ui.py`（一次性脚本，不入库），三条场景断言全通过。
+
+### 10.6 残留风险
+
+- 覆盖率缓存按会话保有，只有「点开始预测」时失效；若库被其他会话/进程写入新结算样本，页面不会自动感知（需求是「不阻塞 UI」，刻意不做定时轮询）。
+- 真实覆盖率依赖 `predictions.lower/upper` 非 NULL；迁移前老样本会被接口剔除，因此**样本量在迁移后一段时间内会偏小**，这是口径正确的必然结果，不是缺陷。
 

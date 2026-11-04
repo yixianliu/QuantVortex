@@ -76,24 +76,33 @@ def test_drift_no_data_correlation_is_none():
 # ---------------------------------------------------------------------------
 # 阶段 3 第二批：预测结论诚实呈现（只读既有 API，不改 ai/ 评估逻辑）
 # ---------------------------------------------------------------------------
-def test_band_coverage_helper_uses_residual_sigma():
-    """区间覆盖率辅助函数：σ 合法且有足够历史窗口时给实测值，否则返回 None。"""
-    import numpy as np
-    import pandas as pd
+def test_band_cov_text_consumes_real_interface_without_fallback():
+    """区间覆盖率：②行文案只吃真实覆盖率接口，None 时严禁回退近似值。
 
+    契约变更（第六轮）：旧 ``_band_coverage`` 用当前残差 σ 现算近似覆盖率，口径不对，
+    已删除；改为 ``ai.evaluation.evaluate_interval_coverage`` 的真实口径。
+    """
+    from futures_quant.ai.evaluation import evaluate_interval_coverage
     from futures_quant.ui.predict_ops_page import PredictOpsPage
 
-    rng = np.random.default_rng(7)
-    closes = 3500.0 * np.exp(np.cumsum(rng.normal(0, 0.004, 300)))
-    df = pd.DataFrame({"close": closes})
+    # 老数据（lower/upper 为 NULL）→ coverage=None 且给出原因
+    info = evaluate_interval_coverage(rows=[{
+        "symbol": "rb.SHFE", "horizon": 5, "last_close": 3500.0,
+        "actual_return_pct": 0.3, "lower": None, "upper": None,
+    }])
+    assert info["coverage"] is None and info.get("reason"), info
 
-    # ±1σ√h 对同分布随机游走的名义覆盖 ≈68%，实测应落在合理区间
-    cov = PredictOpsPage._band_coverage(df, 5, 0.004)
-    assert cov is not None and 0.5 <= cov <= 0.9, f"覆盖率异常：{cov}"
+    txt = PredictOpsPage._band_cov_text(info)
+    assert "样本不足" in txt and "不回退近似值" in txt, txt
 
-    # σ 非法 / 窗口不足时必须返回 None（界面显示「样本不足」，不编造数字）
-    assert PredictOpsPage._band_coverage(df, 5, 0.0) is None
-    assert PredictOpsPage._band_coverage(df.head(20), 5, 0.004) is None
+    # 尚未算出（None）只显示「计算中…」，不得出现任何覆盖率数字
+    pending = PredictOpsPage._band_cov_text(None)
+    assert "计算中" in pending and "%" not in pending, pending
+
+    # 有真实样本：显示实测覆盖率 + 样本量 + 95% CI
+    txt2 = PredictOpsPage._band_cov_text(
+        {"coverage": 0.71, "n": 120, "ci_low": 0.62, "ci_high": 0.79})
+    assert "71.0%" in txt2 and "n=120" in txt2 and "95% CI" in txt2, txt2
 
 
 def test_oos_stats_calls_existing_hit_rate_api():

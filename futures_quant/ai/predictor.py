@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 import numpy as np
 import pandas as pd
 import logging
@@ -420,6 +421,44 @@ class FuturesPredictor:
             return "LSTM+集成"
         return "LSTM" if self.use_lstm else "Ridge(回退)"
 
+    def _model_version(self) -> str:
+        """返回「应用版本 + 主模型名」，供预测记录按版本回溯覆盖率。
+
+        延迟导入包版本，避免 ai 子模块在包初始化阶段形成循环依赖；
+        取不到版本时写 ``unknown``，**不编造**版本号。
+        """
+        try:
+            from .. import __version__ as app_ver
+        except Exception:  # noqa: BLE001
+            app_ver = "unknown"
+        return f"{app_ver}:{self._model_label()}"
+
+    @staticmethod
+    def data_fingerprint(df: pd.DataFrame, symbol: str = "UNKNOWN",
+                         period: str = "1m") -> str:
+        """计算输入数据指纹（sha256 前 16 位）。
+
+        覆盖「品种/周期/样本量/首尾时间/尾部 5 个收盘价」，用于区分
+        「同一模型在不同数据切片上产出的预测」；离线回放与线上预测只要
+        数据一致就会得到相同指纹，便于复核。异常时返回空串（落库为 NULL）。
+        """
+        try:
+            n = int(len(df))
+            if n <= 0:
+                return ""
+            try:
+                first = str(df.index[0])
+                last = str(df.index[-1])
+            except Exception:  # noqa: BLE001
+                first = str(df.iloc[0].get("datetime", ""))
+                last = str(df.iloc[-1].get("datetime", ""))
+            tail = [round(float(v), 6) for v in
+                    pd.to_numeric(df["close"], errors="coerce").tail(5).tolist()]
+            payload = f"{symbol}|{period}|{n}|{first}|{last}|{tail}"
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _pred_one(self, Xseq: np.ndarray) -> float:
         """处理predone。
         
@@ -532,17 +571,20 @@ class FuturesPredictor:
                 # 数据不足以训练：返回结构完整的「中性」结果，而非继续执行导致
                 # `arr - None` 崩溃（旧实现在 25 根数据下必抛 TypeError）
                 logger.warning("模型训练失败：数据不足")
-                return self._neutral_result(df, horizon, res.get("reason", "有效样本不足"))
+                return self._neutral_result(df, horizon, res.get("reason", "有效样本不足"),
+                                            symbol=symbol, period=period)
             logger.info("模型训练完成")
         else:
             logger.debug("使用已训练好的模型进行预测")
         ind, F = self._features(df, symbol=symbol, period=period)
         arr = F.values.astype(float)
         if len(ind) == 0 or self._feat_mean is None or len(arr) < self.seq_len:
-            return self._neutral_result(df, horizon, "有效样本不足")
+            return self._neutral_result(df, horizon, "有效样本不足",
+                                        symbol=symbol, period=period)
         last_close = float(ind["close"].iloc[-1])
         if not math.isfinite(last_close) or last_close <= 0:
-            return self._neutral_result(df, horizon, "收盘价异常")
+            return self._neutral_result(df, horizon, "收盘价异常",
+                                        symbol=symbol, period=period)
 
         # 收益路径：集成模式直接用多周期集成的每日收益；否则递归外推
         if self.use_ensemble and self.ensemble and self.ensemble.fitted:
@@ -606,6 +648,10 @@ class FuturesPredictor:
             "skill": round(self.skill, 4),
             "validated": self.validated,
             "resid_std": round(resid_std, 6),
+            # 第六轮：区间回溯所需元信息（band_sigma 为每根 K 线 σ，半宽 = band_sigma*sqrt(h)）
+            "band_sigma": round(resid_std, 6),
+            "model_version": self._model_version(),
+            "data_fingerprint": self.data_fingerprint(df, symbol, period),
             "degraded": False,
             "feature_importance": self._feature_importance(),
         }
@@ -655,7 +701,8 @@ class FuturesPredictor:
         return result
 
     # ------------------------------------------------------------------
-    def _neutral_result(self, df: pd.DataFrame, horizon: int, reason: str) -> dict:
+    def _neutral_result(self, df: pd.DataFrame, horizon: int, reason: str,
+                        symbol: str = "UNKNOWN", period: str = "1m") -> dict:
         """样本不足 / 数值异常时的安全兜底：结构与正常结果完全一致的中性研判。
 
         这样上层 UI、落库、校准链路都无需做 None 判断，也不会把「不知道」
@@ -687,6 +734,11 @@ class FuturesPredictor:
             "model": "不可用", "regime": "未知",
             "calib_beta": 0.0, "skill": 0.0, "validated": False,
             "resid_std": 0.0, "feature_importance": [],
+            # 降级结果同样带区间元信息：lower/upper 为平盘、band_sigma=0，
+            # 覆盖率回溯可按 band_sigma<=0 明确剔除，不误算成命中。
+            "band_sigma": 0.0,
+            "model_version": self._model_version(),
+            "data_fingerprint": self.data_fingerprint(df, symbol, period),
             "degraded": True, "degrade_reason": reason,
         }
 

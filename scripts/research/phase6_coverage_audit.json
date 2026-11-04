@@ -1,0 +1,349 @@
+{
+  "seed": 20261104,
+  "horizon": 10,
+  "stride": 40,
+  "max_samples": 100,
+  "retrain_stride": 768,
+  "note": "真实覆盖率来自 walk-forward 临时库；ui_style_approx_global 仅对照，禁止对外冒充真实值",
+  "symbols": [
+    {
+      "symbol": "IF.CFFEX",
+      "period": "D",
+      "bars": 2310,
+      "rows": 56,
+      "replay": {
+        "added": 56,
+        "skipped": 0,
+        "total": 56,
+        "symbol": "IF.CFFEX"
+      },
+      "true_coverage": {
+        "available": true,
+        "coverage": 0.732143,
+        "n": 56,
+        "n_hit": 41,
+        "nominal": 0.682697,
+        "vc": {
+          "ci_low": 0.604054,
+          "ci_high": 0.830427,
+          "deviation_pp": 4.94,
+          "verdict": "aligned",
+          "verdict_text": "与名义水平一致",
+          "reason": null
+        },
+        "by_horizon": {
+          "10": {
+            "n": 56,
+            "n_hit": 41,
+            "nominal": 0.682697,
+            "coverage": 0.732143,
+            "ci_low": 0.604054,
+            "ci_high": 0.830427,
+            "deviation_pp": 4.94,
+            "verdict": "aligned",
+            "verdict_text": "与名义水平一致",
+            "reason": null
+          }
+        },
+        "by_volatility": {
+          "low": {
+            "n": 19,
+            "n_hit": 13,
+            "nominal": 0.682697,
+            "coverage": null,
+            "ci_low": null,
+            "ci_high": null,
+            "observed_rate": 0.684211,
+            "deviation_pp": 0.15,
+            "verdict": "insufficient",
+            "verdict_text": "样本不足",
+            "reason": "样本数 19 < 30，不给覆盖率结论"
+          },
+          "mid": {
+            "n": 18,
+            "n_hit": 11,
+            "nominal": 0.682697,
+            "coverage": null,
+            "ci_low": null,
+            "ci_high": null,
+            "observed_rate": 0.611111,
+            "deviation_pp": -7.16,
+            "verdict": "insufficient",
+            "verdict_text": "样本不足",
+            "reason": "样本数 18 < 30，不给覆盖率结论"
+          },
+          "high": {
+            "n": 19,
+            "n_hit": 17,
+            "nominal": 0.682697,
+            "coverage": null,
+            "ci_low": null,
+            "ci_high": null,
+            "observed_rate": 0.894737,
+            "deviation_pp": 21.2,
+            "verdict": "insufficient",
+            "verdict_text": "样本不足",
+            "reason": "样本数 19 < 30，不给覆盖率结论"
+          },
+          "cut_points": [
+            8.27e-06,
+            1.071e-05
+          ]
+        },
+        "calibration": {
+          "available": false,
+          "k_prime": null,
+          "k_old": null,
+          "train_n": 39,
+          "test_n": 0,
+          "reason": "样本数 56 < 训练门槛 30 + 测试门槛 30"
+        }
+      },
+      "approx_per_sample": {
+        "available": true,
+        "coverage": 0.767857,
+        "n": 56,
+        "n_hit": 43
+      },
+      "ui_style_approx_global": {
+        "available": true,
+        "coverage": 0.654545,
+        "n": 110,
+        "limit": 0.03156269,
+        "sigma": 0.009981
+      },
+      "median_band_sigma": 0.009981
+    },
+    {
+      "symbol": "i.DCE",
+      "period": "D",
+      "bars": 3105,
+      "rows": 76,
+      "replay": {
+        "added": 76,
+        "skipped": 0,
+        "total": 76,
+        "symbol": "i.DCE"
+      },
+      "true_coverage": {
+        "available": true,
+        "coverage": 0.565789,
+        "n": 76,
+        "n_hit": 43,
+        "nominal": 0.682685,
+        "vc": {
+          "ci_low": 0.453858,
+          "ci_high": 0.671391,
+          "deviation_pp": -11.69,
+          "verdict": "under",
+          "verdict_text": "覆盖不足",
+          "reason": null
+        },
+        "by_horizon": {
+          "10": {
+            "n": 76,
+            "n_hit": 43,
+            "nominal": 0.682685,
+            "coverage": 0.565789,
+            "ci_low": 0.453858,
+            "ci_high": 0.671391,
+            "deviation_pp": -11.69,
+            "verdict": "under",
+            "verdict_text": "覆盖不足",
+            "reason": null
+          }
+        },
+        "by_volatility": {
+          "low": {
+            "n": 26,
+            "n_hit": 8,
+            "nominal": 0.682685,
+            "coverage": null,
+            "ci_low": null,
+            "ci_high": null,
+            "observed_rate": 0.307692,
+            "deviation_pp": -37.5,
+            "verdict": "insufficient",
+            "verdict_text": "样本不足",
+            "reason": "样本数 26 < 30，不给覆盖率结论"
+          },
+          "mid": {
+            "n": 25,
+            "n_hit": 15,
+            "nominal": 0.682685,
+            "coverage": null,
+            "ci_low": null,
+            "ci_high": null,
+            "observed_rate": 0.6,
+            "deviation_pp": -8.27,
+            "verdict": "insufficient",
+            "verdict_text": "样本不足",
+            "reason": "样本数 25 < 30，不给覆盖率结论"
+          },
+          "high": {
+            "n": 25,
+            "n_hit": 20,
+            "nominal": 0.682685,
+            "coverage": null,
+            "ci_low": null,
+            "ci_high": null,
+            "observed_rate": 0.8,
+            "deviation_pp": 11.73,
+            "verdict": "insufficient",
+            "verdict_text": "样本不足",
+            "reason": "样本数 25 < 30，不给覆盖率结论"
+          },
+          "cut_points": [
+            8.382e-05,
+            0.00010549
+          ]
+        },
+        "calibration": {
+          "available": true,
+          "k_old": 0.99999,
+          "k_prime": 1.244844,
+          "target": 0.682685,
+          "train_n": 46,
+          "test_n": 30,
+          "train_coverage_at_k_prime": 0.673913,
+          "test_coverage_at_k_old": 0.6,
+          "test_coverage_at_k_prime": 0.633333,
+          "test_ci_low": 0.455136,
+          "test_ci_high": 0.781261,
+          "verdict": "validated",
+          "verdict_text": "校准可用（训练段拟合，测试段验证通过）",
+          "reason": null,
+          "rule": "k' 仅由训练段分位数确定；测试段只做验证，不参与定参"
+        }
+      },
+      "approx_per_sample": {
+        "available": true,
+        "coverage": 0.552632,
+        "n": 76,
+        "n_hit": 42
+      },
+      "ui_style_approx_global": {
+        "available": true,
+        "coverage": 0.963636,
+        "n": 110,
+        "limit": 0.07510409,
+        "sigma": 0.02375
+      },
+      "median_band_sigma": 0.02375
+    },
+    {
+      "symbol": "rb.SHFE",
+      "period": "D",
+      "bars": 4208,
+      "rows": 100,
+      "replay": {
+        "added": 100,
+        "skipped": 0,
+        "total": 100,
+        "symbol": "rb.SHFE"
+      },
+      "true_coverage": {
+        "available": true,
+        "coverage": 0.69,
+        "n": 100,
+        "n_hit": 69,
+        "nominal": 0.682686,
+        "vc": {
+          "ci_low": 0.593739,
+          "ci_high": 0.772203,
+          "deviation_pp": 0.73,
+          "verdict": "aligned",
+          "verdict_text": "与名义水平一致",
+          "reason": null
+        },
+        "by_horizon": {
+          "10": {
+            "n": 100,
+            "n_hit": 69,
+            "nominal": 0.682686,
+            "coverage": 0.69,
+            "ci_low": 0.593739,
+            "ci_high": 0.772203,
+            "deviation_pp": 0.73,
+            "verdict": "aligned",
+            "verdict_text": "与名义水平一致",
+            "reason": null
+          }
+        },
+        "by_volatility": {
+          "low": {
+            "n": 34,
+            "n_hit": 21,
+            "nominal": 0.682686,
+            "coverage": 0.617647,
+            "ci_low": 0.45041,
+            "ci_high": 0.760998,
+            "deviation_pp": -6.5,
+            "verdict": "aligned",
+            "verdict_text": "与名义水平一致",
+            "reason": null
+          },
+          "mid": {
+            "n": 33,
+            "n_hit": 21,
+            "nominal": 0.682686,
+            "coverage": 0.636364,
+            "ci_low": 0.466162,
+            "ci_high": 0.778128,
+            "deviation_pp": -4.63,
+            "verdict": "aligned",
+            "verdict_text": "与名义水平一致",
+            "reason": null
+          },
+          "high": {
+            "n": 33,
+            "n_hit": 27,
+            "nominal": 0.682686,
+            "coverage": 0.818182,
+            "ci_low": 0.656118,
+            "ci_high": 0.913892,
+            "deviation_pp": 13.55,
+            "verdict": "aligned",
+            "verdict_text": "与名义水平一致",
+            "reason": null
+          },
+          "cut_points": [
+            1.054e-05,
+            1.438e-05
+          ]
+        },
+        "calibration": {
+          "available": true,
+          "k_old": 0.999973,
+          "k_prime": 1.065087,
+          "target": 0.682686,
+          "train_n": 70,
+          "test_n": 30,
+          "train_coverage_at_k_prime": 0.685714,
+          "test_coverage_at_k_old": 0.8,
+          "test_coverage_at_k_prime": 0.8,
+          "test_ci_low": 0.626943,
+          "test_ci_high": 0.904949,
+          "verdict": "validated",
+          "verdict_text": "校准可用（训练段拟合，测试段验证通过）",
+          "reason": null,
+          "rule": "k' 仅由训练段分位数确定；测试段只做验证，不参与定参"
+        }
+      },
+      "approx_per_sample": {
+        "available": true,
+        "coverage": 0.7,
+        "n": 100,
+        "n_hit": 70
+      },
+      "ui_style_approx_global": {
+        "available": true,
+        "coverage": 1.0,
+        "n": 110,
+        "limit": 0.04677641,
+        "sigma": 0.014792
+      },
+      "median_band_sigma": 0.014792
+    }
+  ]
+}

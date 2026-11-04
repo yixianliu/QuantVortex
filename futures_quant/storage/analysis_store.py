@@ -164,6 +164,12 @@ class AnalysisStore:
             "actual_return_pct": "REAL",
             "closed_ts": "TEXT",
             "y_up": "REAL DEFAULT 0",
+            # 第六轮：预测区间回溯核算所需字段（只加列不改列，老数据保持 NULL）
+            "lower": "REAL",              # horizon 末端的区间下界（价格口径）
+            "upper": "REAL",              # horizon 末端的区间上界（价格口径）
+            "band_sigma": "REAL",         # 每根 K 线的残差标准差（区间半宽 = band_sigma*sqrt(h)）
+            "model_version": "TEXT",      # 模型版本（应用版本:模型名），用于分组回溯
+            "data_fingerprint": "TEXT",   # 训练/预测输入数据的指纹，防止跨数据口径混算
         }
         cur = self.conn.execute("PRAGMA table_info(predictions)")
         exist = {r[1] for r in cur.fetchall()}
@@ -212,14 +218,17 @@ class AnalysisStore:
         cur = self.conn.execute(
             "INSERT INTO predictions (ts,symbol,period,horizon,last_close,expected_return_pct,"
             "p_up,p_down,risk_score,risk_label,model,regime,verdict,score,forecast,"
-            "confidence,status,config)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "confidence,status,config,lower,upper,band_sigma,model_version,data_fingerprint)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (rec.get("ts"), rec.get("symbol"), rec.get("period"), rec.get("horizon"),
              rec.get("last_close"), rec.get("expected_return_pct"),
              rec.get("p_up"), rec.get("p_down"), rec.get("risk_score"), rec.get("risk_label"),
              rec.get("model"), rec.get("regime"), rec.get("verdict"), rec.get("score"),
              rec.get("forecast"), rec.get("confidence"),
-             rec.get("status", "open"), rec.get("config", "enhanced")))
+             rec.get("status", "open"), rec.get("config", "enhanced"),
+             # 缺失时写 NULL（老调用方无需改动即可继续工作）
+             rec.get("lower"), rec.get("upper"), rec.get("band_sigma"),
+             rec.get("model_version"), rec.get("data_fingerprint")))
         self.conn.commit()
         return cur.lastrowid
 
@@ -246,8 +255,9 @@ class AnalysisStore:
         cur = self.conn.execute(
             "INSERT INTO predictions (ts,symbol,period,horizon,last_close,expected_return_pct,"
             "p_up,p_down,risk_score,risk_label,model,regime,verdict,score,forecast,"
-            "confidence,status,config,actual_return_pct,closed_ts,y_up)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "confidence,status,config,actual_return_pct,closed_ts,y_up,"
+            "lower,upper,band_sigma,model_version,data_fingerprint)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (rec.get("ts"), rec.get("symbol"), rec.get("period"), rec.get("horizon"),
              rec.get("last_close"), rec.get("expected_return_pct"),
              rec.get("p_up"), rec.get("p_down"), rec.get("risk_score"), rec.get("risk_label"),
@@ -255,7 +265,9 @@ class AnalysisStore:
              rec.get("forecast"), rec.get("confidence"),
              rec.get("status", "closed"), rec.get("config", "enhanced"),
              rec.get("actual_return_pct"), rec.get("closed_ts"),
-             rec.get("y_up", 0.0)))
+             rec.get("y_up", 0.0),
+             rec.get("lower"), rec.get("upper"), rec.get("band_sigma"),
+             rec.get("model_version"), rec.get("data_fingerprint")))
         self.conn.commit()
         return cur.lastrowid
 
@@ -291,6 +303,24 @@ class AnalysisStore:
             "SELECT p_up, y_up, regime, config FROM predictions "
             "WHERE status='closed' AND p_up IS NOT NULL ORDER BY id DESC LIMIT ?",
             (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+    def query_closed_with_bands(self, limit: int = 4000) -> list:
+        """返回用于「区间真实覆盖率」回溯的已结算样本（第六轮）。
+
+        与 `query_closed_for_calibration` 的区别：这里保留价格口径的
+        ``last_close / lower / upper / actual_return_pct`` 及分组字段
+        ``symbol / horizon / band_sigma / model_version / data_fingerprint``。
+
+        老数据（迁移前的 record）这些列为 NULL，原样返回由调用方过滤——
+        **不能**用残差 σ 现算一个替代值冒充真实区间，否则覆盖率又会退化
+        为近似口径。
+        """
+        cur = self.conn.execute(
+            "SELECT id, ts, symbol, period, horizon, last_close, actual_return_pct, "
+            "lower, upper, band_sigma, model_version, data_fingerprint, closed_ts "
+            "FROM predictions WHERE status='closed' AND actual_return_pct IS NOT NULL "
+            "ORDER BY id DESC LIMIT ?", (int(limit),))
         return [dict(r) for r in cur.fetchall()]
 
     # ------------------------- M3-13 漂移检测支撑 -------------------------

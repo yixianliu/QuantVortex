@@ -321,3 +321,353 @@ def summarize_old_vs_new(pred: Sequence[float], actual: Sequence[float],
         "old_max_drawdown": round(old_mdd, 6),
         "n": n,
     }
+
+
+# ---------------------------------------------------------------------------
+# 第六轮：预测区间「真实覆盖率」回溯
+# ---------------------------------------------------------------------------
+#: 区间覆盖率的最小样本门槛；少于该门槛一律返回 None + 原因，不给出伪精确数字
+MIN_INTERVAL_SAMPLES = 30
+#: ±1σ 正态区间的名义覆盖率
+NOMINAL_ONE_SIGMA = 0.6826894921370859
+
+
+def nominal_coverage_from_multiplier(k: float) -> float:
+    """由 σ 乘数 k 计算正态假设下的名义覆盖率：``erf(k / sqrt(2))``。"""
+    try:
+        k = float(k)
+        if not math.isfinite(k) or k <= 0:
+            return NOMINAL_ONE_SIGMA
+        return float(math.erf(k / math.sqrt(2.0)))
+    except (TypeError, ValueError):
+        return NOMINAL_ONE_SIGMA
+
+
+def _row_get(row, key, default=None):
+    """兼容 dict / sqlite.Row / 普通对象的字段读取。"""
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except (KeyError, TypeError, IndexError):
+        return getattr(row, key, default)
+
+
+def _finite(value) -> Optional[float]:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _prepare_interval_rows(rows, actual_return_is_pct: bool = True) -> list[dict]:
+    """把已结算预测整理成区间核算样本。
+
+    必需字段：``last_close / lower / upper / actual_return_pct``。
+    - ``actual_return_pct`` 默认按「百分比收益」解释（与 predictions 表口径一致）；
+    - 老数据 ``lower/upper`` 为 NULL，或上下界非正/倒挂、价格非有限，一律剔除；
+    - 只做事实核算，**不**用残差 σ 现算区间补洞。
+    """
+    out: list[dict] = []
+    for row in rows or []:
+        last = _finite(_row_get(row, "last_close"))
+        lo = _finite(_row_get(row, "lower"))
+        up = _finite(_row_get(row, "upper"))
+        act_pct = _finite(_row_get(row, "actual_return_pct"))
+        if last is None or last <= 0 or lo is None or up is None or act_pct is None:
+            continue
+        if lo <= 0 or up <= lo:
+            continue
+        try:
+            h = int(_finite(_row_get(row, "horizon")) or 0)
+        except (TypeError, ValueError):
+            h = 0
+        actual_price = last * (1.0 + act_pct / 100.0) if actual_return_is_pct \
+            else last * (1.0 + act_pct)
+        if not math.isfinite(actual_price) or actual_price <= 0:
+            continue
+        # 区间必须换算成「相对预测起点价的 log 收益」后再标准化；
+        # 直接对绝对价格取 log 会把 ln(last_close) 当成漂移，导致 z 爆炸。
+        rel_up = math.log(up / last)
+        rel_lo = math.log(lo / last)
+        center_log = 0.5 * (rel_up + rel_lo)
+        half_log = 0.5 * (rel_up - rel_lo)
+        if not math.isfinite(half_log) or half_log <= 0:
+            continue
+        z = abs(math.log(actual_price / last) - center_log) / half_log
+        sigma = _finite(_row_get(row, "band_sigma"))
+        sigma_h = float(sigma) * math.sqrt(h) if (sigma and sigma > 0 and h > 0) \
+            else half_log
+        if not math.isfinite(sigma_h) or sigma_h <= 0:
+            sigma_h = half_log
+        out.append({
+            "symbol": str(_row_get(row, "symbol") or "UNKNOWN"),
+            "horizon": h,
+            "hit": bool(lo <= actual_price <= up),
+            "z": float(z),
+            "half_log": float(half_log),
+            "sigma_h": float(sigma_h),
+            "rel_sigma": float(sigma_h) / float(last),
+            "last_close": float(last),
+            "actual_price": float(actual_price),
+            # 校准切分必须按「预测时间」排序，不能按写库时间（回放时写库时间相同）
+            "ts": str(_row_get(row, "ts") or _row_get(row, "closed_ts") or ""),
+        })
+    return out
+
+
+def _coverage_stats(samples: list[dict], nominal: float,
+                    min_samples: int, reason_empty: str = "无可用区间样本") -> dict:
+    """计算单组的命中比例、Wilson 区间与「过度覆盖/覆盖不足」判定。"""
+    n = len(samples)
+    hits = int(sum(1 for s in samples if s["hit"]))
+    base = {
+        "n": n,
+        "n_hit": hits,
+        "nominal": round(float(nominal), 6),
+    }
+    if n == 0:
+        base.update({"coverage": None, "ci_low": None, "ci_high": None,
+                     "deviation_pp": None, "verdict": "insufficient",
+                     "verdict_text": "无样本", "reason": reason_empty})
+        return base
+    coverage = hits / n
+    ci_low, ci_high = wilson_interval(hits, n)
+    base.update({"coverage": round(coverage, 6),
+                 "ci_low": round(ci_low, 6), "ci_high": round(ci_high, 6)})
+    if n < int(min_samples):
+        # 样本不足：只回观测比例供排查，coverage 必须为 None，禁止伪精确结论
+        base.update({"coverage": None, "ci_low": None, "ci_high": None,
+                     "observed_rate": round(coverage, 6),
+                     "deviation_pp": round((coverage - nominal) * 100.0, 2),
+                     "verdict": "insufficient", "verdict_text": "样本不足",
+                     "reason": f"样本数 {n} < {min_samples}，不给覆盖率结论"})
+        return base
+    if ci_low > nominal:
+        verdict, text = "over", "过度覆盖"
+    elif ci_high < nominal:
+        verdict, text = "under", "覆盖不足"
+    else:
+        verdict, text = "aligned", "与名义水平一致"
+    base.update({"deviation_pp": round((coverage - nominal) * 100.0, 2),
+                 "verdict": verdict, "verdict_text": text, "reason": None})
+    return base
+
+
+def _nominal_from_samples(samples: list[dict], default: float = NOMINAL_ONE_SIGMA) -> float:
+    """由「区间半宽 / (band_sigma*sqrt(h))」的中位数反推名义覆盖率。
+
+    落库区间按 ±1σ 构造时该比值约为 1（名义 68.27%）；若历史上修改过
+    乘数，这里能自动跟随，避免拿错名义水平做判定。
+    """
+    ks = [s["half_log"] / s["sigma_h"] for s in samples
+          if s.get("sigma_h") and s["sigma_h"] > 0]
+    if not ks:
+        return float(default)
+    return nominal_coverage_from_multiplier(float(np.median(ks)))
+
+
+def _sort_by_time(samples: list[dict]) -> list[dict]:
+    """按时间升序排序；时间缺失时保持原顺序并原样返回。"""
+    if samples and all(s.get("ts") for s in samples):
+        return sorted(samples, key=lambda s: s["ts"])
+    return samples
+
+
+def _as_interval_samples(rows) -> list[dict]:
+    """接受「原始预测行」或「已整理样本」两种输入，统一成整理后的样本。"""
+    rows = list(rows or [])
+    if rows and all(isinstance(r, dict) and "z" in r and "half_log" in r for r in rows):
+        return rows
+    return _prepare_interval_rows(rows)
+
+
+def interval_coverage(rows, nominal: Optional[float] = None,
+                      min_samples: int = MIN_INTERVAL_SAMPLES,
+                      actual_return_is_pct: bool = True) -> dict:
+    """计算已结算预测的**真实区间覆盖率**（第六轮核心口径）。
+
+    参数
+    ----
+    rows : 来自 ``AnalysisStore.query_closed_with_bands`` 的字典序列；也可传
+        任意含 ``last_close/lower/upper/actual_return_pct/symbol/horizon`` 的行。
+    nominal : 名义覆盖率；缺省时按落库的 σ 乘数反推（±1σ ≈ 68.27%）。
+    min_samples : 少于该样本数分组一律返回 None + 原因（默认 30）。
+    actual_return_is_pct : ``actual_return_pct`` 是否为百分比口径（默认 True）。
+
+    返回
+    ----
+    dict：``coverage``（None 表示不可用）、``n``、``ci_low/ci_high``、
+    ``verdict``（over/under/aligned/insufficient）、``by_symbol``、
+    ``by_horizon``、``by_volatility``、``calibration``。UI 接口必须原样透传
+    None 与 ``reason``，**禁止**回退成残差 σ 近似值。
+    """
+    samples = _prepare_interval_rows(rows, actual_return_is_pct=actual_return_is_pct)
+    nominal_value = float(nominal) if nominal is not None else \
+        _nominal_from_samples(samples)
+
+    overall = _coverage_stats(samples, nominal_value, min_samples)
+    reason = overall.get("reason")
+    if overall["n"] == 0:
+        reason = "无可用区间样本（lower/upper 为空；迁移前老数据需新预测落库后才有真实覆盖率）"
+        overall["reason"] = reason
+
+    # 按品种
+    by_symbol: dict[str, dict] = {}
+    for sym in sorted({s["symbol"] for s in samples}):
+        by_symbol[sym] = _coverage_stats(
+            [s for s in samples if s["symbol"] == sym], nominal_value, min_samples)
+
+    # 按 horizon
+    by_horizon: dict[str, dict] = {}
+    for h in sorted({s["horizon"] for s in samples}):
+        by_horizon[str(h)] = _coverage_stats(
+            [s for s in samples if s["horizon"] == h], nominal_value, min_samples,
+            reason_empty=f"horizon={h} 无可用样本")
+
+    # 按波动分层（相对区间宽度 = sigma_h / last_close，三分位）
+    by_vol: dict[str, dict] = {}
+    rel = np.asarray([s["rel_sigma"] for s in samples], dtype=float)
+    if rel.size >= 3:
+        q1, q2 = np.quantile(rel, [1.0 / 3.0, 2.0 / 3.0])
+        buckets = {"low": [], "mid": [], "high": []}
+        for s in samples:
+            v = s["rel_sigma"]
+            key = "low" if v <= q1 else ("mid" if v <= q2 else "high")
+            buckets[key].append(s)
+        for key in ("low", "mid", "high"):
+            by_vol[key] = _coverage_stats(buckets[key], nominal_value, min_samples,
+                                          reason_empty=f"波动分层 {key} 无可用样本")
+        by_vol["cut_points"] = [round(float(q1), 8), round(float(q2), 8)]
+    elif samples:
+        by_vol["insufficient"] = {
+            "n": int(rel.size), "coverage": None,
+            "reason": "波动分层至少需要 3 个样本", "verdict": "insufficient",
+        }
+
+    calibration = recommend_band_multiplier(
+        rows, target=nominal_value, min_train=min_samples, min_test=min_samples,
+        actual_return_is_pct=actual_return_is_pct)
+
+    return {
+        "available": overall.get("coverage") is not None,
+        "coverage": overall.get("coverage"),
+        "observed_rate": overall.get("observed_rate"),
+        "n": overall["n"],
+        "n_hit": overall["n_hit"],
+        "nominal": round(nominal_value, 6),
+        "ci_low": overall.get("ci_low"),
+        "ci_high": overall.get("ci_high"),
+        "deviation_pp": overall.get("deviation_pp"),
+        "verdict": overall.get("verdict"),
+        "verdict_text": overall.get("verdict_text"),
+        "reason": overall.get("reason"),
+        "criterion": "实际价格是否落在预测产出时落库的 [lower, upper]；不是按残差 σ 现算的近似",
+        "by_symbol": by_symbol,
+        "by_horizon": by_horizon,
+        "by_volatility": by_vol,
+        "calibration": calibration,
+    }
+
+
+def recommend_band_multiplier(rows, target: Optional[float] = None,
+                              min_train: int = MIN_INTERVAL_SAMPLES,
+                              min_test: int = MIN_INTERVAL_SAMPLES,
+                              train_ratio: float = 0.7,
+                              actual_return_is_pct: bool = True) -> dict:
+    """在**训练段**拟合 σ 乘数 k'，在**测试段**验证（严禁用测试段定参）。
+
+    做法：对每个样本取标准化残差
+    ``z = |ln(实际价/预测基准价) - 区间中心| / 区间半宽``，
+    在训练段取 ``target`` 分位数得到 ``k'``；再用 k' 在测试段重算命中率。
+    若训练/测试任一段样本不足，返回 ``k_prime=None`` 与原因。
+
+    ``target`` 缺省时用训练段区间反推的名义覆盖率（默认 ±1σ ≈ 68.27%）。
+    """
+    samples = _sort_by_time(_as_interval_samples(rows))
+    if samples and isinstance(samples[0], dict) and "actual_return_pct" in samples[0]:
+        # 原始预测行：按调用方给定的收益口径重新整理
+        samples = _sort_by_time(_prepare_interval_rows(
+            rows, actual_return_is_pct=actual_return_is_pct))
+    n = len(samples)
+    if n < int(min_train) + int(min_test):
+        return {"available": False, "k_prime": None, "k_old": None,
+                "train_n": max(0, min(n, int(n * train_ratio))), "test_n": 0,
+                "reason": f"样本数 {n} < 训练门槛 {min_train} + 测试门槛 {min_test}"}
+    cut = int(n * float(train_ratio))
+    cut = max(int(min_train), min(cut, n - int(min_test)))
+    train, test = samples[:cut], samples[cut:]
+    target_value = float(target) if target is not None else \
+        _nominal_from_samples(train)
+
+    # 旧乘数：训练段「半宽 / (band_sigma*sqrt(h))」的中位数（缺字段时按 1σ）
+    old_ks = [s["half_log"] / s["sigma_h"] for s in train
+              if s.get("sigma_h") and s["sigma_h"] > 0]
+    k_old = float(np.median(old_ks)) if old_ks else 1.0
+
+    z_train = np.asarray([s["z"] for s in train], dtype=float)
+    z_test = np.asarray([s["z"] for s in test], dtype=float)
+    try:
+        k_prime = float(np.quantile(z_train, target_value))
+    except (TypeError, ValueError):
+        k_prime = None
+    if k_prime is None or not math.isfinite(k_prime) or k_prime <= 0:
+        return {"available": False, "k_prime": None, "k_old": round(k_old, 6),
+                "train_n": len(train), "test_n": len(test),
+                "reason": "训练段无法得到有效分位数（z 非有限）"}
+
+    train_cov = float(np.mean(z_train <= k_prime))
+    test_cov = float(np.mean(z_test <= k_prime))
+    test_hits = int(np.sum(z_test <= k_prime))
+    ci_test = wilson_interval(test_hits, int(z_test.size))
+    old_test_cov = float(np.mean(z_test <= k_old))
+    if ci_test[0] <= target_value <= ci_test[1]:
+        verdict, text = "validated", "校准可用（训练段拟合，测试段验证通过）"
+    else:
+        verdict, text = "rejected", "不建议仅靠乘数缩放（测试段仍偏离名义水平）"
+    return {
+        "available": True,
+        "k_old": round(k_old, 6),
+        "k_prime": round(k_prime, 6),
+        "target": round(target_value, 6),
+        "train_n": len(train),
+        "test_n": len(test),
+        "train_coverage_at_k_prime": round(train_cov, 6),
+        "test_coverage_at_k_old": round(old_test_cov, 6),
+        "test_coverage_at_k_prime": round(test_cov, 6),
+        "test_ci_low": round(ci_test[0], 6),
+        "test_ci_high": round(ci_test[1], 6),
+        "verdict": verdict,
+        "verdict_text": text,
+        "reason": None if verdict == "validated" else text,
+        "rule": "k' 仅由训练段分位数确定；测试段只做验证，不参与定参",
+    }
+
+
+def evaluate_interval_coverage(store=None, rows=None, limit: int = 4000,
+                               nominal: Optional[float] = None,
+                               min_samples: int = MIN_INTERVAL_SAMPLES) -> dict:
+    """UI/报告统一入口：从预测库读已结算样本并计算真实覆盖率。
+
+    返回结构保证：
+    - 有足够样本 → 给出真实 ``coverage`` 与判定；
+    - 无样本 / 老数据 ``lower/upper`` 全为 NULL → ``coverage=None`` 且
+      ``reason`` 明确，**绝不**用残差 σ 近似值冒充。
+    """
+    if rows is None:
+        if store is None:
+            return {"available": False, "coverage": None, "n": 0,
+                    "reason": "未提供预测库或样本，无法计算真实区间覆盖率"}
+        try:
+            rows = store.query_closed_with_bands(limit=limit)
+        except Exception as exc:  # noqa: BLE001
+            return {"available": False, "coverage": None, "n": 0,
+                    "reason": f"读取已结算预测失败：{exc}"}
+    rows = list(rows or [])
+    result = interval_coverage(rows, nominal=nominal, min_samples=min_samples)
+    result["total_rows"] = len(rows)
+    result["usable_rows"] = result.get("n", 0)
+    if result.get("coverage") is None and result.get("reason") is None:
+        result["reason"] = "样本不足或区间字段缺失，无法给出真实覆盖率"
+    return result

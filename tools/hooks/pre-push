@@ -1,0 +1,29 @@
+#!/bin/sh
+# qv-hook
+# QuantVortex pre-push 钩子：保留 git-lfs 行为 + 可选全量门禁。
+# 默认只透传 LFS（不拖慢 push）；设 QV_PREPUSH_FULL_TESTS=1 才跑全量门禁。
+
+# ---- 透传 git-lfs 的 pre-push（若 LFS 可用）----
+if command -v git-lfs >/dev/null 2>&1; then
+    git lfs pre-push "$@" || { echo "[pre-push] ⚠️ git-lfs pre-push 非 0，请检查"; }
+fi
+
+# ---- 可选：全量门禁（分钟级，默认关，避免每次 push 都拖 5 分钟）----
+if [ -n "${QV_PREPUSH_FULL_TESTS:-}" ] && [ "${QV_PREPUSH_FULL_TESTS}" != "0" ]; then
+    ROOT=$(git rev-parse --show-toplevel)
+    cd "$ROOT"
+    python_cmd=""
+    for cand in python python3 /d/anaconda3/python.exe; do
+        command -v "$cand" >/dev/null 2>&1 && { python_cmd="$cand"; break; }
+    done
+    if [ -z "$python_cmd" ]; then
+        echo "[pre-push] ⚠️ 找不到 python，跳过全量门禁（请手动 python tools/check.py）"
+        exit 0
+    fi
+    export QT_QPA_PLATFORM=offscreen
+    export TMP="$ROOT/.pytest_tmp" TEMP="$ROOT/.pytest_tmp" TMPDIR="$ROOT/.pytest_tmp"
+    echo "[pre-push] 全量门禁（QV_PREPUSH_FULL_TESTS=1）…"
+    $python_cmd tools/check.py || { echo "[pre-push] ❌ 门禁未通过，阻止 push"; exit 1; }
+    echo "[pre-push] ✅ 全量门禁通过"
+fi
+exit 0

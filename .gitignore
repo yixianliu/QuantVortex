@@ -104,8 +104,11 @@ data/akshare_cache/
 # 裸规则会匹配任意层级的同名目录，曾导致 410 个 .py 只有 3 个受控（fresh clone 无法跑测试）。
 # - `futures_quant/`、`tests/` 是源码与测试资产，改为可跟踪；
 # - `data/` 改用锚定规则 `/data/`，继续忽略运行时数据（缓存 / 数据库 / 进化产物）；
-# - `tools` / `build_tools` / `packaging` 不在本轮范围，保持原样忽略。
-tools
+# - `tools/` 本轮解禁：pre-commit 钩子直接调用 tools/scan_silent_bail.py 与 tools/check.py，
+#   整目录裸规则会让 fresh clone 的提交门禁静默失效（与 tests/ 当年同款故障）。
+#   tools/ 内无运行期产物，仅 __pycache__/ 是生成物，已被上方全局规则覆盖。
+# - `build_tools` / `packaging` 未动：同类缺陷（build_tools/secret_scan.py 被 pre-commit 引用）
+#   已记录，待确认后再改；`packaging/` 另有上方锚定规则 `/packaging/` 兜底。
 build_tools
 packaging
 /data/

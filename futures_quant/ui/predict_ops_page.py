@@ -254,6 +254,14 @@ class PredictOpsPage(BasePage):
         self.ind_forecast_on = True    # 是否在 MACD/KDJ/RSI 图上叠加预测曲线
         self.ind_horizon = 10          # 指标预测步数
         self._last_ind = None          # 最近一次渲染的指标 DataFrame（供 AI 研判）
+        # ---- 阶段 5.9：首屏 K 线异步取数状态 ----
+        self._base_seq = 0             # 请求序号：只采纳最后一次请求的结果（丢弃过期结果）
+        self._base_loading = False     # 是否已有请求在跑（防重入）
+        self._base_pending = False     # 加载期间又切了品种/周期：合并为一次补刷
+        # ---- 第六轮：真实区间覆盖率（已结算预测）后台计算状态 ----
+        self._cov_cache = None         # None=尚未算；dict=接口结果（可能 coverage=None）
+        self._cov_pending = False      # 后台计算中（防重入）
+        self._band_ctx = None          # ② 区间行渲染参数，供覆盖率异步回来后就地刷新
         self._last_res = None          # 最近一次预测结果（供 AI 研判）
         self._ai_running = False       # AI 指标研判进行中标记
         # ---- 双向联动：订阅全局事件总线（M3.5 core.events），回测中心产出经总线广播 ----
@@ -959,22 +967,93 @@ class PredictOpsPage(BasePage):
         except Exception as e:  # noqa: BLE001 - 上下文失败不得影响页面切换
             logger.warning("预测页接收跨页上下文失败：%s", e)
 
-    def _base_refresh(self):
-        """加载基础K线图（无预测数据）。"""
-        df = self.mdm.get_bars(self.cur_symbol, self.cur_period, 600)
-        if df.empty:
+    def _base_refresh(self) -> None:
+        """异步加载基础 K 线图（无预测数据）。
+
+        痛点（阶段 5.9 遗留 P2-1）：旧实现在主线程串行执行
+        ``mdm.get_bars(600)`` + ``cached_add_indicators`` + 图表重建，真实数据源冷启动
+        或切换品种/周期时主线程被占住数百毫秒到数秒，界面假死。
+
+        现改法：Worker 内只做取数与指标计算（纯 IO/计算），渲染仍回主线程；
+        加载中显示明确占位，失败给出可行动提示；切换品种/周期时用 ``_base_seq``
+        只采纳最后一次请求的结果，过期结果直接丢弃。
+        """
+        self._base_seq += 1
+        seq = self._base_seq
+        sym, per = self.cur_symbol, self.cur_period
+        if self._base_loading:
+            # 已有请求在跑：记一次待补刷（连点/快速切换时合并，避免并发风暴）
+            self._base_pending = True
             return
-        self.prov_badge.set_provenance(df.attrs)
-        ind = cached_add_indicators(self.cur_symbol, self.cur_period, df)
-        bars = df_to_bars(df)
-        self.chart.set_data(bars, ma={"MA10": ind["MA10"].tolist(),
-                                      "MA20": ind["MA20"].tolist()})
-        self.chart.set_watermark(f"{self.cur_symbol} · {self.cur_period}")
-        self.chart.set_forecast(None)
-        self.chart.set_levels([])
-        self.chart.set_trade_marks([])
-        # 副图指标 + 未来走势预测曲线
-        self._render_indicators(ind)
+        self._base_loading = True
+        self._base_show_loading(sym, per)
+
+        def work():
+            """Worker：仅取数 + 算指标，绝不触碰任何 Qt 对象（线程边界）。"""
+            df = self.mdm.get_bars(sym, per, 600)
+            if df is None or df.empty:
+                return df, None
+            return df, cached_add_indicators(sym, per, df)
+
+        def done(res):
+            """主线程：渲染；过期结果丢弃（用户已切走）。"""
+            self._base_loading = False
+            df, ind = res if isinstance(res, tuple) else (None, None)
+            if seq != self._base_seq:
+                self._base_run_pending()
+                return
+            if df is None or df.empty:
+                self._base_show_failure(
+                    f"未取到 {sym} · {per} 的 K 线数据",
+                    "请检查「数据管理 → 行情数据源」是否可用，或切换品种/周期重试")
+                self._base_run_pending()
+                return
+            try:
+                self.prov_badge.set_provenance(df.attrs)
+                bars = df_to_bars(df)
+                self.chart.set_data(bars, ma={"MA10": ind["MA10"].tolist(),
+                                              "MA20": ind["MA20"].tolist()})
+                self.chart.set_watermark(f"{sym} · {per}")
+                self.chart.set_forecast(None)
+                self.chart.set_levels([])
+                self.chart.set_trade_marks([])
+                # 副图指标 + 未来走势预测曲线
+                self._render_indicators(ind)
+            except Exception as exc:               # noqa: BLE001 - 渲染失败不得拖垮页面
+                logger.warning("首屏K线渲染失败：%s", exc)
+                self._base_show_failure(f"K线渲染失败：{type(exc).__name__}: {exc}",
+                                        "可切换品种/周期重试；若持续失败请查看日志")
+            else:
+                self.status_lbl.setText(f"已加载 {sym} · {per} 共 {len(df)} 根K线")
+            self._base_run_pending()
+
+        def err(msg):
+            """主线程：失败保留上一帧，并给出可行动提示。"""
+            self._base_loading = False
+            if seq == self._base_seq:
+                self._base_show_failure(
+                    f"K线加载失败：{msg}",
+                    "请检查数据源连接（数据管理 → 行情数据源），或切换品种/周期重试")
+            self._base_run_pending()
+
+        self._run_worker(work, done, err)
+
+    def _base_run_pending(self) -> None:
+        """加载期间有被合并的切换请求时，补刷一次（只保留最新品种/周期）。"""
+        if self._base_pending:
+            self._base_pending = False
+            self._base_refresh()
+
+    def _base_show_loading(self, sym: str, per: str) -> None:
+        """加载中占位：状态栏 + 图表水印；不清空上一帧数据（不闪白）。"""
+        self.status_lbl.setText(f"K线加载中… {sym} · {per}")
+        self.chart.set_watermark(f"{sym} · {per} · 加载中…")
+
+    def _base_show_failure(self, reason: str, hint: str) -> None:
+        """失败态：水印转警示色 + 状态栏给出可行动指引（不做假数据回填）。"""
+        self.prov_badge.set_provenance(data_source="unknown", is_stale=True,
+                                       note=reason)
+        self.status_lbl.setText(f"{reason}｜{hint}")
 
     # ---- 指标预测曲线 + AI 辅助研判 ----
     _AI_INDICATOR_SYSTEM = (
@@ -1472,6 +1551,8 @@ class PredictOpsPage(BasePage):
         self.start_btn.setEnabled(False)
         self.start_btn.setText("预测中…")
         self.stop_btn.setEnabled(True)
+        # 新一轮预测/结算可能新增「已结算」样本，覆盖率缓存失效，待渲染时后台重算
+        self._cov_cache = None
         self.status_lbl.setText("正在执行预测流程：结算历史 → 获取资讯 → 自适应选参 → KP预测 → 校准…")
         sym, per = self.cur_symbol, self.cur_period
 
@@ -2256,6 +2337,14 @@ class PredictOpsPage(BasePage):
             "confidence": round(float(conf), 4),
             "status": "open",
             "config": cfg_key,
+            # 第六轮：区间回溯字段（仅数据落库，不改本页任何展示逻辑）
+            "lower": (float(res["lower"][-1])
+                      if res.get("lower") is not None and len(res["lower"]) else None),
+            "upper": (float(res["upper"][-1])
+                      if res.get("upper") is not None and len(res["upper"]) else None),
+            "band_sigma": float(res.get("band_sigma", res.get("resid_std", 0.0)) or 0.0),
+            "model_version": res.get("model_version"),
+            "data_fingerprint": res.get("data_fingerprint"),
         })
 
         # ---- 双向联动：把本次研判信号推送到回测中心，待其验证（自我训练闭环） ----
@@ -2297,30 +2386,87 @@ class PredictOpsPage(BasePage):
     # 既有 API（ai.evaluation）与当前行情，不修改评估/指标/回测内核。
     # ------------------------------------------------------------------
     @staticmethod
-    def _band_coverage(df, horizon: int, resid_std: float,
-                       max_windows: int = 240) -> Optional[float]:
-        """历史区间覆盖率估计（当前模型残差 σ 对最近 h 步窗口回测）。
+    def _band_cov_text(info: Optional[dict]) -> str:
+        """把真实覆盖率接口结果转成 ② 区间行的文案。
 
-        口径：区间带为 ±σ√h 的累计对数收益，正态近似名义覆盖 ≈68%。
-        返回覆盖比例；样本不足（<30 个有效窗口）或参数非法时返回 None，
-        界面据此显示「样本不足」，绝不编造覆盖率。
+        口径约定（第六轮）：
+        - ``info`` 为 None → 后台仍在计算，显示「计算中…」，**不显示任何数字**；
+        - ``coverage`` 为 None → 明确「样本不足（原因）」，**严禁**回退成残差 σ 近似值；
+        - 有值 → 显示实测覆盖率 + 已结算样本量 + 95% CI。
         """
-        try:
-            if df is None or len(df) <= int(horizon) + 30:
-                return None
-            h = max(1, int(horizon))
-            sig = float(resid_std)
-            if not math.isfinite(sig) or sig <= 0:
-                return None
-            closes = pd.to_numeric(df["close"], errors="coerce").to_numpy(dtype=float)
-            closes = closes[-min(int(max_windows), closes.size):]
-            logret = np.log(closes[h:] / closes[:-h])
-            ok = np.isfinite(logret)
-            if int(ok.sum()) < 30:
-                return None
-            return float(np.mean(np.abs(logret[ok]) <= sig * math.sqrt(h)))
-        except Exception:  # noqa: BLE001
-            return None
+        if info is None:
+            return "实测覆盖率：<b>计算中…</b>（后台读取已结算预测）"
+        cov = info.get("coverage")
+        if cov is None:
+            reason = str(info.get("reason") or "样本不足").strip()
+            return (f"实测覆盖率：<b>样本不足</b>（{reason}）；"
+                    "不回退近似值——需新预测落库并结算后才有真实口径")
+        n = int(info.get("n") or 0)
+        ci = ""
+        lo, hi = info.get("ci_low"), info.get("ci_high")
+        if lo is not None and hi is not None:
+            ci = f"，95% CI [{float(lo) * 100:.1f}%, {float(hi) * 100:.1f}%]"
+        return f"实测覆盖率 <b>{float(cov) * 100:.1f}%</b>（已结算样本 n={n}{ci}）"
+
+    def _kick_interval_coverage(self) -> None:
+        """后台计算真实区间覆盖率（缓存 + 防重入），完成后就地刷新 ② 行。
+
+        痛点：真实覆盖率要读预测库并结算比对，主线程算会卡 UI；旧实现的残差 σ 近似值
+        口径不对（衡量的是当前 σ 带子，而非预测当时落库区间的命中率）。改为 Worker 调
+        正式接口 ``ai.evaluation.evaluate_interval_coverage``，拿不到数据时如实显示。
+        """
+        if self._cov_pending or self._cov_cache is not None:
+            return
+        self._cov_pending = True
+
+        def work():
+            """Worker：只做纯数据读取/计算，不碰 Qt 对象。"""
+            from ..ai.evaluation import evaluate_interval_coverage
+            rows = []
+            if self.store is not None:
+                try:
+                    rows = self.store.query_closed_with_bands(limit=4000)
+                except Exception:   # noqa: BLE001 - 读库失败由接口给出原因
+                    rows = []
+            if not isinstance(rows, (list, tuple)):
+                rows = []
+            return evaluate_interval_coverage(rows=list(rows), nominal=0.6827)
+
+        def done(res):
+            """主线程：缓存结果并只刷新 ② 行（其余结论不变）。"""
+            self._cov_pending = False
+            self._cov_cache = (res if isinstance(res, dict) else
+                               {"coverage": None, "n": 0,
+                                "reason": "覆盖率接口未返回有效结果"})
+            self._render_band_label()
+
+        def err(msg):
+            """主线程：失败如实显示，不编造数字。"""
+            self._cov_pending = False
+            self._cov_cache = {"coverage": None, "n": 0,
+                               "reason": f"覆盖率计算失败：{msg}"}
+            self._render_band_label()
+
+        self._run_worker(work, done, err)
+
+    def _render_band_label(self) -> None:
+        """渲染 ② 概率区间行（含名义覆盖、实测覆盖率、口径免责说明）。
+
+        拆成独立方法是为了：覆盖率结果异步返回时只就地刷新这一行，不重算整块结论。
+        """
+        ctx = self._band_ctx
+        if not ctx:
+            return
+        hi, low, last = ctx["hi"], ctx["low"], ctx["last"]
+        width_txt = (f"（区间宽度 ±{(hi - low) / 2 / last * 100:.2f}%）"
+                     if last else "")
+        cov_txt = self._band_cov_text(self._cov_cache)
+        n = int((self._cov_cache or {}).get("n") or 0)
+        self.layer_labels["band"].setText(
+            f"<b>② 概率区间：</b>[{low:,.2f}, {hi:,.2f}]{width_txt}，"
+            f"名义覆盖 ≈68%（±1σ），{cov_txt}<br>"
+            f"<span style='color:{pal()['sub']};'>口径说明：实测覆盖率基于<b>已结算预测</b>"
+            f"（样本 n={n}），与名义 68% 属不同口径，二者不同属正常，不可混用。</span>")
 
     def _oos_stats(self) -> dict:
         """已结算预测的样本外命中率 / 随机基准率 / 95% CI / 显著性。
@@ -2393,16 +2539,13 @@ class PredictOpsPage(BasePage):
         if up_band and lo_band:
             hi = float(up_band[-1])
             low = float(lo_band[-1])
-            width_txt = (f"（区间宽度 ±{(hi - low) / 2 / last * 100:.2f}%）"
-                         if last else "")
-            cov = self._band_coverage(df, horizon, res.get("resid_std", 0) or 0)
-            cov_txt = (f"历史实际覆盖率 <b>{cov * 100:.1f}%</b>"
-                       if cov is not None else
-                       "历史实际覆盖率：<b>样本不足</b>（需 ≥30 个 h 步窗口）")
-            self.layer_labels["band"].setText(
-                f"<b>② 概率区间：</b>[{low:,.2f}, {hi:,.2f}]{width_txt}，"
-                f"名义覆盖 ≈68%（±1σ），{cov_txt}")
+            # ② 行统一走 _render_band_label；实测覆盖率由后台接口异步回填，
+            # 未就绪时显示「计算中…」，拿不到数据时显示「样本不足（原因）」，不回退近似值。
+            self._band_ctx = {"hi": hi, "low": low, "last": last}
+            self._render_band_label()
+            self._kick_interval_coverage()
         else:
+            self._band_ctx = None
             self.layer_labels["band"].setText(
                 "<b>② 概率区间：</b>未生成（模型未返回区间下/上界）")
 

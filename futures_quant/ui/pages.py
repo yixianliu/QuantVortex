@@ -1947,6 +1947,14 @@ class PredictPage(BasePage):
             "verdict": res["resonance"]["verdict"], "score": res["resonance"]["score"],
             "forecast": str([round(x, 2) for x in res["forecast"]]),
             "confidence": round(float(conf), 4), "status": "open", "config": cfg_key,
+            # 第六轮：区间回溯字段（仅数据落库，不改展示逻辑）
+            "lower": (float(res["lower"][-1])
+                      if res.get("lower") is not None and len(res["lower"]) else None),
+            "upper": (float(res["upper"][-1])
+                      if res.get("upper") is not None and len(res["upper"]) else None),
+            "band_sigma": float(res.get("band_sigma", res.get("resid_std", 0.0)) or 0.0),
+            "model_version": res.get("model_version"),
+            "data_fingerprint": res.get("data_fingerprint"),
         })
 
     def set_theme(self, t: str) -> None:

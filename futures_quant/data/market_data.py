@@ -321,6 +321,10 @@ class MarketDataManager(QObject):
     bar_arrived = pyqtSignal(object)      # 实时新增的一根 Bar(dict)
     quote_updated = pyqtSignal(str)       # symbol
     status_changed = pyqtSignal(str)      # 连接状态文本
+    # 阶段 5.9 兜底锁：正常实例在 __init__ 里会覆盖成自己的实例锁；
+    # 类级锁只为「未调用 __init__ 的轻量实例」提供属性存在性——PyQt 对象读取
+    # 未初始化属性会抛 RuntimeError: super-class __init__() … never called。
+    _load_lock = threading.RLock()
 
     def __init__(self, feed=None, source: str | None = None) -> None:
         """初始化相关对象。
@@ -350,6 +354,11 @@ class MarketDataManager(QObject):
         self.is_real = False                        # 是否存在「真正连上的实盘源」
         self.universe = FUTURES_UNIVERSE
         self._full: dict[str, pd.DataFrame] = {}     # (symbol, period) -> 完整序列
+        # 阶段 5.9：首屏取数改异步后，UI 线程与预测 Worker 可能同时调用 get_bars。
+        # 旧实现「查缓存 → 取数 → 写缓存」无锁：同一 key 会被两边各取一次（重复网络请求），
+        # 且并发写 self._full。这里用一把可重入锁把该段串行化：先到的线程取数并写缓存，
+        # 后到的线程直接复用结果。只锁本类是共享可变状态的 _full，不改 feed 适配器内部。
+        self._load_lock = threading.RLock()
         self._live: dict[str, dict] = {}             # symbol -> 实时游标状态
         self._live_worker: Optional[LiveDataWorker] = None  # 真实源实时刷新工作线程（M4-10 spec ④）
         self._synth = SyntheticFeed()                # 日内/失败回退用
@@ -526,45 +535,48 @@ class MarketDataManager(QObject):
             返回:
                 pd.DataFrame"""
         key = (symbol, period)
-        if key not in self._full:
-            try:
-                df = self.feed.get_history(
-                    symbol, "2000-01-01", "2100-01-01", period=period, limit=6000)
-            except Exception as exc:               # noqa: BLE001
-                if self.source != "tqsdk":
-                    raise
-                # 阶段 5：TqSdk 失败必须显式呈现，绝不生成合成行情
-                self.feed_error = (getattr(exc, "user_message", "")
-                                   or f"{type(exc).__name__}: {exc}")
-                df = None
-            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
-                if self.source == "tqsdk":
-                    # 明确错误：返回空表 + 错误说明，由 UI 空态呈现，不伪装真实/合成
-                    df = pd.DataFrame(columns=[
-                        "datetime", "open", "high", "low", "close",
-                        "volume", "open_interest"])
-                    attach_provenance(
-                        df, "tqsdk", is_synthetic=False, is_stale=False,
-                        as_of=None, note=f"TqSdk 取数失败：{self.feed_error}")
-                else:
-                    # 阶段 0：回退合成不再静默 —— 写入 note，UI/回测可据此显示水印
-                    requested = self.source
-                    reason = f"{requested} 无 {period} 周期数据，回退合成"
-                    if self.feed_error:
-                        reason += f"（{self.feed_error}）"
-                    df = self._synth.get_history(
+        # 阶段 5.9：整段「查缓存 → 取数 → 写缓存」持锁，保证同一 (symbol, period)
+        # 在并发调用下只取一次；锁内不做任何 UI 操作，避免跨线程触碰 Qt 对象。
+        with self._load_lock:
+            if key not in self._full:
+                try:
+                    df = self.feed.get_history(
                         symbol, "2000-01-01", "2100-01-01", period=period, limit=6000)
-                    as_of = df["datetime"].iloc[-1] if len(df) else None
-                    attach_provenance(df, "synthetic", is_synthetic=True, is_stale=False,
-                                      as_of=as_of, note=reason)
-            else:
-                prov = get_provenance(df)
-                if prov["data_source"] == "unknown":
-                    # 自定义 feed 未标注：按当前源补标，避免下游拿到「来源未知」
-                    as_of = df["datetime"].iloc[-1] if "datetime" in df else None
-                    attach_provenance(df, self.source, is_synthetic=False, as_of=as_of)
-            self._full[key] = df
-        return self._full[key]
+                except Exception as exc:               # noqa: BLE001
+                    if self.source != "tqsdk":
+                        raise
+                    # 阶段 5：TqSdk 失败必须显式呈现，绝不生成合成行情
+                    self.feed_error = (getattr(exc, "user_message", "")
+                                       or f"{type(exc).__name__}: {exc}")
+                    df = None
+                if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+                    if self.source == "tqsdk":
+                        # 明确错误：返回空表 + 错误说明，由 UI 空态呈现，不伪装真实/合成
+                        df = pd.DataFrame(columns=[
+                            "datetime", "open", "high", "low", "close",
+                            "volume", "open_interest"])
+                        attach_provenance(
+                            df, "tqsdk", is_synthetic=False, is_stale=False,
+                            as_of=None, note=f"TqSdk 取数失败：{self.feed_error}")
+                    else:
+                        # 阶段 0：回退合成不再静默 —— 写入 note，UI/回测可据此显示水印
+                        requested = self.source
+                        reason = f"{requested} 无 {period} 周期数据，回退合成"
+                        if self.feed_error:
+                            reason += f"（{self.feed_error}）"
+                        df = self._synth.get_history(
+                            symbol, "2000-01-01", "2100-01-01", period=period, limit=6000)
+                        as_of = df["datetime"].iloc[-1] if len(df) else None
+                        attach_provenance(df, "synthetic", is_synthetic=True, is_stale=False,
+                                          as_of=as_of, note=reason)
+                else:
+                    prov = get_provenance(df)
+                    if prov["data_source"] == "unknown":
+                        # 自定义 feed 未标注：按当前源补标，避免下游拿到「来源未知」
+                        as_of = df["datetime"].iloc[-1] if "datetime" in df else None
+                        attach_provenance(df, self.source, is_synthetic=False, as_of=as_of)
+                self._full[key] = df
+            return self._full[key]
 
     def get_bars(self, symbol: str, period: str = "1m", limit: int = 600) -> pd.DataFrame:
         """取某合约某周期最近 limit 根 K 线（携带来源元数据）。

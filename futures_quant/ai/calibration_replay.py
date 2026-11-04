@@ -199,6 +199,14 @@ def replay_symbol(store, df, symbol, period: str = "D", horizon: int = None,
             "actual_return_pct": round(actual_pct, 3),
             "y_up": y_up,
             "closed_ts": str(dt.datetime.now()),
+            # 第六轮：回放样本同样落区间，供真实覆盖率回溯（不是事后按 σ 现算）
+            "lower": (float(res["lower"][-1])
+                      if res.get("lower") is not None and len(res["lower"]) else None),
+            "upper": (float(res["upper"][-1])
+                      if res.get("upper") is not None and len(res["upper"]) else None),
+            "band_sigma": float(res.get("band_sigma", res.get("resid_std", 0.0)) or 0.0),
+            "model_version": res.get("model_version"),
+            "data_fingerprint": res.get("data_fingerprint"),
         }
         try:
             store.save_closed_prediction(rec)
