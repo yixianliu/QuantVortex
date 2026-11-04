@@ -24,6 +24,8 @@ user_settings.json.bak
 dist/
 build/
 build/futures_qt/
+# 隔离验证用虚拟环境（阶段 5：tqsdk 装在 .venv-tqsdk，复用 base 的 numpy/pandas）
+.venv*/
 __pycache__/
 *.pyc
 # tests/ 与 build_tools/ 是**受控资产**（全部单测 + 打包脚本所在），

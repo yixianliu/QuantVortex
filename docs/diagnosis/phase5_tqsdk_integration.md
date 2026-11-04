@@ -21,7 +21,7 @@
 | 同上 | [L500-L505](file:///d:/PythonProject/QuantVortex/futures_quant/data/market_data.py#L500-L505) | `disconnect()` 调用 `feed.close()`，避免 TqApi 连接线程残留 |
 | 同上 | [L519-L560](file:///d:/PythonProject/QuantVortex/futures_quant/data/market_data.py#L519-L560) | `_ensure_full`：TqSdk 失败返回空表 + 错误 provenance，**不做合成回退** |
 | [config/settings.json](file:///d:/PythonProject/QuantVortex/config/settings.json) | [L4-L13](file:///d:/PythonProject/QuantVortex/config/settings.json#L4-L13) | `data.tqsdk` 占位配置（env 名 / 本地凭据路径），无真实凭据；`data.source` 默认仍为 `sina` |
-| [.gitignore](file:///d:/PythonProject/QuantVortex/.gitignore) | [L4-L5](file:///d:/PythonProject/QuantVortex/.gitignore#L4-L5) | 忽略 `config/tqsdk_settings.json` |
+| [.gitignore](file:///d:/PythonProject/QuantVortex/.gitignore) | [L4-L5](file:///d:/PythonProject/QuantVortex/.gitignore#L4-L5)、[L27-L28](file:///d:/PythonProject/QuantVortex/.gitignore#L27-L28) | 忽略 `config/tqsdk_settings.json` 与隔离 venv `.venv*/` |
 | [data_page.py](file:///d:/PythonProject/QuantVortex/futures_quant/ui/data_page.py) | [L29-L37](file:///d:/PythonProject/QuantVortex/futures_quant/ui/data_page.py#L29-L37)、[L117-L189](file:///d:/PythonProject/QuantVortex/futures_quant/ui/data_page.py#L117-L189) | 数据管理页新增「行情数据源」选择卡 + TqSdk 安装/凭据提示（不弹窗索取密码） |
 | [test_phase5_tqsdk_feed.py](file:///d:/PythonProject/QuantVortex/tests/unit/test_phase5_tqsdk_feed.py) | 全文件 | 23 条离线单测 |
 
@@ -94,7 +94,7 @@ UI 仅在数据管理页展示「是否已安装 / 是否检测到凭据 / 如�
 python -m pytest tests/unit/test_phase5_tqsdk_feed.py -q
 ```
 
-结果：**23 passed**（本机 `tqsdk` 未安装，全部使用 `api_factory` 桩与 `sys.modules` 注入）。
+结果：**23 passed**（base 环境未安装 tqsdk；全部使用 `api_factory` 桩与 `sys.modules` 注入。venv 隔离验证见第 6 节）。
 
 | # | 场景 | 断言 |
 |---|---|---|
@@ -113,24 +113,131 @@ python -m pytest tests/unit/test_phase5_tqsdk_feed.py -q
 | 13 | 注册表 + 诊断 | `registered_feeds()` 含 `tqsdk`；诊断不联网 |
 | 14 | 管理器层失败 | 空表、`data_source=tqsdk`、`is_synthetic=False`、note 含错误；`connect()` 状态「TqSdk 不可用」，`allow_sim=False`，状态不含「合成」 |
 
-## 6. 真实连通性结果
+## 6. venv 隔离验证（不污染 base 环境）
 
-**未测试（环境不具备条件）**：
+### 6.1 预检与方案
 
+- base 环境：Python 3.13.5 / **numpy 2.5.2** / pandas 3.0.5 / scipy 1.15.3（Anaconda）。
+- 预检已确认：在 base 直接 `pip install tqsdk` 会把 **numpy 2.5.2 降级到 2.4.6**，故不执行。
+- 采用 `--system-site-packages` 的独立 venv `.venv-tqsdk`：复用 base 的 numpy/pandas/scipy，
+  只把 tqsdk 及其缺失依赖装进 venv；全部安装加 `--no-deps`，从机制上避免解析器降级 numpy。
+
+### 6.2 创建（复用系统包）
+
+```powershell
+python -m venv .venv-tqsdk --system-site-packages
+.\.venv-tqsdk\Scripts\python.exe -c "import sys, numpy, pandas; print(sys.executable); print(numpy.__version__, pandas.__version__)"
+# D:\PythonProject\QuantVortex\.venv-tqsdk\Scripts\python.exe
+# 2.5.2 3.0.5
 ```
-$ python -c "import tqsdk"
-ModuleNotFoundError: No module named 'tqsdk'
+
+`.venv-tqsdk/` 已由 `.gitignore` 的 `.venv*/` 规则忽略（本轮新增，见第 1 节）。
+
+### 6.3 安装（`--no-deps`，保护 numpy）
+
+```powershell
+# ① tqsdk 本体
+.\.venv-tqsdk\Scripts\python.exe -m pip install tqsdk --no-deps -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 结果：tqsdk-3.10.4
+
+# ② 补齐运行期缺依赖（同样 --no-deps）
+.\.venv-tqsdk\Scripts\python.exe -m pip install --no-deps websockets psutil sgqlc graphql-core shinny-structlog aiohttp pyjwt simplejson filelock tqsdk-ctpse tqsdk-sm -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-按约束未擅自联网安装。因此本轮只验证了「适配逻辑 + 错误分类 + 管理器接线」，
-真实 TqApi 握手/行情权限仍需在有账号的机器上确认。
+安装结果：
+- 新装进 venv：`websockets 17.4`、`sgqlc 18`、`graphql-core 3.3.1`、`shinny-structlog 0.0.4`、`tqsdk-ctpse 1.2.1`、`tqsdk-sm 1.0.5`；
+- 由 system-site-packages 直接复用（pip 报 already satisfied）：`psutil 5.9.0`、`aiohttp 3.11.10`、`pyjwt 2.10.1`、`simplejson 4.1.1`、`filelock 3.17.0`，以及 `numpy 2.5.2 / pandas 3.0.5 / scipy 1.15.3`。
 
-## 7. 拿到 SimNow / TqSdk 账号后的三步验证
+### 6.4 版本比对（重点：numpy 不变）
+
+| 包 | base 基线 | venv 安装前 | venv 安装后 | base 安装后 |
+|---|---|---|---|---|
+| numpy | 2.5.2 | 2.5.2 | **2.5.2** | **2.5.2** |
+| pandas | 3.0.5 | 3.0.5 | 3.0.5 | 3.0.5 |
+| scipy | 1.15.3 | 1.15.3 | 1.15.3 | 1.15.3 |
+| tqsdk | 未安装 | 未安装 | 3.10.4 | 未安装 |
+
+结论：venv 安装后 numpy/pandas/scipy **完全未变**；base 环境未被修改任何包
+（`python -c "import numpy; print(numpy.__version__)"` 仍为 2.5.2）。
+
+### 6.5 导入与诊断实际输出
+
+```powershell
+.\.venv-tqsdk\Scripts\python.exe -c "import tqsdk; print(tqsdk.__version__)"
+# 3.10.4
+
+.\.venv-tqsdk\Scripts\python.exe -c "from futures_quant.data.tqsdk_feed import tqsdk_diagnose; print(tqsdk_diagnose())"
+# {'installed': True, 'version': '3.10.4', 'creds_complete': False, 'creds_origin': ''}
+```
+
+说明：
+- 首次 `import tqsdk` 会打印天勤免责声明；`tqsdk_diagnose()` **只做导入探测，不联网、不创建 TqApi**；
+- `creds_complete=False` 符合预期（未设置任何账号，也未写入真实凭据）；
+- `scipy 1.15.3 requires numpy <2.5.0` 的 `UserWarning` 在 base 环境本来就有，与 venv 无关；
+- 按本轮约束**未尝试真实连接**，因此 `installed=True` 只代表「库可用」，不代表「账号可连」。
+
+### 6.6 venv 使用方式（与 base 如何切换）
+
+| 场景 | 命令 |
+|---|---|
+| 激活（PowerShell） | `.\.venv-tqsdk\Scripts\Activate.ps1` |
+| 激活（cmd） | `.\.venv-tqsdk\Scripts\activate.bat` |
+| 退出回 base | `deactivate`（或直接关闭该终端） |
+| 确认当前解释器 | `where python`（应指向 `.venv-tqsdk\Scripts\python.exe`） |
+| 启动 GUI（激活后） | `python main.py` |
+| 启动 GUI（不激活） | `.\.venv-tqsdk\Scripts\python.exe main.py` |
+| 只跑数据层脚本 | `.\.venv-tqsdk\Scripts\python.exe -c "from futures_quant.data.tqsdk_feed import TqSdkFeed, tqsdk_diagnose; print(tqsdk_diagnose())"` |
+| 在 venv 跑单测 | `.\.venv-tqsdk\Scripts\python.exe -m pytest tests/unit/test_phase5_tqsdk_feed.py -q` |
+| 清理 | 直接删除 `.venv-tqsdk` 目录；base 不受影响 |
+
+补充说明：
+- GUI 的 PyQt6 等仍来自 base（system-site-packages），venv 里只有 tqsdk 及其新增依赖；
+- 只有在「需要 TqSdk 真实行情」时才用该 venv；日常开发/回测继续用 base 的 `python`；
+- 打包发布仍需在受控构建环境安装依赖，本 venv 仅用于开发期隔离验证。
+
+### 6.7 有账号后的真实联调（3 步，均在激活的 venv 终端执行）
+
+```powershell
+# 1) 凭据 + 自检（不联网）
+$env:TQ_USER = "你的账号"; $env:TQ_PASSWORD = "你的密码"
+.\.venv-tqsdk\Scripts\python.exe -c "from futures_quant.data.tqsdk_feed import tqsdk_diagnose; print(tqsdk_diagnose())"
+# 期望 installed=True, creds_complete=True, creds_origin='env'
+
+# 2) 只读连通性（≤3 合约；超 60s 未返回则 Ctrl+C 中止并记录）
+.\.venv-tqsdk\Scripts\python.exe -c "import os,time; from tqsdk import TqApi,TqAuth; t0=time.time(); api=TqApi(auth=TqAuth(os.environ['TQ_USER'],os.environ['TQ_PASSWORD']),web_gui=False); print([(s, len(api.get_kline_serial(s,86400,data_length=5))) for s in ('KQ.m@SHFE.rb','SHFE.rb2611','KQ.m@DCE.i')], round(time.time()-t0,1)); api.close()"
+
+# 3) 切源验收：GUI 选 TqSdk 或改 data.source=tqsdk，重启后核对 provenance
+.\.venv-tqsdk\Scripts\python.exe -c "from futures_quant.data.tqsdk_feed import TqSdkFeed; from futures_quant.data.base import get_provenance; f=TqSdkFeed(); d=f.get_history('rb.SHFE','2024-01-01','2024-12-31','D'); print(d.tail(3)); print(get_provenance(d)); f.close()"
+# 期望 data_source=tqsdk / is_synthetic=False / as_of=最后一根日线 / note=''
+```
+
+## 7. 真实连通性结果
+
+**未做真实连接**（无账号，且本轮明确要求不尝试）：
+
+- base 环境：`python -c "import tqsdk"` → `ModuleNotFoundError: No module named 'tqsdk'`（本轮未改 base）；
+- `.venv-tqsdk`：`import tqsdk` 成功（3.10.4），`tqsdk_diagnose()` 输出
+  `{'installed': True, 'version': '3.10.4', 'creds_complete': False, 'creds_origin': ''}`。
+
+因此本轮验证结论是「**库可安装、可导入，错误分类/诊断路径可用**」；
+真实 TqApi 握手与行情权限仍需按 6.7 在有账号环境确认。
+
+## 8. 拿到 SimNow / TqSdk 账号后的三步验证
 
 ### 第 1 步：安装与凭据（不写入仓库）
 
-```bash
-pip install tqsdk
+推荐直接使用本轮建好的隔离环境（base 不动）：
+
+```powershell
+.\.venv-tqsdk\Scripts\python.exe -c "import tqsdk; print(tqsdk.__version__)"   # 应输出 3.10.4
+```
+
+若换机器、需要重新创建：
+
+```powershell
+python -m venv .venv-tqsdk --system-site-packages
+.\.venv-tqsdk\Scripts\python.exe -m pip install tqsdk --no-deps
+.\.venv-tqsdk\Scripts\python.exe -m pip install --no-deps websockets psutil sgqlc graphql-core shinny-structlog aiohttp pyjwt simplejson filelock tqsdk-ctpse tqsdk-sm
 ```
 
 PowerShell（当前会话）：
@@ -148,51 +255,37 @@ $env:TQ_PASSWORD = "你的密码"
 
 自检（不联网）：
 
-```bash
-python -c "from futures_quant.data.tqsdk_feed import tqsdk_diagnose; print(tqsdk_diagnose())"
+```powershell
+.\.venv-tqsdk\Scripts\python.exe -c "from futures_quant.data.tqsdk_feed import tqsdk_diagnose; print(tqsdk_diagnose())"
 # 期望 installed=True, creds_complete=True, creds_origin in ('env','file:...')
 ```
 
 ### 第 2 步：最小只读连通性（≤3 合约，建议 60s 内完成）
 
-```bash
-python - <<'PY'
-import os, time
-from tqsdk import TqApi, TqAuth
-t0 = time.time()
-api = TqApi(auth=TqAuth(os.environ["TQ_USER"], os.environ["TQ_PASSWORD"]), web_gui=False)
-try:
-    for sym in ("KQ.m@SHFE.rb", "SHFE.rb2611", "KQ.m@DCE.i"):
-        kl = api.get_kline_serial(sym, 86400, data_length=5)
-        print(sym, len(kl), float(kl.iloc[-1]["close"]), int(kl.iloc[-1]["volume"]))
-    print("elapsed", round(time.time() - t0, 1), "s")
-finally:
-    api.close()
-PY
+```powershell
+.\.venv-tqsdk\Scripts\python.exe -c "import os,time; from tqsdk import TqApi,TqAuth; t0=time.time(); api=TqApi(auth=TqAuth(os.environ['TQ_USER'],os.environ['TQ_PASSWORD']),web_gui=False); print([(s, len(api.get_kline_serial(s,86400,data_length=5))) for s in ('KQ.m@SHFE.rb','SHFE.rb2611','KQ.m@DCE.i')], round(time.time()-t0,1)); api.close()"
 ```
 
-Windows PowerShell 下若 `<<'PY'` 不适用，可保存为临时文件（如 `%TEMP%\tq_check.py`）后执行；
 若超过 60s 未返回，直接 `Ctrl+C` 中止并记录为「连接失败」，不得继续跑批量取数。
 
 ### 第 3 步：切源并验收
 
-1. 优先在「数据管理 → 行情数据源」选择 `TqSdk / SimNow` 并保存，重启程序；
+1. 优先在「数据管理 → 行情数据源」选择 `TqSdk / SimNow` 并保存，**用 venv 启动**：`.\.venv-tqsdk\Scripts\python.exe main.py`；
    或直接把 `config/settings.json` 的 `data.source` 改为 `tqsdk`（或写 `data/user_settings.json` 覆盖）。
 2. 观察状态栏：
    - 成功：`已连接 · TqSdk 实盘行情`；
    - 失败：`TqSdk 不可用 · [NotInstalled]/[MissingCredentials]/[ConnectFailed] …`，**不会显示合成行情**。
-3. 回归单测与数据验收：
+3. 回归单测与数据验收（必须在 venv 内执行，base 无 tqsdk）：
 
-```bash
-python -m pytest tests/unit/test_phase5_tqsdk_feed.py -q
-python -c "from futures_quant.data.tqsdk_feed import TqSdkFeed; from futures_quant.data.base import get_provenance; \
-f=TqSdkFeed(); d=f.get_history('rb.SHFE','2024-01-01','2024-12-31','D'); print(d.tail(3)); print(get_provenance(d)); f.close()"
+```powershell
+.\.venv-tqsdk\Scripts\python.exe -m pytest tests/unit/test_phase5_tqsdk_feed.py -q
+.\.venv-tqsdk\Scripts\python.exe -c "from futures_quant.data.tqsdk_feed import TqSdkFeed; from futures_quant.data.base import get_provenance; f=TqSdkFeed(); d=f.get_history('rb.SHFE','2024-01-01','2024-12-31','D'); print(d.tail(3)); print(get_provenance(d)); f.close()"
 ```
 
 期望：`data_source=tqsdk`、`is_synthetic=False`、`as_of` 等于最后一根日线时间、`note=""`。
 若出现 `NoData/ConnectFailed`，按第 3 节表格的「下一步」逐项处理，不要切回合成源掩盖问题。
 
-## 8. 已知限制 / 后续可拓展
+## 9. 已知限制 / 后续可拓展
 
 - `TqApi` 无同步超时参数：真实环境若网络卡住，只能由外层进程/脚本限时中止；适配器本身不做伪超时。
 - 未做本地 K 线缓存（与 akshare 的陈旧缓存不同）：TqSdk 失败时直接报错，避免「旧数据当新数据」。
