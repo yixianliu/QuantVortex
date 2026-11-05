@@ -113,3 +113,4 @@ build_tools
 packaging
 /data/
 futures_quant
+tests
