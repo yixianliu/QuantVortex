@@ -212,6 +212,25 @@ _BT_START = "2020-01-01"
 _BT_END = "2021-12-31"
 
 
+def _seed_cache_entry(eng, gene, fit, profitable=False):
+    """阶段8 缓存结构：{"gene","fitness","result"}；result 为完整评估结果形状。
+
+    说明：老版本缓存值是 `(gene, fitness)` 二元组，阶段8 起读取时一律视为失效
+    （缺 metrics/profitable 无法安全复用），因此这里显式写入新结构。
+    """
+    key = f"{ae.gene_signature(gene)}|{eng._data_version}"
+    eng._fit_cache[key] = {
+        "gene": gene, "fitness": float(fit),
+        "result": {
+            "gene": gene, "desc": ae.describe_gene(gene),
+            "signature": ae.gene_signature(gene), "metrics": {"sharpe": 0.2},
+            "fitness": float(fit), "profitable": profitable,
+            "reasons": ["测试预置"], "equity_curve": [], "trades": [],
+        },
+    }
+    return key
+
+
 def test_evaluate_cache_hit_result_has_gene_key():
     """_evaluate 命中缓存时返回的 dict 必须含 'gene'（step 顺序路径会访问）。"""
     import random
@@ -225,9 +244,8 @@ def test_evaluate_cache_hit_result_has_gene_key():
         seed=42,
     )
     gene = ae.random_gene(random.Random(1))
-    # 手动塞入缓存，强制命中分支
-    sig = ae.gene_signature(gene)
-    eng._fit_cache[f"{sig}|{eng._data_version}"] = (gene, 12.5)
+    # 手动塞入新结构缓存，强制命中分支
+    _seed_cache_entry(eng, gene, 12.5)
     res = eng._evaluate(gene)
     assert res.get("_cache_hit") is True
     assert "gene" in res, "缓存命中 dict 缺少 gene 键（会 KeyError）"
@@ -248,9 +266,9 @@ def test_step_result_entries_always_have_profitable_and_gene():
     )
     eng.POP_SIZE = 4
     eng.population = [ae.random_gene(random.Random(i)) for i in range(4)]
-    # 预置缓存让部分基因走 cache-hit 分支（历史上此分支会 KeyError 'gene'）
+    # 预置新结构缓存，让部分基因在 step() 内走 cache-hit 分支
     for i, g in enumerate(eng.population[:2]):
-        eng._fit_cache[f"{ae.gene_signature(g)}|{eng._data_version}"] = (g, 5.0 + i)
+        _seed_cache_entry(eng, g, 5.0 + i)
 
     snap = eng.step()
     ranked = snap.get("ranked", [])
@@ -282,7 +300,7 @@ def test_cache_hit_result_has_fitness_key():
         seed=99,
     )
     gene = ae.random_gene(random.Random(3))
-    eng._fit_cache[f"{ae.gene_signature(gene)}|{eng._data_version}"] = (gene, -3.0)
+    _seed_cache_entry(eng, gene, -3.0)
     res = eng._evaluate(gene)
     assert res.get("_cache_hit") is True
     for k in ("gene", "fitness", "metrics", "desc", "signature",

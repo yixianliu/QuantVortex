@@ -19,9 +19,9 @@ QStackedWidget { background:#1e1e2e; }
 
 /* ===== UX-61: 页面头部 ===== */
 QFrame#page-header { background:#181825; border-bottom:1px solid #45455f; }
-QLabel#breadcrumb { color:#dcdcdc; font-weight:600; }
-QLabel#breadcrumb-sep { color:#8b93a7; }
-QLabel#page-subtitle { color:#8b93a7; }
+QLabel#breadcrumb { color:#dcdcdc; font-weight:600; font-size:12px; }
+QLabel#breadcrumb-sep { color:#8b93a7; font-size:11px; }
+QLabel#page-subtitle { color:#8b93a7; font-size:11px; }
 
 /* ===== 文本 ===== */
 QLabel { color:#dcdcdc; background:transparent; }
